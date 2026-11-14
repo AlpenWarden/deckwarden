@@ -1293,6 +1293,63 @@
   }
 }
 
+/* The card flip (CARD-FLIP, 2026-11-14; the second reference study's idea 1,
+   after React Bits' "Flip Card", its turn about the vertical axis and
+   nothing else): a double-faced card shows its other side by turning over.
+   src/components/cards/card-flip.tsx draws a box (the card's width and this
+   perspective), one turning element, and two faces back to back, the far
+   one half a turn round so it reads true once the element has turned;
+   src/lib/motion/flip.ts decides which picture sits in which. The turn is
+   one transition of `transform` on one element, 400 ms on settle-400 (a
+   one-off moment), so the browser changes faces at exactly edge-on, about
+   106 ms in, and a second press reverses it from wherever the card is. The
+   transition exists only without reduced motion. Under the preference the
+   turning element transitions nothing at all (`none`, where the backstop's
+   0.01 ms on the default `all` would still start one), so the side changes
+   at once and nothing runs.
+   Nothing that flattens may sit on the turning element or between it and
+   the faces: no opacity under 1, no overflow, filter, mask or clip.
+   Flattening is silent (the front shows mirrored where the back should be,
+   and the computed transform-style still answers preserve-3d). The shadow
+   stays on the images, so it narrows and leaves with its face.
+   The perspective is the home stage's 1400 px, about where a hand holds a
+   card: at 80 ms the near edge is a tenth taller than the card at rest, and
+   the turn reads as a card coming round. It costs up to 23 px past the box,
+   top and bottom, at edge-on: for three frames (56 to 104 ms) the leaving
+   face's shadow passes over the caption's first line, and for one the
+   card's corner touches the top of a letter. About 2550 px keeps the edge
+   inside the 12 px gap and halves the depth (LATER row 421). */
+@layer components {
+  [data-flip="box"] {
+    perspective: 1400px;
+  }
+  [data-flip="turn"] {
+    position: relative;
+    transform-style: preserve-3d;
+    transition: none;
+  }
+  [data-flip="turn"][data-turned] {
+    transform: rotateY(180deg);
+  }
+  [data-flip="near"],
+  [data-flip="far"] {
+    backface-visibility: hidden;
+  }
+  [data-flip="near"] {
+    position: relative;
+  }
+  [data-flip="far"] {
+    position: absolute;
+    inset: 0;
+    transform: rotateY(180deg);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    [data-flip="turn"] {
+      transition: transform 400ms var(--ease-settle-400);
+    }
+  }
+}
+
 /* The home intro (HOME-INTRO, 2026-10-22, the owner's call of 2026-10-20;
    amends WAVE5.md D6's "no entry animation" for this one moment): on the
    first document load of home in a tab, the headline settles in from half

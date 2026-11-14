@@ -20,6 +20,17 @@
  * (the hero is scrolled away on phones). A failed image keeps the selection
  * and shows the fallback text.
  *
+ * Flip turns the card over (CARD-FLIP, 2026-11-14; src/lib/motion/flip.ts):
+ * "another printing" and "the other side" are two motions. A printing
+ * change still cross-fades in place and lands on the front; Flip puts the
+ * other face in the hidden slot of `CardFlip` and turns to it, 400 ms about
+ * the vertical axis. The wrappers a turn needs are in the server HTML only
+ * when the default printing has a back; otherwise they mount inside the
+ * first swap to a printing that has one (a swap remounts both images
+ * anyway), so a card with one face keeps the hero markup it always had.
+ * The back costs nothing until it is asked for: its decode starts when the
+ * pointer or focus reaches Flip, and no back's address is requested before.
+ *
  * Payload: the page inlines ≤ INLINE_PRINTINGS_MAX slim rows; "Show all"
  * fetches the capped tail from /api/cards/[id]/printings, which also
  * resolves deep links to printings beyond the inline hundred. Deep links to
@@ -38,6 +49,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { CardFlip } from "@/components/cards/card-flip";
 import { CardImage } from "@/components/cards/card-image";
 import { CardNamePreview } from "@/components/deck/card-name-preview";
 import { MD_QUERY } from "@/components/editor/use-tier";
@@ -54,6 +66,7 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { embeddablePrintingImageUrl, thumbnailUrl, type ImageFace } from "@/lib/cards/images";
 import { printingCaption, type GalleryPrinting } from "@/lib/cards/printings";
+import { facing, flipOf, show, turn, type FlipPicture, type FlipState } from "@/lib/motion/flip";
 import { cn } from "@/lib/utils";
 
 import { usePrintingParam, writePrintingParam } from "./printing-param";
@@ -80,11 +93,20 @@ interface PrintingsResponse {
 interface Displayed {
   id: string | null;
   face: ImageFace;
-  src: string | null;
-  /** The outgoing image, kept underneath the crossfade until the next swap. */
-  underSrc: string | null;
-  /** True until the first swap — the server-rendered LCP image, untouched. */
-  initial: boolean;
+  /**
+   * The pictures in the hero's two slots and which slot faces the reader
+   * (src/lib/motion/flip.ts). Until the first swap the near slot holds the
+   * server-rendered LCP image, untouched; a swapped-in picture keeps the
+   * outgoing one underneath its crossfade until the next swap.
+   */
+  flip: FlipState;
+  /**
+   * True once the hero draws through CardFlip's wrappers: from the server
+   * when the default printing has a back, otherwise from the first swap to
+   * a printing that has one. They never mount under a still image, and a
+   * card that only shows single-faced printings never gets them.
+   */
+  sided: boolean;
 }
 
 type TailStatus = "idle" | "loading" | "done" | "error";
@@ -117,6 +139,8 @@ interface GalleryContextValue {
   /** Back to the default printing — removes ?printing= outright. */
   reset: () => void;
   flip: () => void;
+  /** Flip's pointerenter, focus and touchstart: the other face starts decoding. */
+  prepareFlip: () => void;
   activateRow: (row: GalleryPrinting) => void;
   loadAll: () => void;
 }
@@ -176,9 +200,8 @@ export function PrintingsGallery({
   const [displayed, setDisplayed] = useState<Displayed>(() => ({
     id: defaultRow?.id ?? null,
     face: "front",
-    src: defaultRow ? embeddablePrintingImageUrl(defaultRow, "normal") : null,
-    underSrc: null,
-    initial: true,
+    flip: flipOf(defaultRow ? embeddablePrintingImageUrl(defaultRow, "normal") : null),
+    sided: defaultRow?.hasBack ?? false,
   }));
 
   // The tail appended after the inline rows keeps "default first, then newest
@@ -200,23 +223,40 @@ export function PrintingsGallery({
   const shownIdRef = useRef<string | null>(defaultRow?.id ?? null);
   const swapToken = useRef(0);
 
-  const showPrinting = useCallback(async (row: GalleryPrinting, face: ImageFace) => {
-    const token = ++swapToken.current;
-    shownIdRef.current = row.id;
-    const src = embeddablePrintingImageUrl(row, "normal", face);
-    const ok = src ? await preloadImage(src) : false;
-    if (token !== swapToken.current) return; // a later swap superseded this one
-    setDisplayed((prev) => ({
-      id: row.id,
-      face,
-      src: ok ? src : null,
-      underSrc: prev.src,
-      initial: false,
-    }));
-    setAnnounceText(
-      `Showing ${row.setName} #${row.collectorNumber}${face === "back" ? ", back face" : ""}`,
-    );
+  // Decodes in flight, by address: Flip's press shares the decode its hover
+  // started instead of asking a second time.
+  const decoding = useRef(new Map<string, Promise<boolean>>());
+  const decode = useCallback((src: string): Promise<boolean> => {
+    const running = decoding.current.get(src);
+    if (running) return running;
+    const started = preloadImage(src).finally(() => decoding.current.delete(src));
+    decoding.current.set(src, started);
+    return started;
   }, []);
+
+  const showPrinting = useCallback(
+    async (row: GalleryPrinting, face: ImageFace, how: "show" | "turn" = "show") => {
+      const token = ++swapToken.current;
+      shownIdRef.current = row.id;
+      const src = embeddablePrintingImageUrl(row, "normal", face);
+      const ok = src ? await decode(src) : false;
+      if (token !== swapToken.current) return; // a later swap superseded this one
+      const picture = ok ? src : null;
+      setDisplayed((prev) => ({
+        id: row.id,
+        face,
+        // Flip turns; a printing change shows, in the slot facing the reader.
+        // A turn needs the wrappers already on screen (an element that mounts
+        // turned has nothing to turn from), so the swap that mounts them shows.
+        flip: how === "turn" && prev.sided ? turn(prev.flip, picture) : show(prev.flip, picture),
+        sided: prev.sided || row.hasBack,
+      }));
+      setAnnounceText(
+        `Showing ${row.setName} #${row.collectorNumber}${face === "back" ? ", back face" : ""}`,
+      );
+    },
+    [decode],
+  );
 
   // Selection → hero. One path serves clicks, the deep-link restore after
   // hydration, and tail rows resolving a previously unknown ?printing=.
@@ -272,8 +312,22 @@ export function PrintingsGallery({
 
   const flip = useCallback(() => {
     if (!pinnedRow) return;
-    void showPrinting(pinnedRow, displayed.face === "back" ? "front" : "back");
+    void showPrinting(pinnedRow, displayed.face === "back" ? "front" : "back", "turn");
   }, [pinnedRow, displayed.face, showPrinting]);
+
+  // The back costs nothing until it is asked for (about 100 to 125 KB, on a
+  // page whose hero is the LCP image): the other face starts decoding when
+  // the pointer or focus reaches Flip, once per picture, so the press finds
+  // it ready or already on its way.
+  const prepared = useRef(new Set<string>());
+  const prepareFlip = useCallback(() => {
+    if (!pinnedRow) return;
+    const other = displayed.face === "back" ? "front" : "back";
+    const src = embeddablePrintingImageUrl(pinnedRow, "normal", other);
+    if (!src || prepared.current.has(src)) return;
+    prepared.current.add(src);
+    void decode(src);
+  }, [pinnedRow, displayed.face, decode]);
 
   // Pin vs drawer, decided at click time (D4): md+ pins the sticky hero;
   // phones get the bottom drawer instead — the hero is scrolled away there.
@@ -305,6 +359,7 @@ export function PrintingsGallery({
       pin,
       reset,
       flip,
+      prepareFlip,
       activateRow,
       loadAll,
     }),
@@ -323,6 +378,7 @@ export function PrintingsGallery({
       pin,
       reset,
       flip,
+      prepareFlip,
       activateRow,
       loadAll,
     ],
@@ -343,43 +399,80 @@ export function PrintingsGallery({
 }
 
 /**
+ * One picture as the hero has drawn it since W5: the picture it replaced as
+ * an underlay, and over it the image, keyed by its address so a new picture
+ * mounts and its crossfade starts. Always `priority`, so CardImage adds no
+ * load fade of its own: a picture that arrives by a turn carries no fade at
+ * all and is whole as it comes round. The shadow is on the image, so in a
+ * turn it leaves with its face.
+ */
+function HeroPicture({
+  picture,
+  alt,
+  fallback,
+}: {
+  picture: FlipPicture;
+  alt: string;
+  fallback: string;
+}) {
+  return (
+    <>
+      {picture.under && (
+        // eslint-disable-next-line @next/next/no-img-element -- CDN hotlink by design (CardImage docblock); decoded underlay for the crossfade.
+        <img
+          src={picture.under}
+          alt=""
+          aria-hidden
+          width={488}
+          height={680}
+          className="absolute inset-0 w-72 rounded-2xl"
+        />
+      )}
+      <CardImage
+        key={picture.src ?? "none"}
+        src={picture.src}
+        alt={alt}
+        width={488}
+        height={680}
+        priority
+        className={cn(
+          "relative w-72 rounded-2xl",
+          HERO_CARD_SHADOW,
+          picture.fade && "motion-safe:animate-dw-in",
+        )}
+        fallback={fallback}
+      />
+    </>
+  );
+}
+
+/**
  * The hero column: the pinned printing large, its caption, Flip (only with a
  * back face), Reset to default. Sticky from md so a long table scrolls under
  * a visible main image — what makes "click → shows in the main spot" legible.
+ * A printing with a back draws through CardFlip, so Flip turns the card.
  */
 export function PrintingsHero() {
-  const { cardName, pinnedRow, displayed, announceText, reset, flip, buy } = useGallery();
+  const { cardName, pinnedRow, displayed, announceText, reset, flip, prepareFlip, buy } =
+    useGallery();
   const hasDefault = pinnedRow !== null || displayed.id !== null;
+  const picture = (shown: FlipPicture) => (
+    <HeroPicture
+      picture={shown}
+      alt={cardName}
+      fallback={hasDefault ? "Card image coming soon" : "No image"}
+    />
+  );
 
   return (
     <div className="relative -mt-20 shrink-0 self-start md:sticky md:top-4 md:-mt-24">
-      <div className="relative">
-        {!displayed.initial && displayed.underSrc && (
-          // eslint-disable-next-line @next/next/no-img-element -- CDN hotlink by design (CardImage docblock); decoded underlay for the crossfade.
-          <img
-            src={displayed.underSrc}
-            alt=""
-            aria-hidden
-            width={488}
-            height={680}
-            className="absolute inset-0 w-72 rounded-2xl"
-          />
-        )}
-        <CardImage
-          key={displayed.initial ? "hero" : `${displayed.id}:${displayed.face}:${displayed.src}`}
-          src={displayed.src}
-          alt={cardName}
-          width={488}
-          height={680}
-          priority
-          className={cn(
-            "relative w-72 rounded-2xl",
-            HERO_CARD_SHADOW,
-            !displayed.initial && "motion-safe:animate-dw-in",
-          )}
-          fallback={hasDefault ? "Card image coming soon" : "No image"}
-        />
-      </div>
+      {displayed.sided ? (
+        <CardFlip state={displayed.flip} className="w-72">
+          {picture}
+        </CardFlip>
+      ) : (
+        <div className="relative">{picture(facing(displayed.flip))}</div>
+      )}
       {pinnedRow && (
         <div className="mt-3 w-72 text-sm">
           <p className="font-medium">{pinnedRow.setName}</p>
@@ -398,7 +491,15 @@ export function PrintingsHero() {
               </Button>
             )}
             {pinnedRow.hasBack && (
-              <Button variant="outline" size="sm" onClick={flip}>
+              <Button
+                variant="outline"
+                size="sm"
+                aria-pressed={displayed.face === "back"}
+                onClick={flip}
+                onPointerEnter={prepareFlip}
+                onFocus={prepareFlip}
+                onTouchStart={prepareFlip}
+              >
                 <RotateCcwIcon aria-hidden className="size-3.5" />
                 Flip
               </Button>

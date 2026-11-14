@@ -378,6 +378,33 @@ describe("theme tokens ↔ globals.css", () => {
     expect(reduce).not.toMatch(/\bbody\b|\bhtml\b/);
   });
 
+  it("the card flip: one transform transition, 400 ms on settle-400, and only without reduced motion (CARD-FLIP)", () => {
+    const layer =
+      [...code.matchAll(/@layer components \{([\s\S]*?)\n\}/g)].find((m) =>
+        m[1].includes('[data-flip="turn"]'),
+      )?.[1] ?? "";
+    // A one-off moment on the 400 slot. It lives inside the no-preference
+    // query, and outside it the turning element transitions nothing, so
+    // reduced motion has no transition to collapse: the side changes at
+    // once and nothing runs, not even the backstop's 0.01 ms.
+    expect(layer).toMatch(
+      /@media \(prefers-reduced-motion: no-preference\) \{\s*\[data-flip="turn"\] \{\s*transition: transform 400ms var\(--ease-settle-400\);\s*\}\s*\}/,
+    );
+    expect(layer).toMatch(/\n  \[data-flip="turn"\] \{[^}]*\btransition: none;\s*\}/);
+    // The one timed transition in the recipe, on transform only, and no
+    // keyframes: a second press reverses a transition, which an animation
+    // could not.
+    expect([...layer.matchAll(/transition: ([^;]+);/g)].map((m) => m[1])).toEqual([
+      "none",
+      "transform 400ms var(--ease-settle-400)",
+    ]);
+    expect(layer).not.toMatch(/animation|@keyframes/);
+    // What it runs between: square, and half a turn about the vertical axis.
+    expect(layer).toMatch(
+      /\[data-flip="turn"\]\[data-turned\] \{\s*transform: rotateY\(180deg\);\s*\}/,
+    );
+  });
+
   it("the skip link's landing on main draws no page-sized ring (U8)", () => {
     expect(code).toMatch(/#main:focus\s*\{\s*outline: none;\s*\}/);
   });

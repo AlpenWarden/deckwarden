@@ -4,6 +4,10 @@
  * aria-live) and opens the drawer below md; One Piece rows carry no price
  * cells; Flip exists only with a back face; "Show all" fetches the capped
  * tail honestly; deep links restore (and unknown ones change nothing).
+ * CARD-FLIP: Flip turns the card over through CardFlip (two slots and a
+ * flag, the button's pressed state, the line, the decode on intent and no
+ * back before it), and a card with one face keeps the plain hero markup.
+ * jsdom has no layout and no 3D: the turn itself is read in a browser.
  */
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -157,6 +161,214 @@ describe("pinning on md+", () => {
     fireEvent.click(rowButton(/Innistrad/));
     fireEvent.click(await screen.findByRole("button", { name: /Flip/ }));
     await screen.findByText("Showing Innistrad #300, back face");
+  });
+});
+
+describe("the flip (CARD-FLIP)", () => {
+  // A card whose default printing has a back, and a second printing that has one too.
+  const mom = printing(7, {
+    setCode: "mom",
+    setName: "March of the Machine",
+    collectorNumber: "298",
+    isDefault: true,
+    hasBack: true,
+  });
+  const TWO_SIDED = [mom, dfc];
+  const front = (p: GalleryPrinting) => `https://cards.scryfall.io/normal/front/0/0/${p.id}.jpg`;
+  const back = (p: GalleryPrinting) => `https://cards.scryfall.io/normal/back/0/0/${p.id}.jpg`;
+
+  /** Every address asked to decode off screen, in order; `fails` makes an address reject. */
+  function stubDecodes(fails: (src: string) => boolean = () => false) {
+    const asked: string[] = [];
+    vi.stubGlobal(
+      "Image",
+      class {
+        src = "";
+        decode() {
+          asked.push(this.src);
+          return fails(this.src) ? Promise.reject(new Error("decode failed")) : Promise.resolve();
+        }
+      },
+    );
+    return asked;
+  }
+
+  const part = (name: string) => document.querySelector<HTMLElement>(`[data-flip="${name}"]`)!;
+  const images = (el: Element) => [...el.querySelectorAll("img")];
+  const flipButton = () => screen.getByRole("button", { name: /Flip/ });
+  const heroColumn = () => document.querySelector('[aria-live="polite"]')!.parentElement!;
+
+  it("a card that opens on a single-faced printing keeps the plain hero, through a swap too", async () => {
+    stubDecodes();
+    renderGallery();
+    const plain = heroColumn().firstElementChild!;
+    expect(plain.outerHTML).toMatch(/^<div class="relative"><img [^>]*><\/div>$/);
+    expect(document.querySelector("[data-flip]")).toBeNull();
+    fireEvent.click(rowButton(/Secret Lair Drop/));
+    await screen.findByText("Showing Secret Lair Drop #2783");
+    // The crossfade as it has always been: the outgoing picture under the incoming one.
+    expect(document.querySelector("[data-flip]")).toBeNull();
+    const [under, shown] = images(heroColumn().firstElementChild!);
+    expect(under.getAttribute("src")).toBe(front(cmm));
+    expect(under.className).toBe("absolute inset-0 w-72 rounded-2xl");
+    expect(shown.getAttribute("src")).toBe(front(sld));
+    expect(shown.className).toContain("motion-safe:animate-dw-in");
+  });
+
+  it("the wrappers mount inside the swap to a printing with a back, around its crossfade", async () => {
+    const asked = stubDecodes();
+    renderGallery();
+    fireEvent.click(rowButton(/Innistrad/));
+    await screen.findByText("Showing Innistrad #300");
+    expect(part("box").className).toBe("w-72");
+    expect(part("box").parentElement).toBe(heroColumn());
+    expect(part("turn").hasAttribute("data-turned")).toBe(false);
+    const [under, shown] = images(part("near"));
+    expect(under.getAttribute("src")).toBe(front(cmm));
+    expect(shown.getAttribute("src")).toBe(front(dfc));
+    expect(shown.className).toContain("motion-safe:animate-dw-in");
+    expect(part("far").childElementCount).toBe(0);
+    expect(flipButton().getAttribute("aria-pressed")).toBe("false");
+    // Only the front was asked for.
+    expect(asked).toEqual([front(dfc)]);
+  });
+
+  it("a default printing with a back renders the wrappers at once: the LCP image untouched in the near face, no back asked for", () => {
+    const asked = stubDecodes();
+    renderGallery({ printings: TWO_SIDED, total: 2 });
+    const [hero, ...rest] = images(part("near"));
+    expect(rest).toHaveLength(0);
+    expect(hero.getAttribute("fetchpriority")).toBe("high");
+    expect(hero.getAttribute("loading")).toBe("eager");
+    expect(hero.getAttribute("src")).toBe(front(mom));
+    expect(hero.className).not.toContain("animate-dw-in");
+    expect(part("turn").hasAttribute("data-turned")).toBe(false);
+    expect(part("far").childElementCount).toBe(0);
+    expect(part("far").getAttribute("aria-hidden")).toBe("true");
+    expect(flipButton().getAttribute("aria-pressed")).toBe("false");
+    // The back costs nothing until it is asked for.
+    expect(asked).toEqual([]);
+    expect(document.querySelector('img[src*="/back/"]')).toBeNull();
+  });
+
+  it("the pointer, focus or a touch reaching Flip starts the back's decode, once, and changes nothing on screen", async () => {
+    const asked = stubDecodes();
+    renderGallery({ printings: TWO_SIDED, total: 2 });
+    fireEvent.pointerEnter(flipButton());
+    expect(asked).toEqual([back(mom)]);
+    fireEvent.focus(flipButton());
+    fireEvent.touchStart(flipButton());
+    fireEvent.pointerEnter(flipButton());
+    await act(async () => {}); // the decode settles
+    fireEvent.pointerEnter(flipButton());
+    expect(asked).toEqual([back(mom)]);
+    expect(part("turn").hasAttribute("data-turned")).toBe(false);
+    expect(part("far").childElementCount).toBe(0);
+    expect(document.querySelector('img[src*="/back/"]')).toBeNull();
+    expect(document.querySelector('[aria-live="polite"]')!.textContent).toBe("");
+  });
+
+  it("a press shares the decode the pointer started", async () => {
+    const asked = stubDecodes();
+    renderGallery({ printings: TWO_SIDED, total: 2 });
+    fireEvent.pointerEnter(flipButton());
+    fireEvent.click(flipButton());
+    await screen.findByText("Showing March of the Machine #298, back face");
+    expect(asked).toEqual([back(mom)]);
+  });
+
+  it("Flip turns: the back goes whole into the far slot, the flag flips, the button says pressed", async () => {
+    stubDecodes();
+    renderGallery({ printings: TWO_SIDED, total: 2 });
+    const hero = images(part("near"))[0];
+    fireEvent.click(flipButton());
+    await screen.findByText("Showing March of the Machine #298, back face");
+    expect(part("turn").getAttribute("data-turned")).toBe("");
+    const arrived = images(part("far"));
+    expect(arrived).toHaveLength(1); // nothing under it
+    expect(arrived[0].getAttribute("src")).toBe(back(mom));
+    // Whole as it comes round: no crossfade, and `priority`, so no load fade.
+    expect(arrived[0].className).not.toContain("animate-dw-in");
+    expect(arrived[0].className).not.toContain("opacity-0");
+    expect(arrived[0].getAttribute("loading")).toBe("eager");
+    // The shadow is on the image, so it turns with its face.
+    expect(arrived[0].className).toContain("shadow-lg");
+    // The front never remounted, and a reader hears one image: the back.
+    expect(images(part("near"))[0]).toBe(hero);
+    expect(part("near").getAttribute("aria-hidden")).toBe("true");
+    expect(part("far").hasAttribute("aria-hidden")).toBe(false);
+    expect(screen.getAllByRole("img", { name: "Sol Ring" })).toEqual(arrived);
+    expect(flipButton().getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("a second Flip turns back and reuses both slots: only the flag moves", async () => {
+    stubDecodes();
+    renderGallery({ printings: TWO_SIDED, total: 2 });
+    const hero = images(part("near"))[0];
+    fireEvent.click(flipButton());
+    await screen.findByText("Showing March of the Machine #298, back face");
+    const arrived = images(part("far"))[0];
+    fireEvent.click(flipButton());
+    await screen.findByText("Showing March of the Machine #298");
+    expect(part("turn").hasAttribute("data-turned")).toBe(false);
+    expect(images(part("near"))).toEqual([hero]);
+    expect(images(part("far"))).toEqual([arrived]);
+    expect(part("far").getAttribute("aria-hidden")).toBe("true");
+    expect(flipButton().getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("a printing change with the back up crossfades to the new front without a turn; the next Flip turns to the new back", async () => {
+    stubDecodes();
+    renderGallery({ printings: TWO_SIDED, total: 2 });
+    const hero = images(part("near"))[0];
+    fireEvent.click(flipButton());
+    await screen.findByText("Showing March of the Machine #298, back face");
+    fireEvent.click(rowButton(/Innistrad/));
+    await screen.findByText("Showing Innistrad #300");
+    // The flag is left alone: the new front lands in the slot facing the
+    // reader, over the old back, as any printing change lands.
+    expect(part("turn").getAttribute("data-turned")).toBe("");
+    const [under, shown] = images(part("far"));
+    expect(under.getAttribute("src")).toBe(back(mom));
+    expect(shown.getAttribute("src")).toBe(front(dfc));
+    expect(shown.className).toContain("motion-safe:animate-dw-in");
+    expect(images(part("near"))).toEqual([hero]);
+    expect(flipButton().getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(flipButton());
+    await screen.findByText("Showing Innistrad #300, back face");
+    expect(part("turn").hasAttribute("data-turned")).toBe(false);
+    const arrived = images(part("near"));
+    expect(arrived).toHaveLength(1);
+    expect(arrived[0].getAttribute("src")).toBe(back(dfc));
+    expect(arrived[0].className).not.toContain("animate-dw-in");
+    expect(flipButton().getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("a back that fails to decode turns to the fallback box", async () => {
+    stubDecodes((src) => src.includes("/back/"));
+    renderGallery({ printings: TWO_SIDED, total: 2 });
+    fireEvent.click(flipButton());
+    await screen.findByText("Showing March of the Machine #298, back face");
+    expect(part("turn").getAttribute("data-turned")).toBe("");
+    expect(images(part("far"))).toHaveLength(0);
+    expect(within(part("far")).getByText("Card image coming soon")).toBeTruthy();
+    expect(flipButton().getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("a press before the wrappers are on screen shows the back in place: nothing mounts already turned", async () => {
+    stubDecodes();
+    renderGallery();
+    // Flip appears with the pin, before the swap that mounts the wrappers lands.
+    fireEvent.click(rowButton(/Innistrad/));
+    fireEvent.click(flipButton());
+    await screen.findByText("Showing Innistrad #300, back face");
+    expect(part("turn").hasAttribute("data-turned")).toBe(false);
+    const [under, shown] = images(part("near"));
+    expect(under.getAttribute("src")).toBe(front(cmm));
+    expect(shown.getAttribute("src")).toBe(back(dfc));
+    expect(shown.className).toContain("motion-safe:animate-dw-in");
+    expect(flipButton().getAttribute("aria-pressed")).toBe("true");
   });
 });
 
