@@ -216,7 +216,7 @@ export default function PrivacyPage() {
           </a>{" "}
           for anything private, or{" "}
           <a
-            href="https://github.com/Bobandis6/deckwarden/issues"
+            href="https://github.com/AlpenWarden/deckwarden/issues"
             className="underline"
             rel="noreferrer"
             target="_blank"
