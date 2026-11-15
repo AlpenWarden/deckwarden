@@ -43,7 +43,7 @@ export function SiteFooter() {
           Contact
         </a>
         <a
-          href="https://github.com/Bobandis6/deckwarden"
+          href="https://github.com/AlpenWarden/deckwarden"
           className="hover:text-foreground underline"
           rel="noreferrer"
           target="_blank"
