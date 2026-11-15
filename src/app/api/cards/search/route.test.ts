@@ -8,6 +8,11 @@
  * nothing changes" contract. With a set: the in-set printing's derived
  * table, the translator's EXISTS, `sort=number`, `printingId` on the wire,
  * and the one extra statement that words an empty answer's warning.
+ *
+ * CARD-FLIP-EDITOR moved the verbatim pins by one column: every statement
+ * also reads the joined printing's `has_back`, after `image_override`, and a
+ * row whose printing has a back carries `hasBack: true` after `image`. A row
+ * without one has the keys it had (the list below is unchanged).
  */
 import { drizzle } from "drizzle-orm/postgres-js";
 import { NextRequest, NextResponse } from "next/server";
@@ -53,11 +58,11 @@ const { GET } = await import("./route");
 
 const SELECT_CARD = `select "card_identities"."id", "card_identities"."name", "card_identities"."external_key", "card_identities"."primary_type", "card_identities"."cost_value", "card_identities"."colors_mask", "card_identities"."ci_mask", "card_identities"."cheapest_usd", "card_identities"."popularity", "card_identities"."is_leader_candidate", "card_identities"."is_preview", "card_identities"."attrs"`;
 
-/** /cards' first request before X4a — 69636a4's statement, verbatim. */
-const CARDS_FIRST_PAGE = `${SELECT_CARD}, "card_printings"."id", "card_printings"."image_override", count(*) over()::int from "card_identities" left join "card_printings" on ("card_printings"."card_identity_id" = "card_identities"."id" and "card_printings"."is_default" = $1) where ("card_identities"."game_id" = $2 and "card_identities"."is_removed" = $3 and NOT ("card_identities"."attrs" @> $4::jsonb)) order by "card_identities"."popularity" ASC NULLS LAST, "card_identities"."name_norm" limit $5`;
+/** /cards' first request before X4a — 69636a4's statement, verbatim, plus `has_back` (CARD-FLIP-EDITOR). */
+const CARDS_FIRST_PAGE = `${SELECT_CARD}, "card_printings"."id", "card_printings"."image_override", "card_printings"."has_back", count(*) over()::int from "card_identities" left join "card_printings" on ("card_printings"."card_identity_id" = "card_identities"."id" and "card_printings"."is_default" = $1) where ("card_identities"."game_id" = $2 and "card_identities"."is_removed" = $3 and NOT ("card_identities"."attrs" @> $4::jsonb)) order by "card_identities"."popularity" ASC NULLS LAST, "card_identities"."name_norm" limit $5`;
 
-/** The editor's One Piece id pass (`OP01-02`) before X4a, verbatim. */
-const OP_ID_PASS = `${SELECT_CARD}, "card_printings"."id", "card_printings"."image_override", count(*) over()::int from "card_identities" left join "card_printings" on ("card_printings"."card_identity_id" = "card_identities"."id" and "card_printings"."is_default" = $1) where ("card_identities"."game_id" = $2 and "card_identities"."is_removed" = $3 and NOT ("card_identities"."attrs" @> $4::jsonb) and "card_identities"."external_key" LIKE $5) order by "card_identities"."external_key" ASC, "card_identities"."name_norm" limit $6`;
+/** The editor's One Piece id pass (`OP01-02`) before X4a, verbatim, plus `has_back` (CARD-FLIP-EDITOR). */
+const OP_ID_PASS = `${SELECT_CARD}, "card_printings"."id", "card_printings"."image_override", "card_printings"."has_back", count(*) over()::int from "card_identities" left join "card_printings" on ("card_printings"."card_identity_id" = "card_identities"."id" and "card_printings"."is_default" = $1) where ("card_identities"."game_id" = $2 and "card_identities"."is_removed" = $3 and NOT ("card_identities"."attrs" @> $4::jsonb) and "card_identities"."external_key" LIKE $5) order by "card_identities"."external_key" ASC, "card_identities"."name_norm" limit $6`;
 
 /** The token search's namesake order (DECK-TOKENS): P/T, then colors. */
 const TOKEN_NAMESAKES = `("card_identities"."attrs"->>'power_num')::int ASC NULLS LAST, ("card_identities"."attrs"->>'toughness_num')::int ASC NULLS LAST, "card_identities"."colors_mask" ASC`;
@@ -70,6 +75,7 @@ function row(r: {
   name: string;
   popularity?: number | null;
   printingId?: string | null;
+  hasBack?: boolean | null;
   total?: number;
 }): unknown[] {
   return [
@@ -87,6 +93,7 @@ function row(r: {
     { type_line: "Basic Land — Forest" },
     r.printingId ?? null,
     null,
+    r.hasBack ?? (r.printingId ? false : null),
     r.total ?? 1,
   ];
 }
@@ -220,6 +227,44 @@ describe("GET /api/cards/search — without a set, what it was", () => {
     expect(body).not.toHaveProperty("warnings");
   });
 
+  it("a printing with a back says so after image, and only then: no key on a single-faced card or a card with no printing (CARD-FLIP-EDITOR)", async () => {
+    answers = [
+      [
+        row({ id: "etali", name: "Etali, Primal Conqueror", printingId: PRINTING, hasBack: true }),
+        row({ id: "forest", name: "Forest", printingId: PRINTING, hasBack: false }),
+        row({ id: "ghost", name: "No Printing", printingId: null }),
+      ],
+    ];
+    const { body } = await get("game=mtg&limit=60");
+    const [etali, forest, ghost] = body.results;
+    expect(Object.keys(etali).slice(-2)).toEqual(["image", "hasBack"]);
+    expect(etali.hasBack).toBe(true);
+    for (const plain of [forest, ghost]) {
+      expect(plain).not.toHaveProperty("hasBack");
+      expect(Object.keys(plain).at(-1)).toBe("image");
+    }
+    expect(ghost.image).toBeNull();
+    // The single-faced row is, byte for byte, the row the wire always sent.
+    expect(JSON.stringify(forest)).toBe(
+      JSON.stringify({
+        id: "forest",
+        name: "Forest",
+        externalKey: "key-forest",
+        primaryType: "Land",
+        costValue: 0,
+        colorsMask: 0,
+        ciMask: 0,
+        popularity: null,
+        isLeaderCandidate: false,
+        isPreview: false,
+        attrs: { type_line: "Basic Land — Forest" },
+        cheapestUsd: 0.25,
+        legality: [],
+        image: `https://cards.scryfall.io/normal/front/f/7/${PRINTING}.jpg`,
+      }),
+    );
+  });
+
   it("sort=number with no set is the default order (it needs a set's printing to mean anything)", async () => {
     await get("game=mtg&limit=60&sort=number");
     expect(statements[0].sql).toBe(CARDS_FIRST_PAGE);
@@ -239,7 +284,9 @@ describe("GET /api/cards/search — a set scope", () => {
     const [s] = statements;
     expect(s.sql).toContain(`left join (select distinct on ("in_set_printing"."card_identity_id")`);
     expect(s.sql).toContain(`) "in_set" on "in_set"."card_identity_id" = "card_identities"."id"`);
-    expect(s.sql).toContain(`"in_set"."id", "in_set"."image_override", count(*) over()::int`);
+    expect(s.sql).toContain(
+      `"in_set"."id", "in_set"."image_override", "in_set"."has_back", count(*) over()::int`,
+    );
     expect(s.sql).toContain(`exists (select 1 from "card_printings" "set_printing"`);
     expect(s.sql).not.toContain(`"card_printings"."is_default"`);
     expect(s.sql).toMatch(
@@ -258,6 +305,19 @@ describe("GET /api/cards/search — a set scope", () => {
       `https://cards.scryfall.io/normal/front/f/7/${PRINTING}.jpg`,
     );
     expect(body).not.toHaveProperty("warnings");
+  });
+
+  it("the in-set printing's back, not the default's: hasBack sits between image and printingId (CARD-FLIP-EDITOR)", async () => {
+    answers = [
+      [
+        row({ id: "sol", name: "Sol Ring", printingId: PRINTING, hasBack: true, total: 2 }),
+        row({ id: "forest", name: "Forest", printingId: "p-002", hasBack: false, total: 2 }),
+      ],
+    ];
+    const { body } = await get("game=mtg&limit=60&set=sld");
+    expect(Object.keys(body.results[0]).slice(-3)).toEqual(["image", "hasBack", "printingId"]);
+    expect(body.results[0].hasBack).toBe(true);
+    expect(Object.keys(body.results[1]).slice(-2)).toEqual(["image", "printingId"]);
   });
 
   it("the strip's request: sort=pop, limit 12, still the set's printing", async () => {

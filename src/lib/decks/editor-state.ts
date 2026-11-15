@@ -13,15 +13,21 @@ import type { CardData, FormatDef } from "@/lib/games/types";
 
 /** Wire shape both /api/cards/search and GET /api/decks/[id] return per card:
  *  full CardData (incl. legality exceptions, P1.4) plus the display image URL.
- *  Search results only carry real legality when the query included `format`. */
+ *  Search results only carry real legality when the query included `format`.
+ *  `hasBack` (CARD-FLIP-EDITOR) is present, and true, only when the printing
+ *  `image` shows has a back face: the Card tab turns such a card over, the
+ *  back's address derived from `image` (src/lib/cards/images.ts `toBackImage`).
+ *  A card without one carries no such key, so its wire's bytes never changed. */
 export type CardWire = Omit<CardData, "legality"> & {
   image: string | null;
   legality?: CardData["legality"];
+  hasBack?: true;
 };
 
 /** What the editor holds per card — CardWire hydrated to a full CardData so
- *  adapter display/validate/analyze calls need no further shaping. */
-export type EditorCard = CardData & { image: string | null };
+ *  adapter display/validate/analyze calls need no further shaping. `hasBack`
+ *  follows `image`: a chosen printing sets both (deck-editor's setCardImage). */
+export type EditorCard = CardData & { image: string | null; hasBack?: true };
 
 export function toEditorCard(wire: CardWire): EditorCard {
   return { ...wire, legality: wire.legality ?? [] };

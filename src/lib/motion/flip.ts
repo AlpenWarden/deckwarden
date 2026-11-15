@@ -81,3 +81,20 @@ export function turn(state: FlipState, src: string | null): FlipState {
     ? { near: picture, far: state.far, turned: false }
     : { near: state.near, far: picture, turned: true };
 }
+
+/** A slot of the turning element. */
+export type FlipSlot = "near" | "far";
+
+/**
+ * The slot a turn brought a new picture into (CARD-FLIP-EDITOR): the one
+ * that was hidden before the turn, or null when that slot already held the
+ * picture (a turn back, a second press mid-turn) or when nothing turned. A
+ * caller whose images change address in place (the editor's Card tab, where
+ * a new card lands in the image that is already there) uses it to mount a
+ * fresh image for a picture that arrives by a turn, and only for that.
+ */
+export function arrival(before: FlipState, after: FlipState): FlipSlot | null {
+  if (before.turned === after.turned) return null;
+  const slot: FlipSlot = before.turned ? "near" : "far";
+  return after[slot] !== before[slot] ? slot : null;
+}

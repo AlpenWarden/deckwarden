@@ -11,7 +11,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { facing, flipOf, show, turn } from "./flip";
+import { arrival, facing, flipOf, show, turn } from "./flip";
 
 const FRONT = "https://cards.scryfall.io/normal/front/a/a/a.jpg";
 const BACK = "https://cards.scryfall.io/normal/back/a/a/a.jpg";
@@ -103,6 +103,27 @@ describe("the flip's state", () => {
     const blank = show(flipOf(FRONT), null);
     expect(blank.near).toEqual({ src: null, under: FRONT, fade: true });
     expect(show(blank, null)).toBe(blank);
+  });
+
+  it("arrival names the slot a turn brought a new picture into, and nothing else (CARD-FLIP-EDITOR)", () => {
+    const start = flipOf(FRONT);
+    const turned = turn(start, BACK);
+    // The first turn fills the far slot.
+    expect(arrival(start, turned)).toBe("far");
+    // A turn back, and the turn after it, find their pictures where they were.
+    const back = turn(turned, FRONT);
+    expect(arrival(turned, back)).toBeNull();
+    expect(arrival(back, turn(back, BACK))).toBeNull();
+    // A new card landed in the facing slot while turned: the next turn brings its back to the near slot.
+    const changed = show(turned, OTHER_FRONT);
+    expect(arrival(turned, changed)).toBeNull();
+    expect(arrival(changed, turn(changed, OTHER_BACK))).toBe("near");
+    // And with the near slot up, a new card's back replaces the stale one behind it.
+    const landed = show(back, OTHER_FRONT);
+    expect(arrival(landed, turn(landed, OTHER_BACK))).toBe("far");
+    // Nothing turned, nothing arrived.
+    expect(arrival(start, start)).toBeNull();
+    expect(arrival(start, show(start, OTHER_FRONT))).toBeNull();
   });
 });
 

@@ -57,6 +57,13 @@
  * number; after any other order they come last, then id, so "Show more"
  * pages never repeat or skip a token.
  *
+ * A back face (CARD-FLIP-EDITOR): a row whose printing has one, the default
+ * or the in-set one, carries `hasBack: true` after `image`, and only then,
+ * so the editor's Card tab can turn the card over (the back's address is
+ * derived from `image`). The statement reads one more column of the printing
+ * it already joins; a response with no double-faced card is byte for byte
+ * what it was.
+ *
  * Bounds and a limiter (S4, SECURITY-AUDIT-report.md M6): the translator
  * refuses a filter value past SEARCH_VALUE_MAX_CHARS or a multiselect past
  * SEARCH_MULTISELECT_MAX_VALUES — the route answers 400 with the refusals
@@ -219,6 +226,7 @@ export async function GET(request: NextRequest) {
           ...cardFields,
           printingId: inSet.id,
           imageOverride: inSet.imageOverride,
+          hasBack: inSet.hasBack,
           total,
         })
         .from(ci)
@@ -232,6 +240,7 @@ export async function GET(request: NextRequest) {
           ...cardFields,
           printingId: cp.id,
           imageOverride: cp.imageOverride,
+          hasBack: cp.hasBack,
           total,
         })
         .from(ci)
@@ -257,13 +266,15 @@ export async function GET(request: NextRequest) {
       )
     : new Map();
   const results = rows.map(
-    ({ total: _total, printingId, imageOverride, cheapestUsd, ...card }) => ({
+    ({ total: _total, printingId, imageOverride, hasBack, cheapestUsd, ...card }) => ({
       ...card,
       cheapestUsd: cheapestUsd === null ? null : Number(cheapestUsd),
       legality: legalityMap.get(card.id) ?? [],
       image: printingId
         ? embeddablePrintingImageUrl({ id: printingId, imageOverride }, "normal")
         : null,
+      // CARD-FLIP-EDITOR: only a printing with a back says so (docblock).
+      ...(hasBack ? { hasBack: true as const } : {}),
       // X4a: the in-set printing rides the wire only when scoped, so an
       // unscoped response stays byte-identical.
       ...(scope ? { printingId } : {}),

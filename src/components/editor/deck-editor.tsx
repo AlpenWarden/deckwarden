@@ -2059,14 +2059,25 @@ export function DeckEditor({
   // A chosen printing must show everywhere at once (W6): the per-card image
   // map feeds the list, the grid, the leader zone and the sample hand — a
   // reload would otherwise be the first place the choice renders. The
-  // preview is a detached copy and follows separately.
-  const setCardImage = useCallback((cardId: string, image: string | null) => {
+  // preview is a detached copy and follows separately. The back flag goes
+  // with the image (CARD-FLIP-EDITOR): it is the shown printing's, so a
+  // chosen two-sided printing of a single-faced card can turn, and a chosen
+  // single-faced one of a double-faced card cannot, as after a reload.
+  const setCardImage = useCallback((cardId: string, image: string | null, hasBack: boolean) => {
+    const shown = (card: EditorCard): EditorCard => {
+      const next: EditorCard = { ...card, image };
+      if (hasBack) next.hasBack = true;
+      else delete next.hasBack;
+      return next;
+    };
     setCards((prev) => {
       const existing = prev.get(cardId);
-      if (!existing || existing.image === image) return prev;
-      return new Map(prev).set(cardId, { ...existing, image });
+      if (!existing || (existing.image === image && (existing.hasBack ?? false) === hasBack)) {
+        return prev;
+      }
+      return new Map(prev).set(cardId, shown(existing));
     });
-    setPreview((prev) => (prev && prev.id === cardId ? { ...prev, image } : prev));
+    setPreview((prev) => (prev && prev.id === cardId ? shown(prev) : prev));
   }, []);
 
   // Choosing a printing is a REAL edit (W6, D5): setPrinting → applyEdit →
@@ -2081,12 +2092,12 @@ export function DeckEditor({
       if (!entry) return;
       const previousId = entry.printingId ?? null;
       if (previousId === row.id) return;
-      const previousImage = cards.get(card.id)?.image ?? card.image;
+      const previous = cards.get(card.id) ?? card;
       applyEdit({ entries: setPrinting(before, card.id, row.id) });
-      setCardImage(card.id, embeddablePrintingImageUrl(row, "normal"));
+      setCardImage(card.id, embeddablePrintingImageUrl(row, "normal"), row.hasBack);
       notify(`${card.name} now uses ${row.setCode.toUpperCase()} ${row.collectorNumber}`, () => {
         applyEdit({ entries: setPrinting(entriesRef.current, card.id, previousId) });
-        setCardImage(card.id, previousImage);
+        setCardImage(card.id, previous.image, previous.hasBack ?? false);
       });
     },
     [cards, applyEdit, setCardImage, notify],

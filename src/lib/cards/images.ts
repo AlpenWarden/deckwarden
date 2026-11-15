@@ -128,6 +128,27 @@ export function toSmallImage(url: string): string {
   );
 }
 
+const SCRYFALL_FRONT_URL =
+  /^(https:\/\/cards\.scryfall\.io\/[a-z_]+\/)front(\/[0-9a-f]\/[0-9a-f]\/[0-9a-f-]{36}\.(?:jpg|png))$/;
+
+/**
+ * The back face of an already-resolved display URL (CARD-FLIP-EDITOR,
+ * 2026-11-14). Like `toSmallImage`, it exists for consumers that hold only
+ * the wire's `card.image` (the printing was resolved server-side, so its id
+ * isn't at hand to re-derive from): the editor's Card tab, which turns a
+ * card whose wire says `hasBack`. It rewrites the documented
+ * cards.scryfall.io pattern, whole, and nothing else: `…/front/…` becomes
+ * the `…/back/…` address `scryfallImageUrl(id, version, "back")` builds. An
+ * override URL in any other shape, the One Piece mirror and every other host
+ * are null, which means "no turn": there is never a control with nothing
+ * behind it. A caller that holds the printing row asks
+ * `embeddablePrintingImageUrl(row, "normal", "back")` instead.
+ */
+export function toBackImage(url: string): string | null {
+  const match = SCRYFALL_FRONT_URL.exec(url);
+  return match ? `${match[1]}back${match[2]}` : null;
+}
+
 /**
  * The `small` thumbnail for every small box: search and suggest rows, the
  * printings lists, deck tiles, the home shelves and the index grids (R3 F6,

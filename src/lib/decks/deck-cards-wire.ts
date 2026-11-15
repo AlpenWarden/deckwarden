@@ -8,6 +8,11 @@
  * printing id (build plan §4: never stored); entries without a chosen
  * printing resolve the identity's default printing in one extra query only
  * when needed.
+ *
+ * `hasBack: true` (CARD-FLIP-EDITOR) rides only on a card whose shown
+ * printing has a back face (the chosen printing's flag when the entry has
+ * one, the default's otherwise), after `image`; a deck with no such card
+ * answers byte for byte what it did.
  */
 import { and, asc, eq } from "drizzle-orm";
 
@@ -51,6 +56,7 @@ export async function fetchDeckCardsWire(deck: {
       popularity: ci.popularity,
       attrs: ci.attrs,
       chosenImageOverride: cp.imageOverride,
+      chosenHasBack: cp.hasBack,
     })
     .from(dc)
     .innerJoin(ci, eq(ci.id, dc.cardIdentityId))
@@ -68,6 +74,7 @@ export async function fetchDeckCardsWire(deck: {
             cardIdentityId: cp.cardIdentityId,
             id: cp.id,
             imageOverride: cp.imageOverride,
+            hasBack: cp.hasBack,
           })
           .from(cp)
           .innerJoin(dc, and(eq(dc.deckId, deck.id), eq(dc.cardIdentityId, cp.cardIdentityId)))
@@ -84,7 +91,7 @@ export async function fetchDeckCardsWire(deck: {
 
   return rows.map((r) => {
     const printing = r.printingId
-      ? { id: r.printingId, imageOverride: r.chosenImageOverride }
+      ? { id: r.printingId, imageOverride: r.chosenImageOverride, hasBack: r.chosenHasBack }
       : (defaultByCard.get(r.cardId) ?? null);
     return {
       cardId: r.cardId,
@@ -108,6 +115,7 @@ export async function fetchDeckCardsWire(deck: {
         attrs: r.attrs as Record<string, unknown>,
         legality: legalityMap.get(r.cardId) ?? [],
         image: printing ? embeddablePrintingImageUrl(printing, "normal") : null,
+        ...(printing?.hasBack ? { hasBack: true as const } : {}),
       },
     };
   });

@@ -6,6 +6,11 @@
  *
  * `fetchDeckCardsWire` (deck-entry-shaped, chosen-printing aware) is a
  * sibling, not a consumer — it stays in src/lib/decks/deck-cards-wire.ts.
+ *
+ * `hasBack: true` (CARD-FLIP-EDITOR) rides only on a card whose joined
+ * printing has a back face, after `image`, so the editor's Card tab can turn
+ * it over; every other card's wire is byte for byte what it was (the search
+ * route's `printingId` idiom).
  */
 import { and, eq, inArray } from "drizzle-orm";
 
@@ -36,6 +41,7 @@ export function wireSelect(db: ReturnType<typeof getDb>) {
       attrs: ci.attrs,
       printingId: cp.id,
       imageOverride: cp.imageOverride,
+      hasBack: cp.hasBack,
     })
     .from(ci)
     .leftJoin(cp, and(eq(cp.cardIdentityId, ci.id), eq(cp.isDefault, true)))
@@ -48,7 +54,7 @@ export function toWire(
   row: WireRow,
   legality: Map<string, LegalityEntry[]>,
 ): CardWire & { legality: LegalityEntry[] } {
-  const { nameNorm: _nameNorm, printingId, imageOverride, cheapestUsd, ...card } = row;
+  const { nameNorm: _nameNorm, printingId, imageOverride, hasBack, cheapestUsd, ...card } = row;
   return {
     ...card,
     attrs: card.attrs as Record<string, unknown>,
@@ -57,6 +63,7 @@ export function toWire(
     image: printingId
       ? embeddablePrintingImageUrl({ id: printingId, imageOverride }, "normal")
       : null,
+    ...(hasBack ? { hasBack: true as const } : {}),
   };
 }
 

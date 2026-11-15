@@ -38,12 +38,42 @@
  * Alternatives and Printings at the full point. Rendering by point (not
  * clipping) keeps the column shorter than the sheet below full, so a drag
  * up on it moves the sheet instead of scrolling the column.
+ *
+ * CARD-FLIP-EDITOR (2026-11-14) turns a double-faced card over here, the
+ * only place in the editor a back can be seen: when the shown printing has
+ * a back (the wire's `hasBack` for the card, a previewed row's own flag), a
+ * Flip button sits beside the card, never on it, and the image is still not
+ * interactive. In the pane it ends the name's row, top right, in a column
+ * of its own, so the name starts where it starts for every card; in the
+ * sheet it stands in the room the card leaves (at least 40 % of the row),
+ * half way up the card: at the half point the card's foot is the
+ * viewport's edge on a phone whose browser keeps its bars (Mobile Safari,
+ * 695 px), and a control level with it lost its lower border there.
+ *
+ * The image draws through `CardFlip` for every card, at both sites, so the
+ * image element a new card lands in is always there: arrowing from a
+ * single-faced card to a double-faced one swaps the address in place, as it
+ * always has, and never mounts anything under a picture. A new card, or
+ * another printing of this one, never turns: its front lands at once in the
+ * slot facing the reader (after a turn that is the far slot; slots are not
+ * faces). Only Flip turns. The back costs nothing until it is asked for:
+ * its decode starts when the pointer, focus or a touch reaches Flip, and it
+ * arrives whole, in a fresh image (`arrival`), so no load fade rides into
+ * the turn.
  */
-import { ArrowRightIcon, ArrowUpRightIcon, ChevronDownIcon, PlusIcon } from "lucide-react";
+import {
+  ArrowRightIcon,
+  ArrowUpRightIcon,
+  ChevronDownIcon,
+  PlusIcon,
+  RotateCcwIcon,
+} from "lucide-react";
 import Link from "next/link";
 import { useCallback, useRef, useState, type ReactNode } from "react";
 
+import { CardFlip } from "@/components/cards/card-flip";
 import { CardImage } from "@/components/cards/card-image";
+import { useFaceDecode } from "@/components/cards/use-face-decode";
 import { AlternativesSection, type SwapEditing } from "@/components/editor/alternatives-section";
 import type { SheetPoint } from "@/components/editor/editor-layout";
 import { CostPips } from "@/components/deck/cost-pips";
@@ -52,10 +82,24 @@ import { Chip, ChipRemove } from "@/components/ui/chip";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { withPartner } from "@/lib/buy/links";
-import { embeddablePrintingImageUrl, thumbnailUrl } from "@/lib/cards/images";
+import {
+  embeddablePrintingImageUrl,
+  thumbnailUrl,
+  toBackImage,
+  type ImageFace,
+} from "@/lib/cards/images";
 import { printingCaption, type GalleryPrinting } from "@/lib/cards/printings";
 import { MAX_TAG_LENGTH, MAX_TAGS, type EditorCard } from "@/lib/decks/editor-state";
 import type { GameAdapter } from "@/lib/games/types";
+import {
+  arrival,
+  flipOf,
+  show,
+  turn,
+  type FlipPicture,
+  type FlipSlot,
+  type FlipState,
+} from "@/lib/motion/flip";
 import { cn } from "@/lib/utils";
 
 /** Present only when the shown card is in the deck (taggable). */
@@ -102,6 +146,27 @@ export interface CardSheet {
   actions: SheetActions;
 }
 
+/**
+ * The Card tab's picture (CARD-FLIP-EDITOR): the two slots of `CardFlip`,
+ * which one faces the reader, and which side of the card that is.
+ */
+interface PanePicture {
+  /** The shown printing's front, the card's image or a previewed row's: the state follows it. */
+  front: string | null;
+  /** The side that is up. A new card, or another printing of this one, lands on the front. */
+  face: ImageFace;
+  flip: FlipState;
+  /**
+   * How many pictures a turn has brought into each slot. The slot's image is
+   * keyed by it: a picture that arrives by a turn mounts fresh (`priority`,
+   * so CardImage adds no load fade, and already decoded), while a new card
+   * swaps the address of the image that is there. The near slot's first
+   * image (0) stays lazy with its load fade, as the pane's image always was:
+   * a pane that is mounted but not shown asks for no card.
+   */
+  arrivals: Record<FlipSlot, number>;
+}
+
 /** A sheet action: 32 px, 44 on touch. */
 const SHEET_ACTION_CLASS = "pointer-coarse:h-11 pointer-coarse:px-4";
 
@@ -142,6 +207,72 @@ export function CardDetailPane({
   // In-flight/done guard in a ref (the gallery's rule): state updaters must
   // stay pure, and a failed fetch clears it so "Try again" is real.
   const startedRef = useRef<Set<string>>(new Set());
+
+  // A selected printing previews in the pane image WITHOUT editing (D5);
+  // a different card simply has no selection.
+  const selectedRow = card && selected?.cardId === card.id ? selected.row : null;
+  const paneImage = selectedRow
+    ? embeddablePrintingImageUrl(selectedRow, "normal")
+    : (card?.image ?? null);
+  // The shown printing's back (CARD-FLIP-EDITOR): a previewed row's own, or
+  // the card's when its wire says so, derived from the front's address. Null
+  // is "no turn", and there is then no control.
+  const paneBack = selectedRow
+    ? selectedRow.hasBack
+      ? embeddablePrintingImageUrl(selectedRow, "normal", "back")
+      : null
+    : card?.hasBack && card.image
+      ? toBackImage(card.image)
+      : null;
+
+  const [picture, setPicture] = useState<PanePicture>(() => ({
+    front: paneImage,
+    face: "front",
+    flip: flipOf(paneImage),
+    arrivals: { near: 0, far: 0 },
+  }));
+  // A new card, or another printing of this one, lands at once on its front,
+  // in the slot facing the reader, and never turns. Derived as the props
+  // change ("storing information from previous renders", react.dev), so no
+  // frame draws the new card's name over the old card's back.
+  if (picture.front !== paneImage) {
+    setPicture({
+      front: paneImage,
+      face: "front",
+      flip: show(picture.flip, paneImage),
+      arrivals: picture.arrivals,
+    });
+  }
+
+  const { decode, prepare } = useFaceDecode();
+  // The picture a turn would bring: the other side of the shown printing.
+  // Null once the hidden slot already holds it (a turn back), so nothing is
+  // decoded twice.
+  const hidden = picture.flip.turned ? picture.flip.near : picture.flip.far;
+  const otherSide = picture.face === "front" ? paneBack : paneImage;
+  const toFetch = hidden?.src === otherSide ? null : otherSide;
+  // Flip's pointerenter, focus and touchstart: the other side starts
+  // decoding, once per picture. No back's address is requested before.
+  const prepareTurn = () => prepare(toFetch);
+  const turnToken = useRef(0);
+  const turnOver = async () => {
+    const token = ++turnToken.current;
+    const shown = paneImage;
+    const ok = toFetch === null ? true : await decode(toFetch);
+    if (token !== turnToken.current) return; // a later press superseded this one
+    const arriving = ok ? otherSide : null; // a side that cannot load turns to the fallback box
+    setPicture((prev) => {
+      if (prev.front !== shown) return prev; // the pane moved to another card meanwhile
+      const flip = turn(prev.flip, arriving);
+      const slot = arrival(prev.flip, flip);
+      return {
+        front: prev.front,
+        face: prev.face === "front" ? "back" : "front",
+        flip,
+        arrivals: slot ? { ...prev.arrivals, [slot]: prev.arrivals[slot] + 1 } : prev.arrivals,
+      };
+    });
+  };
 
   const loadPrintings = useCallback((cardId: string) => {
     if (startedRef.current.has(cardId)) return;
@@ -186,10 +317,6 @@ export function CardDetailPane({
   }
   const statLine = adapter.display.statLine?.(card) ?? null;
 
-  // A selected printing previews in the pane image WITHOUT editing (D5);
-  // a different card simply has no selection.
-  const selectedRow = selected?.cardId === card.id ? selected.row : null;
-  const paneImage = selectedRow ? embeddablePrintingImageUrl(selectedRow, "normal") : card.image;
   const printings = printingsByCard.get(card.id) ?? null;
   const printingsOpen = openFor === card.id;
 
@@ -295,6 +422,43 @@ export function CardDetailPane({
   const idBadge = adapter.display.idBadge?.(card);
   const costHtml = adapter.display.costHtml(card);
 
+  // One slot's picture. The image is keyed by its slot's arrivals alone, so
+  // a new card changes the address of the image that is there (the outgoing
+  // picture stays until the incoming one has its pixels, as it always has;
+  // the pane has no cross-fade, so `under` and `fade` go undrawn), and a
+  // picture a turn brings mounts whole. The shadow is on the image, so in a
+  // turn it leaves with its face.
+  const drawPicture = (shown: FlipPicture) => {
+    const arrivals = picture.arrivals[shown === picture.flip.near ? "near" : "far"];
+    return (
+      <CardImage
+        key={arrivals}
+        src={shown.src}
+        alt={card.name}
+        width={488}
+        height={680}
+        priority={arrivals > 0}
+        className="h-auto w-full rounded-[4.75%/3.5%] shadow-md"
+      />
+    );
+  };
+  // Beside the card, only when there is a back: the card page's button.
+  const flipControl = paneBack !== null && (
+    <Button
+      variant="outline"
+      size="sm"
+      className="shrink-0"
+      aria-pressed={picture.face === "back"}
+      onClick={() => void turnOver()}
+      onPointerEnter={prepareTurn}
+      onFocus={prepareTurn}
+      onTouchStart={prepareTurn}
+    >
+      <RotateCcwIcon aria-hidden className="size-3.5" />
+      Flip
+    </Button>
+  );
+
   if (sheet) {
     const { point, close, actions } = sheet;
     return (
@@ -357,15 +521,19 @@ export function CardDetailPane({
             </div>
           )}
           {/* From the half: the card, sized so it fits the half under the
-              header and the actions (124 px at the half's 55 %). */}
+              header and the actions (124 px at the half's 55 %). Flip stands
+              in the room it leaves, half way up the card (its foot can be
+              the viewport's edge). */}
           {point !== "peek" && (
-            <CardImage
-              src={paneImage}
-              alt={card.name}
-              width={488}
-              height={680}
-              className="mt-3 h-auto w-[min(60%,calc((55dvh-7.75rem)*0.7176))] rounded-[4.75%/3.5%] shadow-md"
-            />
+            <div data-slot="sheet-card" className="mt-3 flex items-center gap-3">
+              <CardFlip
+                state={picture.flip}
+                className="w-[min(60%,calc((55dvh-7.75rem)*0.7176))] shrink-0"
+              >
+                {drawPicture}
+              </CardFlip>
+              {flipControl}
+            </div>
           )}
           {point === "full" && details}
         </div>
@@ -375,17 +543,20 @@ export function CardDetailPane({
 
   return (
     <div className="p-3">
-      <CardImage
-        src={paneImage}
-        alt={card.name}
-        width={488}
-        height={680}
-        className="mx-auto w-full max-w-72 rounded-[4.75%/3.5%] shadow-md"
-      />
+      <CardFlip state={picture.flip} className="mx-auto w-full max-w-72">
+        {drawPicture}
+      </CardFlip>
 
-      <div className="mt-3 flex flex-wrap items-baseline gap-x-2">
-        <h2 className="font-semibold">{card.name}</h2>
-        <CostPips html={costHtml} className="text-xs" />
+      {/* The name's row, and Flip at its end: a column of its own, top
+          aligned and outside the name's baseline row, so the name starts at
+          one place for a single-faced and a double-faced card. The type line
+          keeps the pane's width under both. */}
+      <div data-slot="pane-name" className="mt-3 flex items-start gap-2">
+        <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2">
+          <h2 className="font-semibold">{card.name}</h2>
+          <CostPips html={costHtml} className="text-xs" />
+        </div>
+        {flipControl}
       </div>
       <p className="text-muted-foreground mt-0.5 text-sm">
         {idBadge ? `${idBadge} · ` : ""}

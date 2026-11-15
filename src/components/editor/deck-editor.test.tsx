@@ -865,6 +865,56 @@ describe("DeckEditor — the pane's Printings collapsible (W6, D5)", () => {
     expect(within(tools()).getByText(/In deck: default printing/)).toBeTruthy();
     expect(printingsFetches(sol.id)).toBe(1);
   });
+
+  it("the back goes with the chosen printing: a two-sided printing of Sol Ring brings Flip to the Card tab, and its Undo takes it away (CARD-FLIP-EDITOR)", async () => {
+    // Sol Ring's own printing has one face; this Secret Lair one has two.
+    const twoSided = { ...solAltPrinting, collectorNumber: "1512", hasBack: true };
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) =>
+      String(input) === `/api/cards/${sol.id}/printings`
+        ? ok({ printings: [twoSided, solDefaultPrinting], total: 2, truncated: false })
+        : route(input, init),
+    );
+    const input = await withSolInDeck();
+    const flip = () => within(tools()).queryByRole("button", { name: "Flip" });
+    const paneImage = () => within(tools()).getByRole("img", { name: "Sol Ring" });
+    expect(flip()).toBeNull();
+
+    // Choose the two-sided printing for the deck.
+    fireEvent.click(within(tools()).getByRole("button", { name: /^Printings/ }));
+    await act(async () => {});
+    fireEvent.click(within(tools()).getByRole("button", { name: /Secret Lair Drop/ }));
+    fireEvent.click(within(tools()).getByRole("button", { name: "Use this printing in deck" }));
+    const choiceToast = screen
+      .getByText("Sol Ring now uses SLD 1512")
+      .closest('[data-slot="toast"]');
+    await settle(1100);
+    await act(async () => {});
+
+    // Leave the row's own preview behind: select Arcane Signet's printing,
+    // then come back to Sol Ring from the deck list, so what the pane shows
+    // is the card as the editor holds it.
+    fireEvent.change(input, { target: { value: "arcane" } });
+    await settle();
+    fireEvent.click(screen.getByRole("option", { name: /Arcane Signet/ }));
+    await act(async () => {});
+    expect(flip()).toBeNull();
+    fireEvent.click(within(tools()).getByRole("button", { name: /^Printings/ }));
+    await act(async () => {});
+    fireEvent.click(within(tools()).getByRole("button", { name: /Commander Masters/ }));
+    fireEvent.click(within(section("Deck list")).getByRole("button", { name: "Sol Ring" }));
+    await act(async () => {});
+    expect(paneImage().getAttribute("src")).toBe(
+      `https://cards.scryfall.io/normal/front/a/a/${twoSided.id}.jpg`,
+    );
+    // The card itself now says it has a back: Flip is there, on the front.
+    expect(flip()?.getAttribute("aria-pressed")).toBe("false");
+
+    // Undo re-applies the default printing: the image and the flag go back together.
+    fireEvent.click(within(choiceToast as HTMLElement).getByRole("button", { name: "Undo" }));
+    await act(async () => {});
+    expect(paneImage().getAttribute("src")).toBe(sol.image);
+    expect(flip()).toBeNull();
+  });
 });
 
 describe("DeckEditor — Buy this deck (W7, D6)", () => {

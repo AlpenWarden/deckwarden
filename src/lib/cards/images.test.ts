@@ -14,6 +14,7 @@ import {
   printingImageUrl,
   scryfallImageUrl,
   thumbnailUrl,
+  toBackImage,
   toSmallImage,
 } from "./images";
 
@@ -65,6 +66,29 @@ describe("toSmallImage", () => {
     );
     const r2dev = "https://pub-0123456789abcdef.r2.dev/optcg/images/OP15-058.png";
     expect(toSmallImage(r2dev)).toBe(r2dev);
+  });
+});
+
+describe("toBackImage (CARD-FLIP-EDITOR)", () => {
+  it("turns a derived front URL into the back address the printing id derives, at every version", () => {
+    expect(toBackImage(scryfallImageUrl(ID))).toBe(scryfallImageUrl(ID, "normal", "back"));
+    expect(toBackImage(scryfallImageUrl(ID, "small"))).toBe(scryfallImageUrl(ID, "small", "back"));
+    expect(toBackImage(scryfallImageUrl(ID, "png"))).toBe(scryfallImageUrl(ID, "png", "back"));
+    expect(toBackImage(scryfallImageUrl(ID))).toBe(
+      embeddablePrintingImageUrl({ id: ID, imageOverride: null }, "normal", "back"),
+    );
+  });
+
+  it("is null for anything but the documented pattern, so no control has nothing behind it", () => {
+    // Already a back, the One Piece mirror, another host, an override with a query string.
+    expect(toBackImage(scryfallImageUrl(ID, "normal", "back"))).toBeNull();
+    expect(toBackImage(`${OPTCG_IMAGE_HOST}/optcg/images/OP15-058.png`)).toBeNull();
+    expect(toBackImage(`https://example.com/normal/front/e/3/${ID}.jpg`)).toBeNull();
+    expect(toBackImage(`${scryfallImageUrl(ID)}?1562404626`)).toBeNull();
+    // "front" elsewhere in the address is not the face segment.
+    expect(toBackImage(`https://cards.scryfall.io/front/normal/e/3/${ID}.jpg`)).toBeNull();
+    expect(toBackImage("https://cards.scryfall.io/normal/front/x/y/other.jpg")).toBeNull();
+    expect(toBackImage("")).toBeNull();
   });
 });
 

@@ -64,6 +64,7 @@ export function inSetPrintings(gameId: number, code: string) {
       cardIdentityId: inSetPrinting.cardIdentityId,
       id: inSetPrinting.id,
       imageOverride: inSetPrinting.imageOverride,
+      hasBack: inSetPrinting.hasBack,
       collectorNumber: inSetPrinting.collectorNumber,
     })
     .from(inSetPrinting)

@@ -51,6 +51,7 @@ import {
 
 import { CardFlip } from "@/components/cards/card-flip";
 import { CardImage } from "@/components/cards/card-image";
+import { useFaceDecode } from "@/components/cards/use-face-decode";
 import { CardNamePreview } from "@/components/deck/card-name-preview";
 import { MD_QUERY } from "@/components/editor/use-tier";
 import { HERO_CARD_SHADOW } from "@/components/surface-header";
@@ -153,20 +154,6 @@ function useGallery(): GalleryContextValue {
   return value;
 }
 
-/** Decode off-screen so the swap never paints a half-loaded hero (D4). */
-async function preloadImage(src: string): Promise<boolean> {
-  if (typeof Image === "undefined") return true;
-  const img = new Image();
-  img.src = src;
-  if (typeof img.decode !== "function") return true;
-  try {
-    await img.decode();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function PrintingsGallery({
   cardId,
   cardName,
@@ -223,16 +210,10 @@ export function PrintingsGallery({
   const shownIdRef = useRef<string | null>(defaultRow?.id ?? null);
   const swapToken = useRef(0);
 
-  // Decodes in flight, by address: Flip's press shares the decode its hover
-  // started instead of asking a second time.
-  const decoding = useRef(new Map<string, Promise<boolean>>());
-  const decode = useCallback((src: string): Promise<boolean> => {
-    const running = decoding.current.get(src);
-    if (running) return running;
-    const started = preloadImage(src).finally(() => decoding.current.delete(src));
-    decoding.current.set(src, started);
-    return started;
-  }, []);
+  // Off-screen decodes, shared by address (use-face-decode.ts): a swap never
+  // paints a half-loaded hero (D4), and Flip's press shares the decode its
+  // hover started instead of asking a second time.
+  const { decode, prepare } = useFaceDecode();
 
   const showPrinting = useCallback(
     async (row: GalleryPrinting, face: ImageFace, how: "show" | "turn" = "show") => {
@@ -319,15 +300,11 @@ export function PrintingsGallery({
   // page whose hero is the LCP image): the other face starts decoding when
   // the pointer or focus reaches Flip, once per picture, so the press finds
   // it ready or already on its way.
-  const prepared = useRef(new Set<string>());
   const prepareFlip = useCallback(() => {
     if (!pinnedRow) return;
     const other = displayed.face === "back" ? "front" : "back";
-    const src = embeddablePrintingImageUrl(pinnedRow, "normal", other);
-    if (!src || prepared.current.has(src)) return;
-    prepared.current.add(src);
-    void decode(src);
-  }, [pinnedRow, displayed.face, decode]);
+    prepare(embeddablePrintingImageUrl(pinnedRow, "normal", other));
+  }, [pinnedRow, displayed.face, prepare]);
 
   // Pin vs drawer, decided at click time (D4): md+ pins the sticky hero;
   // phones get the bottom drawer instead — the hero is scrolled away there.
