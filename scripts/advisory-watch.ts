@@ -45,10 +45,7 @@ const WATCHED_REPOSITORIES = ["vercel/next.js", "better-auth/better-auth"];
  * LATER.md row with its trigger (the first thing to re-read when a row's
  * package moves). Remove an entry the day its precondition appears.
  */
-const ACCEPTED_ADVISORIES: Record<string, string> = {
-  "GHSA-fmh4-wcc4-5jm3":
-    "the organization plugin is not installed (src/lib/auth.ts: plugins: [nextCookies()] only) and no unverified user can hold a session here; the advisory's `>= 1.6.14` entry names no patched version — LATER.md row 271",
-};
+const ACCEPTED_ADVISORIES: Record<string, string> = {};
 
 const MAX_BUFFER = 64 * 1024 * 1024;
 
