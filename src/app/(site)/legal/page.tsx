@@ -147,7 +147,7 @@ export default function LegalPage() {
           </a>
           . Takedowns are honored immediately. Bug reports are best as a{" "}
           <a
-            href="https://github.com/Bobandis6/deckwarden/issues"
+            href="https://github.com/AlpenWarden/deckwarden/issues"
             className="underline"
             rel="noreferrer"
             target="_blank"
