@@ -28,6 +28,14 @@
  * touch on a hybrid device, a held button and a running view transition
  * leave the card at rest; a press rests it, so the hub hero is square when
  * a click starts its morph.
+ *
+ * The card is whatever the surface's first child is. On a hub whose hero
+ * turns over (CARD-FLIP-HUB) that is the flip box, not the image: the box
+ * takes `data-tilt` and the transform, the images in its faces inherit the
+ * shadow's two properties, and the turning element inside keeps its one
+ * transform, the turn. The box's layout box is the card's, so the pointer
+ * reads the same edges; Flip stands in the surface outside that box, so a
+ * pointer over it rests the tilt like any point beside the card.
  */
 
 /** The hero trio on home and the hub hero on /c/ and /l/. */

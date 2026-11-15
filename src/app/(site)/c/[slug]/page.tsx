@@ -32,6 +32,12 @@
  * heading (the template, the precons, the decks) are gone. The staples fold
  * at 25 inside StaplesTable, every row still in this HTML. The finishes
  * shelf reads the shared tournament formatters (LATER row 107).
+ *
+ * CARD-FLIP-HUB (2026-11-15): a commander whose default printing has a back
+ * turns over in the hero (src/components/hub/hub-hero-flip.tsx). The server
+ * HTML is the front, `priority`, and nothing about the back is in it; which
+ * side is up lives on the client alone, so the page stays ISR. A hub without
+ * a back renders the hero it always did, element for element.
  */
 import { ArrowLeftIcon, ArrowRightIcon, ArrowUpRightIcon } from "lucide-react";
 import type { Metadata } from "next";
@@ -45,6 +51,7 @@ import { ComboList } from "@/components/combos/combo-list";
 import { AnalyticsBlocks } from "@/components/deck/analytics-blocks";
 import { DeckTile, DeckTileGrid } from "@/components/deck/deck-tile";
 import { HubBuildCta } from "@/components/hub/hub-build-cta";
+import { HubHeroFlip } from "@/components/hub/hub-hero-flip";
 import { MetaLensTable } from "@/components/hub/meta-lens-table";
 import { StaplesTable } from "@/components/hub/staples-table";
 import { HERO_CARD_SHADOW, SurfaceHeader } from "@/components/surface-header";
@@ -152,6 +159,12 @@ export default async function CommanderHubPage({ params }: PageProps<"/c/[slug]"
     legality: [],
   };
   const curve = staplesCurveBlock(staples);
+  // The hero turns over when the default printing has a back (CARD-FLIP-HUB):
+  // 119 of 4,144 commanders on the dev branch, 2026-11-14. The flag alone is
+  // not enough: with no back address to show there is no control, and the
+  // hero stays the image.
+  const turning =
+    printing?.hasBack && embeddablePrintingImageUrl(printing, "normal", "back") ? printing : null;
 
   return (
     <main id="main" className="max-w-browse mx-auto w-full flex-1 px-4 py-8" data-game="mtg">
@@ -175,18 +188,29 @@ export default async function CommanderHubPage({ params }: PageProps<"/c/[slug]"
               (VIEW-TRANSITIONS, 2026-11-02): one boundary per page, named
               like the grid's, so the names never collide. The card turns
               toward a fine pointer (CARD-TILT) and squares up on a press,
-              so a click's morph starts from a square card. */}
-          <ViewTransition name={`hub-card-${slug}`} share="morph" default="none">
-            <CardImage
-              src={printing ? embeddablePrintingImageUrl(printing, "normal") : null}
+              so a click's morph starts from a square card. A printing with
+              a back turns over (CARD-FLIP-HUB): HubHeroFlip brings that one
+              boundary itself, around the box the card turns in, with Flip
+              under it. Every other hub keeps the image alone, as it was. */}
+          {turning ? (
+            <HubHeroFlip
+              name={`hub-card-${slug}`}
+              printing={{ id: turning.id, imageOverride: turning.imageOverride }}
               alt={leader.name}
-              width={488}
-              height={680}
-              priority
-              className={`w-72 rounded-2xl ${HERO_CARD_SHADOW}`}
-              fallback="No image"
             />
-          </ViewTransition>
+          ) : (
+            <ViewTransition name={`hub-card-${slug}`} share="morph" default="none">
+              <CardImage
+                src={printing ? embeddablePrintingImageUrl(printing, "normal") : null}
+                alt={leader.name}
+                width={488}
+                height={680}
+                priority
+                className={`w-72 rounded-2xl ${HERO_CARD_SHADOW}`}
+                fallback="No image"
+              />
+            </ViewTransition>
+          )}
         </TiltSurface>
 
         <div className="min-w-0 flex-1 md:pt-4">

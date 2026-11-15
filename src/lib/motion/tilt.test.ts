@@ -235,10 +235,16 @@ describe("the stylesheet's half (globals.css)", () => {
     expect(css).not.toContain("--home-card-shadow");
   });
 
-  it("the hero shadow slides on a tilting shadow-lg card, and at rest is Tailwind's shadow-lg in the shadow color", () => {
+  it("the hero shadow slides on a tilting shadow-lg card and on a face of a tilting flip box, and at rest is Tailwind's shadow-lg in the shadow color", () => {
     const layer = css.slice(css.indexOf("@layer utilities {"));
-    expect(layer).toMatch(/^@layer utilities \{\s*\.shadow-lg\[data-tilt\] \{/);
-    const tilting = shadowOf(rule(".shadow-lg[data-tilt]"));
+    // One value, two homes (CARD-FLIP-HUB): the card that tilts itself, and
+    // the image in a face of a box that tilts, which inherits the slide. One
+    // rule for both slots: neither face is mirrored while it faces the reader.
+    expect(layer).toMatch(
+      /^@layer utilities \{\s*\.shadow-lg\[data-tilt\],\s*\[data-flip="box"\]\[data-tilt\] \.shadow-lg \{/,
+    );
+    expect(css).not.toMatch(/\[data-flip="(?:near|far)"\][^{]*\.shadow-lg/);
+    const tilting = shadowOf(rule('[data-flip="box"][data-tilt] .shadow-lg'));
     expect(tilting).toContain("var(--tw-shadow-color, rgb(0 0 0 / 0.1))");
     const theme = readFileSync(join(process.cwd(), "node_modules/tailwindcss/theme.css"), "utf8");
     const shadowLg = theme.match(/--shadow-lg: ([^;]+);/)?.[1];

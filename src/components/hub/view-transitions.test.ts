@@ -7,8 +7,13 @@
  * card instead of swapping two pages; globals.css times the `.morph`
  * pseudo-elements (tokens.test.ts pins that). React names the element only
  * while a transition runs and renders no DOM of its own, so jsdom cannot
- * see the boundary: this pins the three call sites in source instead. One
+ * see the boundary: this pins the call sites in source instead. One
  * boundary per hub page: a duplicate name aborts the browser's transition.
+ *
+ * CARD-FLIP-HUB (2026-11-15): a commander whose default printing has a back
+ * turns over in the hero, and that hero (hub-hero-flip.tsx) brings the
+ * page's one boundary itself, around the box the card turns in. /c/ renders
+ * one or the other, never both; /l/ is as it was.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -22,6 +27,7 @@ const hubs = {
   "/c/[slug]": read("src/app/(site)/c/[slug]/page.tsx"),
   "/l/[slug]": read("src/app/(site)/l/[slug]/page.tsx"),
 };
+const flipHero = read("src/components/hub/hub-hero-flip.tsx");
 
 describe("the hub card morph (VIEW-TRANSITIONS)", () => {
   it("the grid tile is a boundary named by the leader's slug, a morph with no animation of its own", () => {
@@ -62,19 +68,52 @@ describe("the hub card morph (VIEW-TRANSITIONS)", () => {
   });
 
   for (const [route, code] of Object.entries(hubs)) {
-    it(`${route}'s hero is the one boundary on the page, named like the grid's`, () => {
+    it(`${route}'s hero image is the one boundary the page writes, named like the grid's`, () => {
       expect(code).toContain('import { ViewTransition } from "react";');
       expect(code).toMatch(
         /<ViewTransition name=\{`hub-card-\$\{slug\}`\} share="morph" default="none">\s*<CardImage/,
       );
       expect(code.match(/<ViewTransition /g)).toHaveLength(1);
     });
-
-    it(`${route}'s hero turns toward a fine pointer around the boundary (CARD-TILT): the morphing card is the tilting card`, () => {
-      expect(code).toContain('import { TiltSurface } from "@/components/cards/tilt-surface";');
-      expect(code).toMatch(
-        /<TiltSurface maxDeg=\{HERO_TILT_DEG\} className="relative -mt-24 shrink-0 md:-mt-28">\s*\{\/\*[\s\S]*?\*\/\}\s*<ViewTransition /,
-      );
-    });
   }
+
+  it("/l/[slug]'s hero turns toward a fine pointer around the boundary (CARD-TILT): the morphing card is the tilting card", () => {
+    const code = hubs["/l/[slug]"];
+    expect(code).toContain('import { TiltSurface } from "@/components/cards/tilt-surface";');
+    expect(code).toMatch(
+      /<TiltSurface maxDeg=\{HERO_TILT_DEG\} className="relative -mt-24 shrink-0 md:-mt-28">\s*\{\/\*[\s\S]*?\*\/\}\s*<ViewTransition /,
+    );
+    // One Piece has no backs: nothing of the flip reaches this page.
+    expect(code).not.toMatch(/HubHeroFlip|CardFlip|hasBack/);
+  });
+
+  it("/c/[slug]'s tilt surface holds one hero of two (CARD-TILT, CARD-FLIP-HUB): the flip hero under the page's name for a printing with a back, the image in its boundary otherwise", () => {
+    const code = hubs["/c/[slug]"];
+    expect(code).toContain('import { TiltSurface } from "@/components/cards/tilt-surface";');
+    expect(code).toContain('import { HubHeroFlip } from "@/components/hub/hub-hero-flip";');
+    // The surface's first element is the card either way (the flip box, or
+    // the image), so the tilting card is the morphing card in both.
+    expect(code).toMatch(
+      /<TiltSurface maxDeg=\{HERO_TILT_DEG\} className="relative -mt-24 shrink-0 md:-mt-28">\s*\{\/\*[\s\S]*?\*\/\}\s*\{turning \? \(\s*<HubHeroFlip\s+name=\{`hub-card-\$\{slug\}`\}[\s\S]*?\/>\s*\) : \(\s*<ViewTransition name=\{`hub-card-\$\{slug\}`\} share="morph" default="none">\s*<CardImage/,
+    );
+    // The flag alone does not turn a hero: there has to be a back to show.
+    expect(code).toContain(
+      'printing?.hasBack && embeddablePrintingImageUrl(printing, "normal", "back") ? printing : null;',
+    );
+  });
+
+  it("the flip hero brings one boundary under the name it is given, around the box the card turns in; Flip stands after it (CARD-FLIP-HUB)", () => {
+    expect(flipHero).toMatch(/import \{[^}]*\bViewTransition\b[^}]*\} from "react";/);
+    // The boundary's own element is the box: a named element is flattened,
+    // which the box already is, and the turning element must never be.
+    expect(flipHero).toMatch(
+      /<ViewTransition name=\{name\} share="morph" default="none">\s*<CardFlip\b/,
+    );
+    expect(flipHero.match(/<ViewTransition /g)).toHaveLength(1);
+    // Inside the boundary React would name the control too (`name_1`) and
+    // move it as a second card, so it follows the boundary as a sibling.
+    expect(flipHero).toMatch(
+      /<\/ViewTransition>\s*\{\/\*[\s\S]*?\*\/\}\s*<div className="mt-6 flex">\s*<Button\b/,
+    );
+  });
 });

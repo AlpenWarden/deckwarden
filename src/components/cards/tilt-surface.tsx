@@ -8,6 +8,9 @@
  * stable per angle, so a re-render never resets a tilt mid-hover. The
  * editor's leader button takes the hook; `TiltSurface` is the same on a
  * plain div, for the hub heroes on /c/ and /l/, which are server pages.
+ * The first child is the card whatever it is drawn with: the image, or on
+ * a hub whose hero turns over the flip box around it (CARD-FLIP-HUB), with
+ * Flip after it in the surface.
  */
 import { useCallback, type ReactNode } from "react";
 

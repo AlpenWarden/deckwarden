@@ -60,17 +60,30 @@ export async function loadLeaderBySlug(gameId: number, slug: string): Promise<Le
   return leader ?? null;
 }
 
-/** Default printing (for the image); null for identities with no printings. */
+/**
+ * Default printing (for the image); null for identities with no printings.
+ * `hasBack` is the printing's second face (CARD-FLIP-HUB): the commander
+ * hub's hero turns over when it has one. The other callers read the id and
+ * the override and nothing else.
+ */
 export async function loadDefaultPrinting(cardIdentityId: string) {
   const [printing] = await getDb()
-    .select({ id: cardPrintings.id, imageOverride: cardPrintings.imageOverride })
+    .select({
+      id: cardPrintings.id,
+      imageOverride: cardPrintings.imageOverride,
+      hasBack: cardPrintings.hasBack,
+    })
     .from(cardPrintings)
     .where(and(eq(cardPrintings.cardIdentityId, cardIdentityId), eq(cardPrintings.isDefault, true)))
     .limit(1);
   return printing ?? null;
 }
 
-export type DefaultPrinting = NonNullable<Awaited<ReturnType<typeof loadDefaultPrinting>>>;
+/** What a printing's image derives from (src/lib/cards/images.ts): its id and the rare override. */
+export type DefaultPrinting = Pick<
+  NonNullable<Awaited<ReturnType<typeof loadDefaultPrinting>>>,
+  "id" | "imageOverride"
+>;
 
 /**
  * Default printings for many identities in ONE query (R5a) — the batched

@@ -19,7 +19,9 @@
  *   decoded, and with no fade of its own, which would show it half
  *   transparent as it comes round.
  * - The shadow stays on the images, so it narrows and leaves with its face.
- *   Nothing on the box.
+ *   Nothing is drawn on the box. A caller may move the box as a whole: the
+ *   hub hero tilts it toward the pointer (CARD-FLIP-HUB), which is safe
+ *   because the box is already the plane the turn is drawn into.
  * - Nothing that flattens sits on the turning element or between it and the
  *   faces: no opacity under 1, no overflow, filter, mask or clip. Flattening
  *   is silent (the front shows mirrored where the back should be), so this
@@ -35,7 +37,7 @@ export function CardFlip({
   children,
 }: {
   state: FlipState;
-  /** The box: the card's width. Its height is the near picture's. */
+  /** The box: the card's width (and a tilting box's own transition). Its height is the near picture's. */
   className?: string;
   /** Draws one slot's picture: the near slot's, and the far slot's once it holds one. */
   children: (picture: FlipPicture) => ReactNode;

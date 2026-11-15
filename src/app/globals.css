@@ -1271,7 +1271,12 @@
    leader card) brings its own perspective; the trio turns in the stage's
    (.home-fan, above). Transforms and box-shadows only, never a filter.
    Coarse pointers and reduced motion never get data-tilt, so none of this
-   reaches them. */
+   reaches them.
+   A hub hero that turns over (CARD-FLIP-HUB) tilts as its flip box: the
+   surface's first child is [data-flip="box"], so data-tilt and this
+   transform land on the box, never on the turning element, whose one
+   transform is the turn. The box carries the 120 ms transform transition
+   the image carried alone (a utility, src/components/hub/hub-hero-flip.tsx). */
 @layer components {
   [data-tilt] {
     --tilt: rotateX(var(--tilt-x, 0deg)) rotateY(var(--tilt-y, 0deg));
@@ -1282,9 +1287,15 @@
    ivory, black at 60 % on charcoal) slides with a tilting card: shadow-lg's
    two layers with the offsets added, the contact layer half as far, the
    color still the shadow-color utility's. In the utilities layer, where the
-   shadow-lg it reshapes lives. */
+   shadow-lg it reshapes lives.
+   Two homes for the one value: the tilting card's own shadow, and the
+   shadow on a face of a tilting flip box (CARD-FLIP-HUB), where the image
+   inherits --tilt-dx and --tilt-dy from the box. Both slots take the slide
+   as written: a face that faces the reader is never mirrored, since the far
+   face's half turn and the turning element's cancel. */
 @layer utilities {
-  .shadow-lg[data-tilt] {
+  .shadow-lg[data-tilt],
+  [data-flip="box"][data-tilt] .shadow-lg {
     --tw-shadow:
       var(--tilt-dx, 0px) calc(10px + var(--tilt-dy, 0px)) 15px -3px
         var(--tw-shadow-color, rgb(0 0 0 / 0.1)),

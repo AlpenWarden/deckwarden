@@ -283,3 +283,63 @@ describe("/c/[slug] (U7b: the hub openings)", () => {
     }
   });
 });
+
+describe("/c/[slug] (CARD-FLIP-HUB: the hero)", () => {
+  const PRINTING = "33333333-3333-4333-8333-333333333333";
+  const FRONT = `https://cards.scryfall.io/normal/front/3/3/${PRINTING}.jpg`;
+  /** The hero's wrapper, the tilt surface: from its opening tag to the title column. */
+  const surface = (html: string) => {
+    const start = html.indexOf('<div class="relative -mt-24 shrink-0 md:-mt-28">');
+    expect(start).toBeGreaterThan(-1);
+    return html.slice(start, html.indexOf('<div class="min-w-0 flex-1 md:pt-4">', start));
+  };
+
+  it("a single-faced default printing keeps the hero it had: the image alone in the surface, `priority`, named for the morph", async () => {
+    const hero = surface(await renderHub());
+    expect(hero).toMatch(
+      /^<div class="relative -mt-24 shrink-0 md:-mt-28"><img [^>]*vt-name="hub-card-atraxa"[^>]*\/><\/div>$/,
+    );
+    expect(hero).toContain(`src="${FRONT}"`);
+    expect(hero).toMatch(/loading="eager" decoding="auto" fetchPriority="high"/i);
+    expect(hero).not.toMatch(/data-flip|<button|Flip/);
+  });
+
+  it("a default printing with a back draws through the flip box: the same image `priority` in the near face, Flip under it, and nothing about the back", async () => {
+    mocks.loadDefaultPrinting.mockResolvedValue({
+      id: PRINTING,
+      imageOverride: null,
+      hasBack: true,
+    });
+    const html = await renderHub();
+    const hero = surface(html);
+    // The box is the surface's first element (the tilting card) and the
+    // boundary's own element (the morphing card); the image is unnamed.
+    expect(hero).toMatch(
+      /^<div class="relative -mt-24 shrink-0 md:-mt-28"><div data-flip="box" class="w-72 [^"]*"[^>]*vt-name="hub-card-atraxa"[^>]*><div data-flip="turn"><div data-flip="near"><img /,
+    );
+    const imgs = hero.match(/<img [^>]*>/g) ?? [];
+    expect(imgs).toHaveLength(1);
+    expect(imgs[0]).toContain(`src="${FRONT}"`);
+    expect(imgs[0]).toMatch(/loading="eager" decoding="auto" fetchPriority="high"/i);
+    expect(imgs[0]).not.toContain("vt-name");
+    expect(hero).toContain('<div data-flip="far" aria-hidden="true"></div>');
+    expect(hero).not.toContain("data-turned");
+    expect(hero).toMatch(
+      /<\/div><div class="mt-6 flex"><button [^>]*aria-pressed="false"[^>]*>.*Flip<\/button><\/div><\/div>$/,
+    );
+    // The back costs nothing until it is asked for: not one address of it in the page.
+    expect(html).not.toContain("/back/");
+    expect(html.match(/vt-name="hub-card-atraxa"/g)).toHaveLength(1);
+  });
+
+  it("the flag without a back to show changes nothing: the image alone, and no control with nothing behind it", async () => {
+    mocks.loadDefaultPrinting.mockResolvedValue({
+      id: PRINTING,
+      imageOverride: { front: FRONT, back: "https://example.com/back.jpg" },
+      hasBack: true,
+    });
+    const hero = surface(await renderHub());
+    expect(hero).toMatch(/^<div class="relative -mt-24 shrink-0 md:-mt-28"><img [^>]*\/><\/div>$/);
+    expect(hero).not.toMatch(/data-flip|<button/);
+  });
+});
