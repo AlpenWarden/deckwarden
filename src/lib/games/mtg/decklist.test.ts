@@ -90,6 +90,30 @@ describe("parseMtgDecklist", () => {
     ]);
   });
 
+  it("reads Archidekt's out-of-deck categories as side-board hints", () => {
+    // Archidekt lists Maybeboard and Sideboard cards beside the deck's own,
+    // marked only by the primary (first) category and its {noDeck} flag.
+    const { lines, warnings } = parseMtgDecklist(
+      [
+        "1x Cover of Darkness (ons) 133 [Maybeboard{noDeck}{noPrice}]",
+        "1x Radiant Fountain (clb) 908 [Maybeboard{noDeck}{noPrice},Land]",
+        "1x Intangible Virtue (isd) 19 [Sideboard{noDeck}]",
+        "1x Proper Burial (m19) 33 [Considering{noDeck}]",
+        "1x Sol Ring (c21) 263 [Ramp,Maybeboard{noDeck}{noPrice}]",
+        "1x King of the Oathbreakers (ltc) 67 [Commander{top}]",
+      ].join("\n"),
+    );
+    expect(warnings).toEqual([]);
+    expect(lines.map((l) => [l.rawName, l.zoneHint])).toEqual([
+      ["Cover of Darkness", "maybeboard"],
+      ["Radiant Fountain", "maybeboard"],
+      ["Intangible Virtue", "sideboard"],
+      ["Proper Burial", "maybeboard"],
+      ["Sol Ring", undefined], // a secondary category never moves the card
+      ["King of the Oathbreakers", "commander"],
+    ]);
+  });
+
   it("reads Deckstats '# !Commander' markers as commander zone hints", () => {
     const { lines } = parseMtgDecklist("1 Atraxa, Praetors' Voice # !Commander\n1 Sol Ring #ramp");
     expect(lines).toEqual([

@@ -65,6 +65,17 @@ export function parseMtgDecklist(text: string): { lines: ParsedLine[]; warnings:
     // Archidekt marks the commander as a category — "[Commander{top}]" on a
     // live export (verified 2026-09-16) — read it before the strip below.
     if (/\[\s*commander/i.test(rest)) zoneHint = "commander";
+    // Archidekt keeps cards that are NOT in the deck in the same list, told
+    // apart only by the first (primary) category: "[Maybeboard{noDeck}{noPrice}]",
+    // "[Sideboard{noDeck}]", or any custom category flagged {noDeck}. Read it
+    // before the strip below, or those cards land in the main deck.
+    else {
+      const primary = rest.match(/\[\s*([^\],{]*)((?:\{[^}]*\})*)/);
+      const category = primary?.[1].trim().toLowerCase();
+      if (category === "sideboard") zoneHint = "sideboard";
+      else if (category === "maybeboard" || /\{noDeck\}/i.test(primary?.[2] ?? ""))
+        zoneHint = "maybeboard";
+    }
     rest = rest.replace(/\*[A-Za-z]+\*/g, " "); // *F* foil etc.
     rest = rest.replace(/\[[^\]]*\]/g, " "); // Archidekt "[Ramp]" categories
     rest = rest.replace(/\^[^^]*\^/g, " "); // Archidekt "^Have,#aabbcc^" flags
