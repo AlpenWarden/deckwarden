@@ -9,7 +9,11 @@
  * starts), never by an EDHREC position. X3 (REC-7) pins the hub's W9c
  * starter-shell anchor and its combo door, "Build around this combo" — by
  * rule (one door per combo row, the most-played row first), never by a
- * combo count.
+ * combo count. COLOR-INCLUDES pins the index's second reading of its color
+ * chips (`?match=including`) beside the exact one, which stays the default:
+ * who is on an including page and who is not, the mode on every link, an
+ * including list paged to its end against the database's own count, and
+ * Colorless always exact.
  *
  *   pnpm smoke:hubs
  *   BASE_URL=http://localhost:3111 pnpm smoke:hubs
@@ -94,8 +98,34 @@ async function main() {
           SELECT 1 FROM combo_pieces p JOIN combos c ON c.id = p.combo_id
           WHERE p.card_identity_id = ci.id AND (c.ci_mask & ~ci.ci_mask::int) = 0)
       ORDER BY ci.popularity ASC NULLS LAST LIMIT 1`;
+    // COLOR-INCLUDES: the most-played commander that holds White beside
+    // another color, the most-played mono-blue one, the most-played
+    // five-color one, and the size of the list "including White, Blue, Black
+    // and Red" (the four-color identity plus the five-color one: two pages).
+    const [multiW] = await sql`
+      SELECT name, slug FROM card_identities
+      WHERE game_id = 1 AND is_leader_candidate AND slug IS NOT NULL AND NOT is_removed
+        AND (ci_mask & 1) = 1 AND ci_mask <> 1 AND popularity IS NOT NULL
+      ORDER BY popularity ASC LIMIT 1`;
+    const [monoU] = await sql`
+      SELECT name, slug FROM card_identities
+      WHERE game_id = 1 AND is_leader_candidate AND slug IS NOT NULL AND NOT is_removed
+        AND ci_mask = 2 AND popularity IS NOT NULL
+      ORDER BY popularity ASC LIMIT 1`;
+    const [fiveColor] = await sql`
+      SELECT name, slug FROM card_identities
+      WHERE game_id = 1 AND is_leader_candidate AND slug IS NOT NULL AND NOT is_removed
+        AND ci_mask = 31 AND popularity IS NOT NULL
+      ORDER BY popularity ASC LIMIT 1`;
+    const [{ n: holdWubr }] = await sql`
+      SELECT count(*)::int AS n FROM card_identities
+      WHERE game_id = 1 AND is_leader_candidate AND slug IS NOT NULL AND NOT is_removed
+        AND (ci_mask & 15) = 15`;
     console.log(
       `  using top="${top?.name}" monoW="${monoW?.name}" banned="${banned?.name ?? "(none)"}"`,
+    );
+    console.log(
+      `  using multiW="${multiW?.name}" monoU="${monoU?.name}" fiveColor="${fiveColor?.name}" (${holdWubr} hold WUBR)`,
     );
     console.log(
       `  using comboHub="${comboHub?.name}" (top combo ${comboTop?.external_key}) doorless="${doorless?.name ?? "(none)"}"`,
@@ -124,6 +154,113 @@ async function main() {
     check(
       "pagination: page 2 renders and drops page-1 leader",
       page2.status === 200 && !page2.text.includes(`/c/${top.slug as string}"`),
+    );
+
+    // ---- "Including these colors" (COLOR-INCLUDES) ---------------------------
+    // The second reading of the same chips. Read off the anchors the server
+    // wrote, never off the whole text: the page's payload repeats every href.
+    /** The hub slugs a page lists, in order. */
+    const hubs = (text: string) =>
+      [...text.matchAll(/<a[^>]*href="\/c\/([a-z0-9-]+)"/g)].map((m) => m[1]);
+    /** Every link back into the index that carries a query. */
+    const filterLinks = (text: string) =>
+      [...text.matchAll(/<a[^>]*href="(\/commanders\?[^"]*)"/g)].map((m) =>
+        m[1].replaceAll("&amp;", "&"),
+      );
+
+    const includingW = await page("/commanders?colors=w&match=including");
+    check(
+      `including White: the top multicolor commander with White is listed (${multiW.name as string})`,
+      includingW.status === 200 && hubs(includingW.text).includes(multiW.slug as string),
+    );
+    check(
+      `including White: the top mono-blue commander is not (${monoU.name as string})`,
+      hubs(includingW.text).length === 60 && !hubs(includingW.text).includes(monoU.slug as string),
+    );
+    check(
+      "exact-CI filter is still exact: that multicolor commander is absent from the mono-white page",
+      hubs(monoWhite.text).length > 0 && !hubs(monoWhite.text).includes(multiW.slug as string),
+    );
+    check(
+      "including White says its rule in words",
+      includingW.text.includes("Commanders whose colors include White, alone or with others."),
+    );
+    check(
+      "including: every link carries the mode but the Exactly chip, and Next is page 2 of the same list",
+      filterLinks(includingW.text)
+        .filter((href) => !href.includes("match=including"))
+        .join(" ") === "/commanders?colors=w" &&
+        filterLinks(includingW.text).includes("/commanders?colors=w&match=including&page=2"),
+      filterLinks(includingW.text),
+    );
+    check(
+      "including: the name form sends the colors and the mode",
+      /<input[^>]*type="hidden"[^>]*name="colors"[^>]*value="w"/.test(includingW.text) &&
+        /<input[^>]*type="hidden"[^>]*name="match"[^>]*value="including"/.test(includingW.text),
+    );
+    check(
+      "exactly is the default: the one link that names a mode is the Including chip, and no input does",
+      filterLinks(monoWhite.text)
+        .filter((href) => href.includes("match="))
+        .join(" ") === "/commanders?colors=w&match=including" &&
+        !/<input[^>]*name="match"/.test(monoWhite.text),
+      filterLinks(monoWhite.text),
+    );
+    const otherMode = await page("/commanders?colors=w&match=within");
+    check(
+      "any other match value is exactly: the same commanders in the same order",
+      hubs(otherMode.text).length > 0 &&
+        hubs(otherMode.text).join() === hubs(monoWhite.text).join(),
+    );
+
+    // The mode first and a color second: the whole index, with the mode on
+    // every color chip.
+    const modeFirst = await page("/commanders?match=including");
+    check(
+      "the mode with no color picked lists the whole index, and its White chip keeps the mode",
+      hubs(modeFirst.text).join() === hubs(index.text).join() &&
+        filterLinks(modeFirst.text).includes("/commanders?colors=w&match=including") &&
+        modeFirst.text.includes("Pick a color to see every commander whose colors include it."),
+    );
+
+    // Colorless is always exact: the same list in both readings, and the
+    // page says so.
+    const colorless = await page("/commanders?colors=c");
+    const colorlessIncluding = await page("/commanders?colors=c&match=including");
+    check(
+      "Colorless is always exact: the same commanders under including, said in words",
+      hubs(colorless.text).length > 0 &&
+        hubs(colorlessIncluding.text).join() === hubs(colorless.text).join() &&
+        !hubs(colorlessIncluding.text).includes(multiW.slug as string) &&
+        colorlessIncluding.text.includes("Colorless is always exact"),
+    );
+
+    // An including list paged to its end: as many commanders as the database
+    // counts, none twice, and the five-color ones among the four-color.
+    const wubr: string[] = [];
+    let wubrPages = 0;
+    for (let n = 1; n <= 6; n++) {
+      const got = hubs(
+        (await page(`/commanders?colors=wubr&match=including${n > 1 ? `&page=${n}` : ""}`)).text,
+      );
+      wubr.push(...got);
+      wubrPages = n;
+      if (got.length < 60) break;
+    }
+    check(
+      `including WUBR paged to its end: ${holdWubr as number} commanders over ${wubrPages} pages, none twice, a five-color one among them`,
+      wubr.length === Number(holdWubr) &&
+        new Set(wubr).size === wubr.length &&
+        wubr.includes(fiveColor.slug as string),
+      { listed: wubr.length, distinct: new Set(wubr).size },
+    );
+    const pastEnd = await page(`/commanders?colors=wubr&match=including&page=${wubrPages + 1}`);
+    check(
+      "a page past an including list's end never says exact, and its way back keeps the mode",
+      pastEnd.status === 200 &&
+        pastEnd.text.includes("No commanders include those colors on this page.") &&
+        !pastEnd.text.includes("that exact color identity") &&
+        filterLinks(pastEnd.text).includes("/commanders?colors=wubr&match=including"),
     );
 
     // ---- the name filter (W4; X2 REC-3: the shared ranked matcher) --------

@@ -15,7 +15,9 @@
  * /commanders; one partial-indexed read per request is cheap.
  *
  * Color filter semantics: exact colors_mask ("Red/Green leaders", not
- * "leaders that include Red") — mirrors /commanders' exact-identity call.
+ * "leaders that include Red") — /commanders' default reading. That page
+ * also has a second one since COLOR-INCLUDES ("Including these colors",
+ * `?match=including`); this page keeps the exact filter alone (LATER row 439).
  *
  * R5a: the filter and the row dots are the shared ColorChip (C14), and the
  * main carries `data-game="optcg"`. P4.9: the rows render through

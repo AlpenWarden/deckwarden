@@ -17,7 +17,7 @@
  * lands (Forest is not advice), preview/removed cards, and anything with a
  * current unconditional banned/not_legal row for the leader format.
  */
-import { and, asc, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, ne, sql, type SQL } from "drizzle-orm";
 
 import { getDb, schema } from "@/db";
 import { FORMAT_ID, GAME_ID, type GameCode } from "@/db/seed-data";
@@ -26,6 +26,7 @@ import {
   defaultPrintingJoin,
   type DeckCollectionRow,
 } from "@/lib/decks/collections";
+import { appliedMatch, type ColorMatch } from "@/lib/hub/color-filter";
 import { META_LENS_LIMIT, META_LENS_MIN_LISTS, type MetaLens } from "@/lib/hub/meta-lens";
 import { nameMatchCondition, nameMatchOrder, parseNameQuery } from "@/lib/search/name-match";
 
@@ -301,8 +302,29 @@ export interface LeaderIndexRow {
 export const LEADERS_PAGE_SIZE = 60;
 
 /**
+ * The index's color condition (COLOR-INCLUDES), null when no color is
+ * picked. Exactly is the identity itself, the condition the index has always
+ * sent. Including is every identity that holds all the mask's colors,
+ * `(ci_mask & m) = m`, the card search's `including` (`search/translate.ts`).
+ * A mask of 0 has no color to include and would match every row, so
+ * `appliedMatch` (`./color-filter`) runs Colorless exactly whatever the
+ * reader chose.
+ */
+export function leaderColorCondition(
+  ciMask: number | null,
+  ciMatch: ColorMatch = "exactly",
+): SQL | null {
+  if (ciMask === null) return null;
+  return appliedMatch({ mask: ciMask, match: ciMatch }) === "including"
+    ? // ::int types the bound mask for the bitwise & (the staples query's note on untyped parameters).
+      sql`(${cardIdentities.ciMask} & ${ciMask}::int) = ${ciMask}::int`
+    : eq(cardIdentities.ciMask, ciMask);
+}
+
+/**
  * Leader index page: popularity order (edhrec_rank asc = most played first;
- * unranked leaders sort last), optional exact color-identity filter.
+ * unranked leaders sort last), optional color-identity filter, exact unless
+ * `ciMatch` says including (COLOR-INCLUDES).
  * MTG-only by construction — popularity is an MTG signal (EDHREC), and the
  * OP index below deliberately doesn't pretend to have one. Since R5a the
  * default printing rides along (LEFT JOIN on cp_default_one — one row per
@@ -311,6 +333,15 @@ export const LEADERS_PAGE_SIZE = 60;
  */
 export async function loadLeaderIndex(opts: {
   ciMask: number | null;
+  /**
+   * How `ciMask` is read (COLOR-INCLUDES; `./color-filter` holds the rule and
+   * the URL, `leaderColorCondition` the SQL). "exactly", the default and
+   * every caller's reading before the commander index's second mode: that
+   * identity and no other. "including": every identity that holds all the
+   * mask's colors. The page hands over the reader's choice as chosen;
+   * Colorless runs exactly whatever this says.
+   */
+  ciMatch?: ColorMatch;
   page: number;
   limit?: number;
   /**
@@ -329,7 +360,8 @@ export async function loadLeaderIndex(opts: {
     eq(cardIdentities.isRemoved, false),
     sql`${cardIdentities.slug} IS NOT NULL`,
   ];
-  if (opts.ciMask !== null) conditions.push(eq(cardIdentities.ciMask, opts.ciMask));
+  const color = leaderColorCondition(opts.ciMask, opts.ciMatch);
+  if (color) conditions.push(color);
   const nameQuery = parseNameQuery(opts.q);
   if (nameQuery) conditions.push(nameMatchCondition(nameQuery, "list"));
   return getDb()
@@ -440,8 +472,9 @@ export interface OpLeaderIndexEntry extends OpLeaderIndexRow {
  * zero-signal ordering (popularity/prices are all-NULL for OP, and
  * external_key order interleaves EB/OP/P/ST prefixes, a poor "newest first"
  * proxy; LATER row 55 holds the release-date map). 142 rows today, no
- * pagination needed; exact colors_mask filter mirrors /commanders semantics
- * (colors_mask == ci_mask for OP by ingest contract). P4.9: the default
+ * pagination needed; exact colors_mask filter, /commanders' default reading
+ * and the only one here (its including mode is not on /leaders; LATER row
+ * 439) (colors_mask == ci_mask for OP by ingest contract). P4.9: the default
  * printing is LEFT JOINed, as on /commanders — still one statement.
  */
 export async function loadOpLeaderIndex(opts: {
