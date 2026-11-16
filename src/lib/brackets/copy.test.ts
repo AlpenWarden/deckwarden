@@ -21,6 +21,7 @@ import type { BracketSpeedFacts } from "@/lib/games/types";
 
 import { budgetLabel } from "@/components/deck/goals-line";
 
+import { autofillTargetNote, autofillTargetToast } from "./autofill-target";
 import {
   BRACKET_COPY,
   dateLabel,
@@ -28,6 +29,8 @@ import {
   goalsParts,
   levelLabel,
   levelNumberLabel,
+  NO_TARGET,
+  targetChoices,
 } from "./copy";
 import { targetChange, targetChangeWords, targetTools, type TargetTool } from "./target-change";
 
@@ -105,7 +108,60 @@ const BUILDERS = [
   "upFloor",
   "upAfterAbove",
   "upAfterAboveCount",
+  // AUTOFILL-TARGET: the choice's note, the after-line and its notes (autofillLines calls them all below).
+  "autofillSets",
+  "autofillChanges",
+  "autofillTargetShows",
+  "autofillAfter",
+  "autofillAfterAnswers",
+  "autofillAfterNothing",
+  "autofillAfterWithin",
+  "autofillAfterAbove",
+  "autofillAfterAboveCount",
+  "autofillAfterLine",
+  "autofillBelowUpgrade",
+  "autofillBelowFloor",
 ];
+
+/**
+ * AUTOFILL-TARGET: every line the Autofill sheet's choice can say for
+ * Magic — the note under it for every pick between Not set and the five
+ * levels (with link previews and without), the toast's second line, the
+ * after-line at each level in each of its forms, the notes for a shell
+ * short of its target, and the choice's own options.
+ */
+function autofillLines(): string[] {
+  const brackets = getAdapter("mtg").brackets!;
+  const C = BRACKET_COPY;
+  const lines: string[] = [];
+  const targets = [null, ...brackets.levels.map((l) => l.level)];
+  for (const from of targets) {
+    for (const to of targets) {
+      for (const previews of [true, false]) {
+        const note = autofillTargetNote(brackets, from, to, previews);
+        if (note) lines.push(note);
+      }
+      const toastLine = autofillTargetToast(brackets, from, to);
+      if (toastLine) lines.push(toastLine);
+    }
+  }
+  for (const { level } of brackets.levels) {
+    const named = levelLabel(brackets, level);
+    const short = levelNumberLabel(brackets, level);
+    lines.push(C.autofillSets(named), C.autofillAfter(named), C.autofillAfterAnswers(named));
+    lines.push(`${C.autofillAfter(named)} ${C.upReached}`, C.autofillAfterWithin(named));
+    lines.push(C.autofillAfterAbove(short), C.autofillBelowFloor(named));
+    lines.push(C.autofillAfterAboveCount(1, short), C.autofillAfterAboveCount(2, short));
+    lines.push(C.autofillBelowUpgrade(C.upTitle(short)));
+  }
+  lines.push(C.autofillChanges("Bracket 2", "Bracket 3"), C.autofillClears);
+  lines.push(C.autofillTargetShows(true), C.autofillTargetShows(false));
+  lines.push(C.autofillAfterNothing(brackets.noun), C.autofillAfterLine(brackets.noun));
+  lines.push(C.autofillAfterChecking, C.autofillAfterFailed);
+  lines.push(C.autofillBelowCeiling, C.autofillUndoKeeps);
+  lines.push(...targetChoices(brackets).map((o) => o.label));
+  return lines;
+}
 
 /**
  * BRACKET-UP: every line the box, the door and the sheet can say for
@@ -349,6 +405,8 @@ function everyString(): string[] {
     ...fitLines(),
     // BRACKET-UP: every line the box, the door and the sheet can say.
     ...upLines(),
+    // AUTOFILL-TARGET: every line the Autofill sheet's choice can say.
+    ...autofillLines(),
   ];
 }
 
@@ -787,6 +845,94 @@ describe("BRACKET-UP's words — the box, the door, the sheet, the after-line", 
     expect(lines.filter((w) => w.includes("·"))).toEqual([]);
     expect(lines.filter((w) => /\d\+|est\./i.test(w))).toEqual([]);
     expect(lines.filter((w) => /\.\./.test(w))).toEqual([]);
+  });
+});
+
+describe("AUTOFILL-TARGET's words — the choice, its note, the after-line", () => {
+  const mtg = getAdapter("mtg").brackets!;
+  const C = BRACKET_COPY;
+
+  it("the choice's options are the Why sheet's: the levels by number, then Not set", () => {
+    expect(targetChoices(mtg)).toEqual([
+      { value: "1", label: "1" },
+      { value: "2", label: "2" },
+      { value: "3", label: "3" },
+      { value: "4", label: "4" },
+      { value: "5", label: "5" },
+      { value: NO_TARGET, label: "Not set" },
+    ]);
+    expect(C.yourTarget).toBe("Your target");
+  });
+
+  it("the note: what Add will do to the deck's target, and where a target shows by targetShown's rule", () => {
+    expect(C.autofillSets(levelLabel(mtg, 2))).toBe(
+      "Adding these cards sets this deck's target to Bracket 2 (Core).",
+    );
+    expect(C.autofillChanges(levelNumberLabel(mtg, 2), levelNumberLabel(mtg, 3))).toBe(
+      "Adding these cards changes this deck's target from Bracket 2 to Bracket 3.",
+    );
+    expect(C.autofillClears).toBe("Adding these cards clears this deck's target.");
+    expect(C.autofillTargetShows(true)).toBe(
+      "A target shows on your share page, in link previews and where the deck is listed.",
+    );
+    expect(C.autofillTargetShows(false)).toBe(
+      "A target shows on your share page and where the deck is listed.",
+    );
+  });
+
+  it("the after-line: what the cards show, the target named only when reached, the other cases in their own words", () => {
+    expect(`${C.autofillAfter(levelLabel(mtg, 3))} ${C.upReached}`).toBe(
+      "With these added, the cards show at least Bracket 3 (Upgraded). That's your target.",
+    );
+    expect(C.autofillAfterAnswers(levelLabel(mtg, 4))).toBe(
+      "With these added, the cards and your answers say Bracket 4 (Optimized).",
+    );
+    expect(C.autofillAfterNothing(mtg.noun)).toBe(
+      "With these added, nothing in the list raises the bracket.",
+    );
+    expect(C.autofillAfterWithin(levelLabel(mtg, 2))).toBe(
+      "With these added, nothing in the list goes past Bracket 2 (Core).",
+    );
+    expect(C.autofillAfterAbove(levelNumberLabel(mtg, 2))).toBe(
+      "With these added, these put the deck above Bracket 2:",
+    );
+    expect(C.autofillAfterAboveCount(1, levelNumberLabel(mtg, 2))).toBe(
+      "With these added, 1 thing puts the deck above Bracket 2.",
+    );
+    expect(C.autofillAfterAboveCount(3, levelNumberLabel(mtg, 2))).toBe(
+      "With these added, 3 things put the deck above Bracket 2.",
+    );
+    expect(C.autofillAfterLine(mtg.noun)).toBe("With these added, the deck's bracket line says:");
+    expect([C.autofillAfterChecking, C.autofillAfterFailed]).toEqual([
+      "Checking the list with these added…",
+      "Couldn't check combos for the list with these added.",
+    ]);
+  });
+
+  it("short of the target: a ceiling, the door by the Upgrade sheet's own title, or How it plays by its heading", () => {
+    expect(C.autofillBelowCeiling).toBe(
+      "Autofill keeps a shell at or under its target and doesn't build up to it.",
+    );
+    expect(C.autofillBelowUpgrade(C.upTitle(levelNumberLabel(mtg, 4)))).toBe(
+      "Once these are in, Why? offers Upgrade toward Bracket 4.",
+    );
+    expect(C.autofillBelowFloor(levelLabel(mtg, 5))).toBe(
+      "Cards can only show a floor. Once these are in, Why? has How it plays, where you can say the deck plays at Bracket 5 (cEDH).",
+    );
+    // The doors are pointed at by their own names.
+    expect(C.autofillBelowUpgrade("x")).toContain(C.why);
+    expect(C.autofillBelowFloor("x")).toContain(C.howItPlays);
+    expect(C.autofillUndoKeeps).toBe("Undo takes the cards back, not the target.");
+  });
+
+  it("no em or en dash, no middle dot, no notation, never a multi-dot line, nothing that promises an old preview changes", () => {
+    const lines = autofillLines();
+    expect(lines.length).toBeGreaterThan(150);
+    expect(lines.filter((w) => /[–—]|\d-\d/.test(w))).toEqual([]);
+    expect(lines.filter((w) => w.includes("·"))).toEqual([]);
+    expect(lines.filter((w) => /\d\+|est\./i.test(w))).toEqual([]);
+    expect(lines.filter((w) => /\.\./.test(w))).toEqual([]);
+    expect(lines.filter((w) => /updat|refresh|already|will /i.test(w))).toEqual([]);
   });
 });
 

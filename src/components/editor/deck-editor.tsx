@@ -132,6 +132,13 @@
  * list against the collection's set alone, the ownership line's own: the
  * precon's copies are already out of that list.
  *
+ * AUTOFILL-TARGET (the owner's note of 2026-11-15): the Autofill sheet has
+ * Your target's choice. The pick is the sheet's own until Add, and then
+ * `handleAutofillApply` stores it as the deck's target in the same burst as
+ * the list swap when it differs: a draft's create carries it, a saved deck
+ * sends its goals PATCH beside the PUT. The toast says both; its Undo
+ * restores the list and leaves the target, as the Fit sheet's total stays.
+ *
  * Game-agnostic by construction: zones, labels, and card display all come off
  * the adapter registry (FormatDef, display.*) — nothing MTG-specific here.
  */
@@ -147,7 +154,7 @@ import { BuyDeckDialog, countedEntries } from "@/components/deck/buy-deck-menu";
 import { SampleHand } from "@/components/deck/sample-hand";
 import { useBracketFacts } from "@/components/deck/use-bracket-facts";
 import type { SwapEditing } from "@/components/editor/alternatives-section";
-import { AutofillSheet } from "@/components/editor/autofill-sheet";
+import { AutofillSheet, type AutofillApply } from "@/components/editor/autofill-sheet";
 import {
   CardDetailPane,
   type PrintingEditing,
@@ -187,6 +194,7 @@ import { Button } from "@/components/ui/button";
 import { ModalFinalFocus } from "@/components/ui/modal";
 import { Tabs, TabsContent, TabsIndicator, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast, Toaster } from "@/components/ui/toast";
+import { autofillTargetToast } from "@/lib/brackets/autofill-target";
 import { factsIds } from "@/lib/brackets/facts";
 import { targetFitDoor } from "@/lib/brackets/target-fit";
 import { deckOwnership } from "@/lib/collection/ownership";
@@ -220,6 +228,7 @@ import {
   goalsPatchBody,
   readGoals,
   suggestionGoals,
+  withTarget,
   withTotal,
   type DeckGoals,
 } from "@/lib/decks/goals";
@@ -1297,9 +1306,11 @@ export function DeckEditor({
   // removes) through applyEdit, so the next autosave PUTs it. Rejections go
   // back to the pane's live line instead; nothing announces twice. The
   // panels' adds keep their own notices (they announce there already).
-  const notify = useCallback((title: string, undo: () => void) => {
+  const notify = useCallback((title: string, undo: () => void, description?: string) => {
     const id = toast.add({
       title,
+      // A second line (AUTOFILL-TARGET: the target Add moved, and what its Undo leaves).
+      ...(description ? { description } : {}),
       type: "success",
       timeout: TOAST_MS,
       actionProps: {
@@ -1783,7 +1794,13 @@ export function DeckEditor({
   // duplicate (zone, card) rows — autofill picks on top of kept basics —
   // because the PUT route rejects duplicate keys.
   const applyListSwap = useCallback(
-    (nextEntries: EditorEntry[], newCards: readonly CardWire[], title: string) => {
+    (
+      nextEntries: EditorEntry[],
+      newCards: readonly CardWire[],
+      title: string,
+      /** The toast's second line (AUTOFILL-TARGET); the Undo is still the list's alone. */
+      description?: string,
+    ) => {
       const previous = entriesRef.current;
       setCards((prev) => {
         const next = new Map(prev);
@@ -1794,11 +1811,15 @@ export function DeckEditor({
       entriesRef.current = merged;
       setEntries(merged);
       markDirty();
-      notify(title, () => {
-        entriesRef.current = previous;
-        setEntries(previous);
-        markDirty();
-      });
+      notify(
+        title,
+        () => {
+          entriesRef.current = previous;
+          setEntries(previous);
+          markDirty();
+        },
+        description,
+      );
     },
     [markDirty, notify],
   );
@@ -1997,6 +2018,28 @@ export function DeckEditor({
       setDialog(null);
     },
     [applyListSwap],
+  );
+  // AUTOFILL-TARGET: the Autofill sheet's Add. The picks as ONE whole-list
+  // swap ("Added N cards", one Undo), and the sheet's choice of Your target
+  // stored as the deck's when it differs, in the same burst: a draft's
+  // create carries it, a saved deck sends its goals PATCH beside the PUT.
+  // The toast says both, and that the Undo restores the list and leaves the
+  // target (the Fit sheet's total, the owner's call 4 of 2026-11-15).
+  const handleAutofillApply = useCallback(
+    ({ entries: next, cards: wires, added, target }: AutofillApply) => {
+      const brackets = adapter?.brackets;
+      const from = goalsRef.current?.targetLevel ?? null;
+      const moved = brackets !== undefined && target !== undefined && target !== from;
+      applyListSwap(
+        next,
+        wires,
+        `Added ${added} card${added === 1 ? "" : "s"}`,
+        moved ? (autofillTargetToast(brackets, from, target) ?? undefined) : undefined,
+      );
+      if (moved) handleGoalsChange(withTarget(goalsRef.current, target));
+      closeAutofill();
+    },
+    [adapter, applyListSwap, handleGoalsChange, closeAutofill],
   );
 
   // Deck deletion (P2.8 follow-up): the dialog owns the confirm; this owns
@@ -2725,10 +2768,11 @@ export function DeckEditor({
               pinned={autofillPin ?? undefined}
               goals={goals}
               estimate={estimate}
-              onApply={({ entries: next, cards: wires, added }) => {
-                applyListSwap(next, wires, `Added ${added} card${added === 1 ? "" : "s"}`);
-                closeAutofill();
-              }}
+              // AUTOFILL-TARGET: the Why sheet's own rule for where a target
+              // shows, and whether Upgrade toward is a door here.
+              linkPreviews={share?.visibility !== "private"}
+              upgradeDoor={swapInOn}
+              onApply={handleAutofillApply}
               onClose={closeAutofill}
             />
           )}

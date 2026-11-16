@@ -1669,6 +1669,144 @@ describe("DeckEditor — Autofill review sheet + doors (W9b/W9c)", () => {
     expect(within(section("Deck list")).queryByText("Command Tower")).toBeNull();
   });
 
+  // ------------------------------------------------------------ AUTOFILL-TARGET
+  const autofillBodies = () =>
+    fetchMock.mock.calls
+      .filter(([url, init]) => String(url) === "/api/decks/autofill" && init?.method === "POST")
+      .map(([, init]) => JSON.parse((init as RequestInit).body as string) as { goals?: unknown });
+  const goalsPatches = () =>
+    fetchMock.mock.calls.filter(
+      ([url, init]) => url === "/api/decks/deck-1" && init?.method === "PATCH",
+    ).length;
+  const autofillDialog = () => screen.queryByRole("dialog", { name: "Autofill a starter shell" });
+  const targetChoice = () =>
+    within(within(autofillDialog()!).getByRole("group", { name: "Your target" }));
+  const pressedTarget = () =>
+    targetChoice()
+      .getAllByRole("button")
+      .filter((b) => b.getAttribute("aria-pressed") === "true")
+      .map((b) => b.textContent);
+  /** The draft with its commander, the sheet open on its first shell. */
+  async function openDraftSheet() {
+    fetchMock.mockImplementation(autofillRoute);
+    stubViewport(1440);
+    render(
+      <DeckEditor deckId={null} draftGame="mtg" draftFormat="commander" draftLeaderKey="atraxa" />,
+    );
+    fireEvent.click(
+      await pollFor(() => screen.queryByRole("button", { name: "Autofill a starter shell" })),
+    );
+    await pollFor(() => screen.queryByRole("button", { name: "Add 12 cards" }));
+  }
+  /** A pick of Your target in the sheet, and the shell it asks for. */
+  async function pickTarget(label: string, asks: number) {
+    fireEvent.click(targetChoice().getByRole("button", { name: label }));
+    await pollFor(() =>
+      autofillPosts() === asks ? screen.queryByRole("button", { name: "Add 12 cards" }) : null,
+    );
+  }
+
+  it("AUTOFILL-TARGET: a pick then Add on a draft is ONE create that carries the target and ONE PUT; the toast says both; Undo takes the cards back and leaves the target", async () => {
+    await openDraftSheet();
+    expect(pressedTarget()).toEqual(["Not set"]);
+    await pickTarget("3", 2);
+    expect(autofillBodies().map((b) => b.goals)).toEqual([undefined, { v: 1, targetLevel: 3 }]);
+    // A pick is the sheet's own: nothing dirtied, nothing minted.
+    expect(posts()).toBe(0);
+    expect(saveStatus()).toBe("saved");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add 12 cards" }));
+    const toastEl = (await pollFor(() => screen.queryByText("Added 12 cards"))).closest(
+      '[data-slot="toast"]',
+    ) as HTMLElement;
+    expect(toastEl.querySelector("[data-slot=toast-description]")?.textContent).toBe(
+      "Target set: Bracket 3 (Upgraded). Undo takes the cards back, not the target.",
+    );
+    await settle(1500);
+    await act(async () => {});
+    expect(posts()).toBe(1);
+    const create = JSON.parse(
+      fetchMock.mock.calls.find(
+        ([url, init]) => url === "/api/decks" && init?.method === "POST",
+      )![1]!.body as string,
+    ) as { goals?: unknown };
+    expect(create.goals).toEqual({ v: 1, targetLevel: 3 });
+    expect(puts()).toBe(1);
+    expect(lastPutEntries()).toHaveLength(3);
+    // The create carried the target: no goals PATCH follows it.
+    expect(goalsPatches()).toBe(0);
+
+    // Undo is the list's alone: the leader-only list saves back, the target stays.
+    fireEvent.click(within(toastEl).getByRole("button", { name: "Undo" }));
+    await settle(1500);
+    await act(async () => {});
+    expect(puts()).toBe(2);
+    expect(lastPutEntries()).toHaveLength(1);
+    expect(posts()).toBe(1);
+    expect(goalsPatches()).toBe(0);
+    // Still the deck's target: the sheet opens on it, with nothing to announce.
+    fireEvent.click(
+      await pollFor(() => screen.queryByRole("button", { name: "Autofill a starter shell" })),
+    );
+    await pollFor(() => screen.queryByRole("button", { name: "Add 12 cards" }));
+    expect(pressedTarget()).toEqual(["3"]);
+    expect(document.querySelector("[data-slot=autofill-target-note]")).toBeNull();
+    expect(autofillBodies().at(-1)?.goals).toEqual({ v: 1, targetLevel: 3 });
+  });
+
+  it("AUTOFILL-TARGET: opening, picking, rerolling and Cancel write nothing, and the pick is not kept", async () => {
+    await openDraftSheet();
+    await pickTarget("2", 2);
+    expect(document.querySelector("[data-slot=autofill-target-note]")?.textContent).toBe(
+      "Adding these cards sets this deck's target to Bracket 2 (Core). A target shows on your share page, in link previews and where the deck is listed.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Reroll" }));
+    await pollFor(() =>
+      autofillPosts() === 3 ? screen.queryByRole("button", { name: "Add 12 cards" }) : null,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await settle(1500);
+    await act(async () => {});
+    expect(posts()).toBe(0);
+    expect(puts()).toBe(0);
+    expect(goalsPatches()).toBe(0);
+    expect(saveStatus()).toBe("saved");
+    // Every write the page made is none: the asks were the shell's POSTs and GETs.
+    expect(
+      fetchMock.mock.calls
+        .map(([url, init]) => [(init as RequestInit | undefined)?.method ?? "GET", String(url)])
+        .filter(([method, url]) => method !== "GET" && url !== "/api/decks/autofill")
+        .map(([method, url]) => `${method} ${url}`),
+    ).toEqual(["POST /api/cards/resolve"]);
+
+    // The sheet forgot the pick: it opens on the deck's target, which is still none.
+    fireEvent.click(screen.getByRole("button", { name: "Autofill a starter shell" }));
+    await pollFor(() =>
+      autofillPosts() === 4 ? screen.queryByRole("button", { name: "Add 12 cards" }) : null,
+    );
+    expect(pressedTarget()).toEqual(["Not set"]);
+    expect(autofillBodies().at(-1)?.goals).toBeUndefined();
+  });
+
+  it("AUTOFILL-TARGET: Add with no pick on a deck with no target is W9b's Add, word for word: no goals in the create, no second line in the toast", async () => {
+    await openDraftSheet();
+    fireEvent.click(screen.getByRole("button", { name: "Add 12 cards" }));
+    const toastEl = (await pollFor(() => screen.queryByText("Added 12 cards"))).closest(
+      '[data-slot="toast"]',
+    ) as HTMLElement;
+    expect(toastEl.querySelector("[data-slot=toast-description]")?.textContent ?? "").toBe("");
+    await settle(1500);
+    await act(async () => {});
+    expect(posts()).toBe(1);
+    const create = JSON.parse(
+      fetchMock.mock.calls.find(
+        ([url, init]) => url === "/api/decks" && init?.method === "POST",
+      )![1]!.body as string,
+    ) as Record<string, unknown>;
+    expect("goals" in create).toBe(false);
+    expect(goalsPatches()).toBe(0);
+  });
+
   it("One Piece: no autofill door — the empty state keeps only Add cards (adapter-gated)", async () => {
     fetchMock.mockImplementation(autofillRoute);
     stubViewport(1440);
@@ -3582,9 +3720,141 @@ describe("DeckEditor — your target and the answers (Y4b)", () => {
       const body = JSON.parse((init as RequestInit).body as string) as Record<string, unknown>;
       expect(body.budgetUsd).toBe(5);
       expect(body.goals).toEqual({ v: 1, targetLevel: 2, budget: { perCardUsd: 5 } });
+      // AUTOFILL-TARGET: the target is the sheet's choice now, so the line keeps the budget alone.
       expect(dialog.querySelector("[data-slot=goals-line]")?.textContent).toBe(
-        "Your goals: Bracket 2 (Core), ≤ $5 a card",
+        "Your goals: ≤ $5 a card",
       );
+      expect(
+        within(within(dialog).getByRole("group", { name: "Your target" }))
+          .getAllByRole("button")
+          .filter((b) => b.getAttribute("aria-pressed") === "true")
+          .map((b) => b.textContent),
+      ).toEqual(["2"]);
+    });
+
+    // ---------------------------------------------------------- AUTOFILL-TARGET
+    /** One pick, so Add has something to add (the saved list is already full). */
+    const oneShell = {
+      ...emptyShell,
+      picks: [
+        {
+          cardId: sol.id,
+          name: "Sol Ring",
+          zone: "main",
+          qty: 1,
+          group: "curve-1",
+          tier: "sampled",
+          score: 0.9,
+          cheapestUsd: "1.00",
+          evidence: [
+            {
+              source: "edhrec_rank",
+              why: "A Commander staple in EDHREC decklists",
+              with: [],
+              howOften: null,
+              confidence: "medium",
+            },
+          ],
+        },
+      ],
+      groups: [{ id: "curve-1", label: "Mana value 1", picks: 1 }],
+      notes: [],
+      totals: { picks: 1, estUsd: 1, unpriced: 0 },
+      cards: [sol],
+    };
+    const shellPosts = () =>
+      fetchMock.mock.calls.filter(
+        ([url, i]) => String(url) === "/api/decks/autofill" && i?.method === "POST",
+      ).length;
+    async function openSavedSheet() {
+      fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) =>
+        String(input) === "/api/decks/autofill"
+          ? { ...ok(oneShell), headers: new Headers() }
+          : y6bRoute(input, init),
+      );
+      stubViewport(1440);
+      render(<DeckEditor deckId="deck-1" />);
+      await pollFor(() => (line()?.textContent?.endsWith("Why?") ? line() : null));
+      const trigger = screen.getByRole("button", { name: "More" });
+      fireEvent.pointerDown(trigger, { pointerType: "mouse", button: 0 });
+      fireEvent.mouseDown(trigger, { button: 0 });
+      fireEvent.click(trigger, { button: 0 });
+      const menu = await pollFor(() => screen.queryByRole("menu", { name: "More" }));
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Autofill…" }));
+      const dialog = await pollFor(() =>
+        screen.queryByRole("dialog", { name: "Autofill a starter shell" }),
+      );
+      await pollFor(() => within(dialog).queryByRole("button", { name: "Add 1 card" }));
+      return dialog;
+    }
+
+    it("AUTOFILL-TARGET on a saved deck: Add is ONE PUT and ONE goals PATCH with the picked target, and the bracket line carries it", async () => {
+      const dialog = await openSavedSheet();
+      const choice = within(within(dialog).getByRole("group", { name: "Your target" }));
+      fireEvent.click(choice.getByRole("button", { name: "4" }));
+      await pollFor(() =>
+        shellPosts() === 2 ? within(dialog).queryByRole("button", { name: "Add 1 card" }) : null,
+      );
+      // Picking is no edit.
+      await settle(1500);
+      await act(async () => {});
+      expect(patchBodies()).toEqual([]);
+      expect(puts()).toBe(0);
+
+      fireEvent.click(within(dialog).getByRole("button", { name: "Add 1 card" }));
+      const toastEl = await toastOf("Added 1 card");
+      expect(toastEl.querySelector("[data-slot=toast-description]")?.textContent).toBe(
+        "Target set: Bracket 4 (Optimized). Undo takes the cards back, not the target.",
+      );
+      await lineIs("Your target: Bracket 4 · the cards say 3 or 4, one card is your call Why?");
+      await settle(1500);
+      await act(async () => {});
+      expect(puts()).toBe(1);
+      expect(lastPutEntries().some((e) => e.cardId === sol.id)).toBe(true);
+      expect(patchBodies()).toEqual([{ goals: { v: 1, targetLevel: 4 } }]);
+      expect(posts()).toBe(0);
+
+      // Undo: the list goes back in one PUT; the target stays, so no second PATCH.
+      fireEvent.click(within(toastEl).getByRole("button", { name: "Undo" }));
+      await settle(1500);
+      await act(async () => {});
+      expect(puts()).toBe(2);
+      expect(lastPutEntries().some((e) => e.cardId === sol.id)).toBe(false);
+      expect(patchBodies()).toEqual([{ goals: { v: 1, targetLevel: 4 } }]);
+      await lineIs("Your target: Bracket 4 · the cards say 3 or 4, one card is your call Why?");
+    });
+
+    it("AUTOFILL-TARGET on a saved deck: a pick that is the deck's own target sends no goals PATCH, and the toast keeps one line", async () => {
+      deckGoals = { v: 1, targetLevel: 4, exceptions: "ask me" };
+      const dialog = await openSavedSheet();
+      fireEvent.click(within(dialog).getByRole("button", { name: "Add 1 card" }));
+      const toastEl = await toastOf("Added 1 card");
+      expect(toastEl.querySelector("[data-slot=toast-description]")?.textContent ?? "").toBe("");
+      await settle(1500);
+      await act(async () => {});
+      expect(puts()).toBe(1);
+      expect(patchBodies()).toEqual([]);
+    });
+
+    it("AUTOFILL-TARGET on a saved deck: Not set on a deck with a target clears it on Add, the exceptions kept", async () => {
+      deckGoals = { v: 1, targetLevel: 4, exceptions: "ask me" };
+      const dialog = await openSavedSheet();
+      const choice = within(within(dialog).getByRole("group", { name: "Your target" }));
+      fireEvent.click(choice.getByRole("button", { name: "Not set" }));
+      await pollFor(() =>
+        shellPosts() === 2 ? within(dialog).queryByRole("button", { name: "Add 1 card" }) : null,
+      );
+      expect(dialog.querySelector("[data-slot=autofill-target-note]")?.textContent).toBe(
+        "Adding these cards clears this deck's target.",
+      );
+      fireEvent.click(within(dialog).getByRole("button", { name: "Add 1 card" }));
+      const toastEl = await toastOf("Added 1 card");
+      expect(toastEl.querySelector("[data-slot=toast-description]")?.textContent).toBe(
+        "Target cleared. Undo takes the cards back, not the target.",
+      );
+      await settle(1500);
+      await act(async () => {});
+      expect(patchBodies()).toEqual([{ goals: { v: 1, exceptions: "ask me" } }]);
     });
   });
 

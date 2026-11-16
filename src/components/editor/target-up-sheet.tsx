@@ -70,6 +70,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import type { Modal } from "@/components/ui/modal";
 import { RollingNumbers } from "@/components/ui/rolling-numbers";
+import { afterVerdict } from "@/lib/brackets/after-verdict";
 import { BRACKET_COPY, levelLabel, levelNumberLabel } from "@/lib/brackets/copy";
 import { factsIds, type BracketFactsState } from "@/lib/brackets/facts";
 import {
@@ -592,24 +593,23 @@ function UpAfterLine({
   onRetry: () => void;
 }) {
   const C = BRACKET_COPY;
-  const lowest = brackets.levels[0]?.level ?? 1;
-  const above = read ? read.factors.filter((f) => read.conflicts.includes(f.id)) : [];
-  const reached = read !== null && above.length === 0 && (read.suggested ?? read.minimum) >= target;
-  const head = !read
+  // The verdict's rule is ../../lib/brackets/after-verdict.ts' (AUTOFILL-TARGET
+  // shares it); the sentences are this sheet's own.
+  const v = read ? afterVerdict(brackets, read, target) : null;
+  const above = v?.above ?? [];
+  const reached = v?.reached ?? false;
+  const head = !v
     ? null
-    : above.length > 0
-      ? C.upAfterAboveCount(above.length, levelNumberLabel(brackets, target))
-      : read.suggested !== null
-        ? C.upAfterAnswers(levelLabel(brackets, read.suggested))
-        : read.minimum <= lowest
+    : v.head.kind === "above"
+      ? C.upAfterAboveCount(v.head.count, levelNumberLabel(brackets, target))
+      : v.head.kind === "answers"
+        ? C.upAfterAnswers(levelLabel(brackets, v.head.level))
+        : v.head.kind === "nothing"
           ? C.upAfterNothing(brackets.noun)
-          : C.upAfter(levelLabel(brackets, read.minimum));
+          : C.upAfter(levelLabel(brackets, v.head.level));
   const verdict = swaps === 0 || head === null ? null : reached ? `${head} ${C.upReached}` : head;
   // What proves the floor: the findings at the read's minimum.
-  const proving =
-    read && read.minimum > lowest
-      ? read.factors.filter((f) => f.atLeast !== null && f.atLeast === read.minimum)
-      : [];
+  const proving = v?.proving ?? [];
 
   let body = null;
   if (swaps > 0) {

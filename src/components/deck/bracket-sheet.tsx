@@ -124,7 +124,14 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Drawer, DrawerClose, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
-import { BRACKET_COPY, dateLabel, levelLabel, levelNumberLabel } from "@/lib/brackets/copy";
+import {
+  BRACKET_COPY,
+  dateLabel,
+  levelLabel,
+  levelNumberLabel,
+  NO_TARGET,
+  targetChoices,
+} from "@/lib/brackets/copy";
 import {
   targetChange,
   targetChangeWords,
@@ -159,9 +166,6 @@ const ANSWER_OPTIONS: { value: BracketAnswer; label: string }[] = [
   { value: "no", label: BRACKET_COPY.no },
   { value: "unsure", label: BRACKET_COPY.unsure },
 ];
-/** The target's "Not set" segment. */
-const NO_TARGET = "none";
-
 const SECTION_HEADING = "text-muted-foreground text-xs font-medium tracking-wide uppercase";
 
 /** A text control after a gap in a line (U9; the goals line's Change). */
@@ -552,10 +556,8 @@ function TargetBlock({
   /** Undo or Dismiss took the callout (and its focused control) away: focus goes back to the choice. */
   const refocus = useRef(false);
   const target = goals?.targetLevel ?? null;
-  const options = [
-    ...brackets.levels.map((l) => ({ value: String(l.level), label: String(l.level) })),
-    { value: NO_TARGET, label: BRACKET_COPY.notSet },
-  ];
+  // The choice's options are copy.ts' (AUTOFILL-TARGET: the Autofill sheet offers the same ones).
+  const options = targetChoices(brackets);
   const above = new Set(read.conflicts);
   const conflicting = read.factors.filter((f) => above.has(f.id));
   // BRACKET-UP: Below your target when the target is above the band the

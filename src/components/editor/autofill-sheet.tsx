@@ -43,10 +43,37 @@
  * answers; spread only when there are any, so a deck without goals sends
  * today's exact body), and the route keeps the shell inside the target. The
  * budget control starts from the deck's per-card goal, as Suggestions' does;
- * a pick of the sheet's own wins for as long as it's open (the sheet is
- * one-shot — no "Save as this deck's budget" here). With a target or a
- * budget, the goals line reads above the controls, without its Change: the
- * Why sheet is another dialog. The notes say what the target kept out.
+ * a pick of the sheet's own wins for as long as it's open (the budget is
+ * one-shot — no "Save as this deck's budget" here). With a budget, the goals
+ * line reads above the controls, without its Change: the Why sheet is
+ * another dialog. The notes say what the target kept out.
+ *
+ * Your target (AUTOFILL-TARGET, the owner's note of 2026-11-15: "the option
+ * to set your desired bracket as you click the autofill a starter shell
+ * button"; it reverses Y6b's "no Save in the one-shot sheet; a read-only
+ * goals line" for the target alone): where the adapter declares `brackets`,
+ * the controls hold the Why sheet's own choice (the levels, then Not set),
+ * starting at the deck's target.
+ * - A pick asks the route again with `suggestionGoals(withTarget(goals,
+ *   pick))`: nothing else in the body moves, so a pick of N sends what a
+ *   deck whose target is N sends, and no pick sends today's body.
+ * - The pick is the sheet's own until Add: opening, picking, rerolling and
+ *   Cancel write nothing. Add hands it over with the list (`target`), and
+ *   the editor stores it as the deck's target in the same burst when it
+ *   differs. Under the choice, one line says so, and only then.
+ * - The after-line, above Add: the read of exactly the list Add would hand
+ *   over (`nextList`, built once for both), its combo facts through
+ *   `useBracketFacts` (one GET per settled id set, the editor's own hook),
+ *   worded by ../../lib/brackets/autofill-target.ts. A target is a ceiling:
+ *   the planner never goes above it and promises nothing about reaching it,
+ *   so the line says what the cards show, "That's your target." only when
+ *   the read reaches it, anything above the choice in the read's own
+ *   sentences (the commander, a kept card, a pinned combo), the deck's own
+ *   line where the read leaves something open (a call that is the player's,
+ *   a short list, a feed it couldn't check), a checking state, and Retry on
+ *   a failure. Add never waits for it.
+ * - The goals line stops naming the target (the choice does); its budget
+ *   part stays.
  */
 import { CheckIcon, ChevronDownIcon, RotateCcwIcon } from "lucide-react";
 import Link from "next/link";
@@ -55,6 +82,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { CardNamePreview } from "@/components/deck/card-name-preview";
 import { GoalsLine } from "@/components/deck/goals-line";
 import { Segmented } from "@/components/deck/segmented";
+import { useBracketFacts } from "@/components/deck/use-bracket-facts";
 import { sourceMeta } from "@/components/editor/recommendations-panel";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -63,15 +91,31 @@ import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/u
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Modal } from "@/components/ui/modal";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  autofillAfter,
+  autofillTargetNote,
+  type AutofillAfter,
+} from "@/lib/brackets/autofill-target";
+import { BRACKET_COPY, NO_TARGET, targetChoices } from "@/lib/brackets/copy";
+import { factsIds, type BracketFactsState } from "@/lib/brackets/facts";
 import { alsoNeedsLine, type ComboPin } from "@/lib/combos/view";
-import type { CardWire, EditorCard, EditorEntry } from "@/lib/decks/editor-state";
-import { suggestionGoals, type DeckGoals } from "@/lib/decks/goals";
+import {
+  mergeEntries,
+  toEditorCard,
+  type CardWire,
+  type EditorCard,
+  type EditorEntry,
+} from "@/lib/decks/editor-state";
+import { suggestionGoals, withTarget, type DeckGoals } from "@/lib/decks/goals";
 import { isPlayableZone, playableEntries } from "@/lib/decks/playable";
+import { addMorePhrase, deckProgress } from "@/lib/decks/progress";
+import { toDeckSnapshot } from "@/lib/decks/validation";
 import type { FormatDef, GameAdapter, ValidationIssue } from "@/lib/games/types";
 import type { ShellGroup, ShellPick } from "@/lib/recommend/autofill";
 import type { FitEstimate } from "@/lib/recommend/fit";
 import { BUDGET_OPTIONS, tierOf, type BudgetTier } from "@/lib/recommend/budget";
 import type { RecommendationEvidence } from "@/lib/recommend/types";
+import { cn } from "@/lib/utils";
 
 export const SHEET_TITLE = "Autofill a starter shell";
 /** The title with a pinned combo (X3, D3). */
@@ -82,6 +126,12 @@ export interface AutofillApply {
   entries: EditorEntry[];
   cards: CardWire[];
   added: number;
+  /**
+   * AUTOFILL-TARGET: the sheet's choice of Your target when Add was pressed,
+   * a level or null for Not set; the editor stores it as the deck's target
+   * when it differs. Absent for a game without `brackets` (no choice shown).
+   */
+  target?: number | null;
 }
 
 /** The route's response, as W9a shipped it (shapes shared via the planner's types). */
@@ -122,6 +172,8 @@ export function AutofillSheet({
   pinned,
   goals = null,
   estimate = null,
+  linkPreviews = true,
+  upgradeDoor = false,
   onApply,
   onClose,
 }: {
@@ -138,6 +190,10 @@ export function AutofillSheet({
   goals?: DeckGoals | null;
   /** Y8: the deck's estimate — the goals line reads it beside a total. */
   estimate?: FitEstimate | null;
+  /** AUTOFILL-TARGET: whether the deck's link previews draw a target (never for a private deck), as the Why sheet takes it. */
+  linkPreviews?: boolean;
+  /** AUTOFILL-TARGET: whether the editor can open Upgrade toward once the cards are in (it names the door for a shell short of its target). */
+  upgradeDoor?: boolean;
   onApply: (apply: AutofillApply) => void;
   onClose: () => void;
 }) {
@@ -163,7 +219,24 @@ export function AutofillSheet({
   // The budget starts from the deck's goal (Y6b, as Suggestions'); a pick of its own wins.
   const [pick, setPick] = useState<BudgetTier | null>(null);
   const budget = pick ?? tierOf(goals?.budget?.perCardUsd);
-  const sentGoals = useMemo(() => suggestionGoals(goals), [goals]);
+  // Your target (AUTOFILL-TARGET): the sheet's own choice, starting at the
+  // deck's. It rides the request's goals and nothing else; the deck's target
+  // moves only on Add.
+  const brackets = adapter.brackets;
+  const deckTarget = brackets ? (goals?.targetLevel ?? null) : null;
+  const [target, setTarget] = useState<number | null>(deckTarget);
+  // The sheet opens with focus on the choice's pressed segment (the Why
+  // sheet's way): the first tabbable would otherwise be its first level, one
+  // keypress from a pick nobody made. No choice (no brackets, no commander):
+  // the dialog's own default.
+  const targetRef = useRef<HTMLDivElement>(null);
+  const initialFocus = brackets
+    ? () => targetRef.current?.querySelector<HTMLElement>('[aria-pressed="true"]') ?? null
+    : undefined;
+  const sentGoals = useMemo(
+    () => suggestionGoals(brackets ? withTarget(goals, target) : goals),
+    [brackets, goals, target],
+  );
   const [keepChecked, setKeepChecked] = useState(true);
   const [nonce, setNonce] = useState(0);
   const [sheet, setSheet] = useState<SheetState>({ state: "loading" });
@@ -291,8 +364,10 @@ export function AutofillSheet({
     });
   };
 
-  const apply = useCallback(() => {
-    if (!shell || addedCount === 0) return;
+  // The list Add hands over (AUTOFILL-TARGET: built once, for Add and for
+  // the after-line's read); null with nothing checked.
+  const nextList = useMemo<EditorEntry[] | null>(() => {
+    if (!shell || addedCount === 0) return null;
     // Keep checked: picks land on top of the whole current list. Unchecked:
     // the plan was built without the non-leader cards, so Apply replaces
     // them — leaders + picks (see the module doc; pinned in tests) — except
@@ -306,22 +381,84 @@ export function AutofillSheet({
             pinnedIds.has(e.cardId) ||
             !isPlayableZone(format, e.zone),
         );
-    const next: EditorEntry[] = [
+    return [
       ...base,
       ...checkedPicks.map((p) => ({ cardId: p.cardId, zone: p.zone, qty: p.qty, tags: [] })),
     ];
-    onApply({ entries: next, cards: shell.cards, added: addedCount });
+  }, [shell, addedCount, keepChecked, entries, format, leaderZone, pinnedIds, checkedPicks]);
+
+  const apply = useCallback(() => {
+    if (!shell || !nextList) return;
+    onApply({
+      entries: nextList,
+      cards: shell.cards,
+      added: addedCount,
+      ...(brackets ? { target } : {}),
+    });
+  }, [shell, nextList, addedCount, brackets, target, onApply]);
+
+  // The after-line's read (AUTOFILL-TARGET): that list as the editor will
+  // hold it (merged), its combo facts by the editor's own hook (one GET per
+  // settled id set, nothing written), the adapter's assess with the choice
+  // as its target, and the deck's answers as the deck pane's read takes them.
+  const afterList = useMemo(() => (nextList ? mergeEntries(nextList) : null), [nextList]);
+  const afterIds = useMemo(
+    () => (afterList ? factsIds(playableEntries(afterList, format)) : []),
+    [afterList, format],
+  );
+  const facts = useBracketFacts({
+    game: adapter.id,
+    enabled: brackets !== undefined && afterList !== null,
+    ids: afterIds,
+  });
+  const allCards = useMemo(() => {
+    const all = new Map<string, EditorCard>(cards);
+    if (shell) for (const w of shell.cards) if (!all.has(w.id)) all.set(w.id, toEditorCard(w));
+    return all;
+  }, [cards, shell]);
+  const answers = goals?.answers ?? null;
+  const after = useMemo<AutofillAfter | null>(() => {
+    if (!brackets || !afterList || facts.state !== "ready") return null;
+    const deck = toDeckSnapshot(adapter.id, format, afterList);
+    const input = {
+      deck,
+      cards: allCards,
+      combos: facts.combos,
+      freshness: facts.freshness,
+      targetLevel: target,
+      answers,
+    };
+    const read = brackets.assess(input);
+    return autofillAfter({
+      brackets,
+      read,
+      input,
+      target,
+      line: brackets.line(read, {
+        deck,
+        cards: allCards,
+        progress: addMorePhrase(deckProgress(afterList, format).toGo),
+        targetLevel: target,
+      }),
+      upgradeDoor,
+    });
   }, [
-    shell,
-    addedCount,
-    keepChecked,
-    entries,
+    brackets,
+    afterList,
+    facts.state,
+    facts.combos,
+    facts.freshness,
+    adapter.id,
     format,
-    leaderZone,
-    pinnedIds,
-    checkedPicks,
-    onApply,
+    allCards,
+    target,
+    answers,
+    upgradeDoor,
   ]);
+  // Under the choice: what Add will do to the deck's target, only when it would move it.
+  const targetNote = brackets
+    ? autofillTargetNote(brackets, deckTarget, target, linkPreviews)
+    : null;
 
   const leaderNames = leaders
     .map((e) => cards.get(e.cardId)?.name)
@@ -357,11 +494,35 @@ export function AutofillSheet({
           )}
         </p>
 
-        {/* The deck's goals (Y6b): read-only here — the Why sheet is another dialog. */}
-        {(goals?.targetLevel !== undefined ||
-          goals?.budget?.perCardUsd !== undefined ||
-          goals?.budget?.totalUsd !== undefined) && (
-          <GoalsLine brackets={adapter.brackets} goals={goals} estimate={estimate} />
+        {/* The deck's budget goals (Y6b): read-only here — the Why sheet is
+            another dialog. The target is the choice below (AUTOFILL-TARGET),
+            so the line never names it: no `brackets`, the budget alone. */}
+        {(goals?.budget?.perCardUsd !== undefined || goals?.budget?.totalUsd !== undefined) && (
+          <GoalsLine brackets={undefined} goals={goals} estimate={estimate} />
+        )}
+
+        {/* Your target (AUTOFILL-TARGET): the Why sheet's own choice, the
+            sheet's until Add. Its label wraps above it on a phone, where six
+            44 px segments take the row. */}
+        {brackets && (
+          <div ref={targetRef} data-slot="autofill-target" className="space-y-1">
+            <div className="flex flex-wrap items-center gap-x-1 gap-y-1">
+              <span aria-hidden className="text-muted-foreground text-xs">
+                {BRACKET_COPY.yourTarget}
+              </span>
+              <Segmented
+                ariaLabel={BRACKET_COPY.yourTarget}
+                options={targetChoices(brackets)}
+                value={target === null ? NO_TARGET : String(target)}
+                onChange={(value) => setTarget(value === NO_TARGET ? null : Number(value))}
+              />
+            </div>
+            {targetNote && (
+              <p data-slot="autofill-target-note" className="text-muted-foreground text-xs">
+                {targetNote}
+              </p>
+            )}
+          </div>
         )}
 
         {/* Controls: budget chips · keep checkbox · Reroll (D8). */}
@@ -425,7 +586,15 @@ export function AutofillSheet({
               </p>
             ))}
 
-            <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
+            {/* From md the list scrolls inside the Modal, never under 10 rem:
+                a short window scrolls the whole dialog before the list is
+                squeezed out. On a phone the sheet scrolls as one and the
+                footer below is pinned (AUTOFILL-TARGET: the choice, its note
+                and the after-line would otherwise leave the list no room). */}
+            <div
+              data-slot="autofill-picks"
+              className={phone ? "space-y-2" : "min-h-40 flex-1 space-y-2 overflow-y-auto"}
+            >
               {pinnedKeeps.length > 0 && <PinnedGroup entries={pinnedKeeps} cards={cards} />}
               {shell.groups.map((group) => (
                 <PickGroup
@@ -474,14 +643,35 @@ export function AutofillSheet({
               </div>
             )}
 
-            <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
-              <p className="text-muted-foreground text-xs">
-                {addedCount > 0 &&
-                  (est.usd !== null
-                    ? `Est. total $${est.usd.toFixed(0)} (cheapest printings)`
-                    : "No price data for these picks.")}
-                {est.unpriced > 0 && ` · ${est.unpriced} unpriced`}
-              </p>
+            <div
+              data-slot="autofill-footer"
+              className={cn(
+                "flex flex-wrap items-end justify-between gap-2 border-t pt-3",
+                // The phone's pinned footer: the Drawer's own surface, edge to
+                // edge, clear of the home indicator; `mt-auto` keeps it at
+                // the foot when the list is short.
+                phone &&
+                  "sticky bottom-0 z-10 -mx-4 mt-auto bg-popover px-4 pb-[calc(1.5rem+env(safe-area-inset-bottom))]",
+              )}
+            >
+              <div className="min-w-0 flex-1 basis-56 space-y-1">
+                {/* AUTOFILL-TARGET: what the list Add would build reads, above Add. */}
+                {brackets && (
+                  <AfterLine
+                    shown={afterList !== null}
+                    state={facts.state}
+                    after={after}
+                    onRetry={facts.retry}
+                  />
+                )}
+                <p className="text-muted-foreground text-xs">
+                  {addedCount > 0 &&
+                    (est.usd !== null
+                      ? `Est. total $${est.usd.toFixed(0)} (cheapest printings)`
+                      : "No price data for these picks.")}
+                  {est.unpriced > 0 && ` · ${est.unpriced} unpriced`}
+                </p>
+              </div>
               <div className="flex items-center gap-2">
                 <Button variant="ghost" size="sm" onClick={onClose}>
                   Cancel
@@ -507,11 +697,21 @@ export function AutofillSheet({
         }}
         showSwipeHandle
       >
-        <DrawerContent aria-label={title} className="[--drawer-height:calc(100dvh-3rem)]">
+        <DrawerContent
+          aria-label={title}
+          initialFocus={initialFocus}
+          className="[--drawer-height:calc(100dvh-3rem)]"
+        >
           <DrawerHeader className="pb-2">
             <DrawerTitle>{title}</DrawerTitle>
           </DrawerHeader>
-          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 pb-6">
+          {/* With a shell the pinned footer carries the foot's padding. */}
+          <div
+            className={cn(
+              "flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4",
+              !shell && "pb-6",
+            )}
+          >
             {content}
           </div>
         </DrawerContent>
@@ -519,9 +719,99 @@ export function AutofillSheet({
     );
   }
   return (
-    <Modal label={title} onClose={onClose} wide>
+    <Modal label={title} onClose={onClose} wide initialFocus={initialFocus}>
       {content}
     </Modal>
+  );
+}
+
+/** A text control after a gap in a line (U9). */
+const INLINE_ACTION = "cursor-pointer underline underline-offset-4 pointer-coarse:min-h-11";
+
+/**
+ * The after-line (AUTOFILL-TARGET): what the list Add would build reads,
+ * in ../../lib/brackets/autofill-target.ts' words. Nothing while nothing is
+ * checked; "Checking…" until the list's combo facts land; a failure said
+ * plainly with Retry (none over the facts route's id cap, where nothing is
+ * asked). A short polite status says the verdict alone, never "Checking…".
+ */
+function AfterLine({
+  shown,
+  state,
+  after,
+  onRetry,
+}: {
+  /** A list to read: at least one pick checked. */
+  shown: boolean;
+  state: BracketFactsState;
+  after: AutofillAfter | null;
+  onRetry: () => void;
+}) {
+  const C = BRACKET_COPY;
+  let body = null;
+  if (shown) {
+    if (state === "failed" || state === "over") {
+      body = (
+        <p data-slot="autofill-after" data-after="failed" className="text-sm">
+          {C.autofillAfterFailed}
+          {state === "failed" && (
+            <>
+              {" "}
+              <button type="button" onClick={onRetry} className={INLINE_ACTION}>
+                {C.retry}
+              </button>
+            </>
+          )}
+        </p>
+      );
+    } else if (!after) {
+      body = (
+        <p
+          data-slot="autofill-after"
+          data-after="checking"
+          className="text-muted-foreground text-sm"
+        >
+          {C.autofillAfterChecking}
+        </p>
+      );
+    } else if (after.kind === "above") {
+      body = (
+        <div data-slot="autofill-after" data-after="above" className="text-sm">
+          <p className="font-medium">{after.lead}</p>
+          <ul className="mt-0.5 list-disc space-y-0.5 pl-4 text-xs">
+            {after.above.map((f) => (
+              <li key={f.id} data-after-conflict={f.id} className="break-words">
+                {f.sentence}
+              </li>
+            ))}
+          </ul>
+        </div>
+      );
+    } else if (after.kind === "line") {
+      body = (
+        <div data-slot="autofill-after" data-after="line" className="text-sm">
+          <p className="text-muted-foreground text-xs">{after.lead}</p>
+          <p className="font-medium break-words">{after.line}</p>
+        </div>
+      );
+    } else {
+      body = (
+        <div data-slot="autofill-after" data-after={after.kind} className="text-sm">
+          <p className="font-medium">{after.head}</p>
+          {after.notes.length > 0 && (
+            <p className="text-muted-foreground mt-0.5 text-xs">{after.notes.join(" ")}</p>
+          )}
+        </div>
+      );
+    }
+  }
+  return (
+    <>
+      {body}
+      <span role="status" data-slot="autofill-after-status" className="sr-only">
+        {shown && after ? after.status : ""}
+      </span>
+    </>
   );
 }
 

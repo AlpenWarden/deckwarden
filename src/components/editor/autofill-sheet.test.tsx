@@ -11,15 +11,22 @@
  * pieces render first as "Combo pieces · N" (always kept, no checkbox),
  * ride every POST's `keep` and every Apply, the commander never among
  * them, and "Keep my N cards" governs only the other cards.
+ * AUTOFILL-TARGET: the choice of Your target (the Why sheet's options,
+ * starting at the deck's), a pick's request body and its equality with the
+ * body a deck at that target sends, the note under the choice, the
+ * after-line's cases over mocked facts, what Add hands over, and that
+ * nothing but the route's POST and the facts GET is ever asked.
  */
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CardWire, EditorCard, EditorEntry } from "@/lib/decks/editor-state";
 import { toEditorCard } from "@/lib/decks/editor-state";
+import type { DeckGoals } from "@/lib/decks/goals";
 import { COMMANDER } from "@/lib/games/mtg/formats";
 import { atraxa, card } from "@/lib/games/mtg/test-fixtures";
 import { getAdapter } from "@/lib/games/registry";
+import type { CompleteCombo } from "@/lib/games/types";
 import { AutofillSheet, type AutofillApply } from "./autofill-sheet";
 
 const mtg = getAdapter("mtg");
@@ -162,14 +169,46 @@ function sheet(over: Partial<React.ComponentProps<typeof AutofillSheet>> = {}) {
   );
 }
 
-const bodies = () =>
+/** The route's POST bodies as sent: the bytes, for the equality pins. */
+const rawBodies = () =>
   fetchMock.mock.calls
     .filter(([url]) => String(url) === "/api/decks/autofill")
-    .map(([, init]) => JSON.parse((init as RequestInit).body as string) as Record<string, unknown>);
+    .map(([, init]) => (init as RequestInit).body as string);
+const bodies = () => rawBodies().map((body) => JSON.parse(body) as Record<string, unknown>);
+
+/** The facts GET's freshness: every feed fresh, as production's nightly keeps them. */
+const FRESH = {
+  readAt: "2026-11-16T07:00:00.000Z",
+  feeds: Object.fromEntries(
+    ["gameChangers", "landDenial", "extraTurns", "combos"].map((feed) => [
+      feed,
+      { state: "ok", asOf: "2026-11-15T15:29:34.768Z" },
+    ]),
+  ),
+};
+/** What the mocked routes answer; a test swaps either. */
+let shellAnswer: unknown = shell;
+let factsCombos: (ids: string[]) => CompleteCombo[] = () => [];
+const factsCalls = () =>
+  fetchMock.mock.calls.filter(([url]) => String(url).startsWith("/api/combos/complete?"));
+const idsOf = (call: unknown[]) =>
+  new URL(String(call[0]), "http://local").searchParams.get("ids")!.split(",");
+
+/** The two routes the sheet asks: the shell's POST and the after-line's facts GET. */
+function routes(input: RequestInfo | URL) {
+  const url = String(input);
+  if (url.startsWith("/api/combos/complete?")) {
+    const ids = new URL(url, "http://local").searchParams.get("ids")!.split(",");
+    return ok({ combos: factsCombos(ids), freshness: FRESH });
+  }
+  return ok(shellAnswer);
+}
 
 beforeEach(() => {
+  shellAnswer = shell;
+  factsCombos = () => [];
   fetchMock.mockReset();
-  fetchMock.mockImplementation(() => ok(shell));
+  fetchMock.mockImplementation(routes);
   vi.stubGlobal("fetch", fetchMock);
 });
 
@@ -461,12 +500,18 @@ describe("AutofillSheet — the deck's goals (Y6b)", () => {
     expect("seed" in last).toBe(false);
   });
 
-  it("the goals line reads above the controls — no Change (the Why sheet is another dialog), no Save", async () => {
+  it("the goals line reads above the controls — no Change (the Why sheet is another dialog), no Save — and no longer names the target (AUTOFILL-TARGET: the choice does)", async () => {
     render(sheet({ goals: { v: 1, targetLevel: 2, budget: { perCardUsd: 5 } } }));
     await screen.findByText("Lands · 12");
-    expect(goalsLine()?.textContent).toBe("Your goals: Bracket 2 (Core), ≤ $5 a card");
+    expect(goalsLine()?.textContent).toBe("Your goals: ≤ $5 a card");
     expect(screen.queryByRole("button", { name: "Change" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Save as this deck's budget" })).toBeNull();
+  });
+
+  it("a target alone leaves no goals line: the choice says it", async () => {
+    render(sheet({ goals: { v: 1, targetLevel: 2 } }));
+    await screen.findByText("Lands · 12");
+    expect(goalsLine()).toBeNull();
   });
 
   it("Y8: a total reads its running estimate on the line, and never rides the body", async () => {
@@ -510,5 +555,684 @@ describe("AutofillSheet — the deck's goals (Y6b)", () => {
       ),
     ).toBeTruthy();
     expect(screen.getByText("Filled 13 of 99. Too few candidates in Mana value 5.")).toBeTruthy();
+  });
+});
+
+// ------------------------------------------------------------- AUTOFILL-TARGET
+describe("AutofillSheet — Your target (AUTOFILL-TARGET)", () => {
+  const changer = (name: string): CardWire => ({
+    ...card({ name, attrs: { type_line: "Sorcery", oracle_text: "", game_changer: true } }),
+    image: null,
+  });
+  const changers = [1, 2, 3, 4].map((i) => changer(`Changer ${i}`));
+  const evidence = [
+    {
+      source: "edhrec_rank",
+      why: "A Commander staple in EDHREC decklists",
+      with: [],
+      howOften: null,
+      confidence: "medium",
+    },
+  ];
+  /**
+   * A shell that fills the list to the format's size: `n` Game Changers and
+   * Wastes for the rest (`picks` cards in all, 99 beside one commander).
+   */
+  function fullShell(n: number, picks = 99) {
+    const held = changers.slice(0, n);
+    return {
+      ...shell,
+      picks: [
+        ...held.map((c) => ({
+          cardId: c.id,
+          name: c.name,
+          zone: "main",
+          qty: 1,
+          group: "curve-2",
+          tier: "sampled",
+          score: 0.8,
+          cheapestUsd: "1.00",
+          evidence,
+        })),
+        {
+          cardId: wastes.id,
+          name: "Wastes",
+          zone: "main",
+          qty: picks - n,
+          group: "base",
+          tier: "filler",
+          score: 0,
+          cheapestUsd: "0.10",
+          evidence,
+        },
+      ],
+      groups: [
+        { id: "base", label: "Lands", picks: picks - n },
+        ...(n > 0 ? [{ id: "curve-2", label: "Mana value 2", picks: n }] : []),
+      ],
+      notes: [],
+      totals: { picks, estUsd: 10, unpriced: 0 },
+      issues: [],
+      cards: [leaderWire, wastes, ...held],
+    };
+  }
+
+  const dialog = () => screen.getByRole("dialog");
+  const choice = () => within(dialog()).getByRole("group", { name: "Your target" });
+  const pressed = () =>
+    within(choice())
+      .getAllByRole("button")
+      .filter((b) => b.getAttribute("aria-pressed") === "true")
+      .map((b) => b.textContent);
+  const pick = (label: string) =>
+    fireEvent.click(within(choice()).getByRole("button", { name: label }));
+  const note = () => document.querySelector<HTMLElement>("[data-slot=autofill-target-note]");
+  const afterLine = () => document.querySelector<HTMLElement>("[data-slot=autofill-after]");
+  const status = () =>
+    document.querySelector<HTMLElement>("[data-slot=autofill-after-status]")?.textContent;
+  /** The after-line once it reads `kind` (a later id set waits out the facts hook's debounce). */
+  async function verdict(kind: string) {
+    await waitFor(() => expect(afterLine()?.dataset.after).toBe(kind), { timeout: 3000 });
+    return afterLine()!;
+  }
+  const posts = () => bodies().length;
+  async function asked(n: number) {
+    await waitFor(() => expect(posts()).toBe(n));
+    await screen.findByRole("button", { name: /^Add \d+ cards?$/ });
+  }
+
+  describe("the choice", () => {
+    it("the Why sheet's own options, in a group named Your target, starting at the deck's target", async () => {
+      render(sheet({ goals: { v: 1, targetLevel: 3 } }));
+      await screen.findByText("Lands · 12");
+      expect(
+        within(choice())
+          .getAllByRole("button")
+          .map((b) => b.textContent),
+      ).toEqual(["1", "2", "3", "4", "5", "Not set"]);
+      expect(pressed()).toEqual(["3"]);
+      // The visible label names it too.
+      expect(within(dialog()).getByText("Your target")).toBeTruthy();
+      // The deck's own target is nothing to announce.
+      expect(note()).toBeNull();
+    });
+
+    it("the sheet opens with focus on the pressed segment, so the first keypress picks nothing", async () => {
+      render(sheet({ goals: { v: 1, targetLevel: 3 } }));
+      await screen.findByText("Lands · 12");
+      const three = within(choice()).getByRole("button", { name: "3" });
+      await waitFor(() => expect(document.activeElement).toBe(three));
+      // Pressing the pressed level asks nothing.
+      fireEvent.click(three);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(posts()).toBe(1);
+    });
+
+    it("no target on the deck: Not set, and no note", async () => {
+      render(sheet());
+      await screen.findByText("Lands · 12");
+      expect(pressed()).toEqual(["Not set"]);
+      expect(note()).toBeNull();
+    });
+
+    it("a game without brackets: no choice, no after-line, no facts GET, and Add hands no target", async () => {
+      const onApply = vi.fn();
+      render(
+        sheet({
+          adapter: { ...mtg, brackets: undefined },
+          goals: { v: 1, budget: { perCardUsd: 5 } },
+          onApply,
+        }),
+      );
+      await screen.findByText("Lands · 12");
+      expect(screen.queryByRole("group", { name: "Your target" })).toBeNull();
+      expect(afterLine()).toBeNull();
+      expect(factsCalls()).toHaveLength(0);
+      expect(bodies()[0].goals).toEqual({ v: 1, budget: { perCardUsd: 5 } });
+      fireEvent.click(screen.getByRole("button", { name: "Add 13 cards" }));
+      expect("target" in (onApply.mock.calls[0][0] as AutofillApply)).toBe(false);
+    });
+
+    it("on a phone the choice sits in the Drawer with the rest", async () => {
+      render(sheet({ phone: true }));
+      await screen.findByText("Lands · 12");
+      const popup = document.querySelector<HTMLElement>("[data-slot=drawer-popup]")!;
+      expect(within(popup).getByRole("group", { name: "Your target" })).toBeTruthy();
+    });
+  });
+
+  describe("the request", () => {
+    it("a pick asks ONCE with the picked target and nothing else moved; the same pick again asks nothing; Not set sends today's body", async () => {
+      render(sheet({ entries: [leaderEntry, keptEntry] }));
+      await asked(1);
+      pick("2");
+      await asked(2);
+      expect(bodies()[1]).toEqual({
+        game: "mtg",
+        format: "commander",
+        leaderIds: [atraxa.id],
+        keep: [{ cardId: signet.id, zone: "main", qty: 1 }],
+        goals: { v: 1, targetLevel: 2 },
+      });
+      expect("seed" in bodies()[1]).toBe(false);
+      expect(pressed()).toEqual(["2"]);
+
+      pick("2");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(posts()).toBe(2);
+
+      pick("Not set");
+      await asked(3);
+      expect(rawBodies()[2]).toBe(rawBodies()[0]);
+      expect("goals" in bodies()[2]).toBe(false);
+    });
+
+    it("bytes: no goals and no pick send today's body; a pick of N sends what a deck whose target is N sends", async () => {
+      const today = JSON.stringify({
+        game: "mtg",
+        format: "commander",
+        leaderIds: [atraxa.id],
+        keep: [],
+      });
+      const first = render(sheet());
+      await asked(1);
+      expect(rawBodies()[0]).toBe(today);
+      pick("3");
+      await asked(2);
+      const picked = rawBodies()[1];
+      first.unmount();
+
+      fetchMock.mockClear();
+      render(sheet({ goals: { v: 1, targetLevel: 3 } }));
+      await asked(1);
+      expect(rawBodies()[0]).toBe(picked);
+    });
+
+    it("bytes, with a budget and answers on the deck: the pick lands where a stored target does", async () => {
+      const rest: DeckGoals = {
+        v: 1,
+        budget: { perCardUsd: 5, totalUsd: 150 },
+        answers: { rulesetVersion: 1, play: { theme: "no" } },
+        exceptions: "ask me",
+      };
+      const first = render(sheet({ goals: rest }));
+      await asked(1);
+      pick("2");
+      await asked(2);
+      const picked = rawBodies()[1];
+      expect(JSON.parse(picked).goals).toEqual({
+        v: 1,
+        targetLevel: 2,
+        budget: { perCardUsd: 5 },
+        answers: { rulesetVersion: 1, play: { theme: "no" } },
+      });
+      first.unmount();
+
+      fetchMock.mockClear();
+      render(sheet({ goals: { ...rest, targetLevel: 2 } }));
+      await asked(1);
+      expect(rawBodies()[0]).toBe(picked);
+    });
+
+    it("the budget and Reroll keep the pick; neither sends a seed", async () => {
+      render(sheet());
+      await asked(1);
+      pick("4");
+      await asked(2);
+      fireEvent.click(screen.getByRole("button", { name: "≤ $1 a card" }));
+      await asked(3);
+      fireEvent.click(screen.getByRole("button", { name: "Reroll" }));
+      await asked(4);
+      for (const body of bodies().slice(2)) {
+        expect(body.goals).toEqual({ v: 1, targetLevel: 4 });
+        expect(body.budgetUsd).toBe(1);
+        expect("seed" in body).toBe(false);
+      }
+    });
+
+    it("a superseded ask never lands: the first pick's request is aborted when the second is made", async () => {
+      render(sheet());
+      await asked(1);
+      // From here the shell's answers wait on the test, and an aborted ask rejects as fetch does.
+      const pending: { signal: AbortSignal; body: Record<string, unknown>; answer: () => void }[] =
+        [];
+      fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) !== "/api/decks/autofill") return routes(input);
+        return new Promise((resolve, reject) => {
+          const signal = init!.signal!;
+          const body = JSON.parse(init!.body as string) as Record<string, unknown>;
+          signal.addEventListener("abort", () =>
+            reject(new DOMException("The operation was aborted.", "AbortError")),
+          );
+          pending.push({
+            signal,
+            body,
+            answer: () =>
+              resolve(
+                ok({
+                  ...shell,
+                  notes: [`Built for target ${(body.goals as DeckGoals).targetLevel}`],
+                }),
+              ),
+          });
+        });
+      });
+      pick("2");
+      await waitFor(() => expect(pending).toHaveLength(1));
+      pick("3");
+      await waitFor(() => expect(pending).toHaveLength(2));
+      expect(pending[0].signal.aborted).toBe(true);
+      expect(pending[1].signal.aborted).toBe(false);
+      pending[1].answer();
+      expect(await screen.findByText("Built for target 3")).toBeTruthy();
+      pending[0].answer();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(screen.queryByText("Built for target 2")).toBeNull();
+      expect(screen.getByText("Built for target 3")).toBeTruthy();
+    });
+  });
+
+  describe("the note under the choice", () => {
+    it("only when Add would move the deck's target: set, then gone when the pick goes back", async () => {
+      render(sheet());
+      await asked(1);
+      pick("2");
+      expect(note()?.textContent).toBe(
+        "Adding these cards sets this deck's target to Bracket 2 (Core). A target shows on your share page, in link previews and where the deck is listed.",
+      );
+      pick("Not set");
+      expect(note()).toBeNull();
+    });
+
+    it("a deck with a target: changed, cleared, and nothing at its own level", async () => {
+      render(sheet({ goals: { v: 1, targetLevel: 2 } }));
+      await asked(1);
+      pick("3");
+      expect(note()?.textContent).toBe(
+        "Adding these cards changes this deck's target from Bracket 2 to Bracket 3. A target shows on your share page, in link previews and where the deck is listed.",
+      );
+      pick("Not set");
+      expect(note()?.textContent).toBe("Adding these cards clears this deck's target.");
+      pick("2");
+      expect(note()).toBeNull();
+    });
+
+    it("a private deck: link previews are left out, as the Why sheet's note leaves them", async () => {
+      render(sheet({ linkPreviews: false }));
+      await asked(1);
+      pick("4");
+      expect(note()?.textContent).toBe(
+        "Adding these cards sets this deck's target to Bracket 4 (Optimized). A target shows on your share page and where the deck is listed.",
+      );
+    });
+  });
+
+  describe("the after-line", () => {
+    it("no target: what the cards show, said politely once, from ONE facts GET over the list Add would build", async () => {
+      shellAnswer = fullShell(4);
+      render(sheet());
+      const line = await verdict("open");
+      expect(line.textContent).toBe(
+        "With these added, the cards show at least Bracket 4 (Optimized).",
+      );
+      expect(status()).toBe("With these added, the cards show at least Bracket 4 (Optimized).");
+      expect(factsCalls()).toHaveLength(1);
+      expect(idsOf(factsCalls()[0])).toEqual(
+        [atraxa.id, wastes.id, ...changers.map((c) => c.id)].sort(),
+      );
+      // It sits in the footer, above Add.
+      const add = screen.getByRole("button", { name: "Add 99 cards" });
+      expect(line.compareDocumentPosition(add) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it("reached: the level's words and That's your target.", async () => {
+      shellAnswer = fullShell(3);
+      render(sheet({ goals: { v: 1, targetLevel: 3 } }));
+      const line = await verdict("reached");
+      expect(line.textContent).toBe(
+        "With these added, the cards show at least Bracket 3 (Upgraded). That's your target.",
+      );
+      expect(status()).toBe(line.textContent);
+    });
+
+    it("a list nothing flags under a target of 2: nothing goes past it, and it is never said to be shown", async () => {
+      shellAnswer = fullShell(0);
+      render(sheet({ goals: { v: 1, targetLevel: 2 } }));
+      const line = await verdict("within");
+      expect(line.textContent).toBe(
+        "With these added, nothing in the list goes past Bracket 2 (Core).",
+      );
+      expect(line.textContent).not.toContain("That's your target.");
+    });
+
+    it("short of the target: what the cards show, the ceiling, and the door when the editor has one", async () => {
+      shellAnswer = fullShell(3);
+      const first = render(sheet({ goals: { v: 1, targetLevel: 4 }, upgradeDoor: true }));
+      const line = await verdict("below");
+      expect(line.querySelector("p")?.textContent).toBe(
+        "With these added, the cards show at least Bracket 3 (Upgraded).",
+      );
+      expect(line.textContent).not.toContain("That's your target.");
+      expect(line.textContent).toContain(
+        "Autofill keeps a shell at or under its target and doesn't build up to it. Once these are in, Why? offers Upgrade toward Bracket 4.",
+      );
+      // The status says the verdict alone.
+      expect(status()).toBe("With these added, the cards show at least Bracket 3 (Upgraded).");
+      first.unmount();
+
+      render(sheet({ goals: { v: 1, targetLevel: 4 } }));
+      const plain = await verdict("below");
+      expect(plain.textContent).toContain("doesn't build up to it.");
+      expect(plain.textContent).not.toContain("Upgrade toward");
+    });
+
+    it("at Bracket 5 the cards never reach it: the floor, and How it plays for the rest", async () => {
+      shellAnswer = fullShell(4);
+      render(sheet({ goals: { v: 1, targetLevel: 5 } }));
+      const line = await verdict("below");
+      expect(line.querySelector("p")?.textContent).toBe(
+        "With these added, the cards show at least Bracket 4 (Optimized).",
+      );
+      expect(line.textContent).toContain(
+        "Cards can only show a floor. Once these are in, Why? has How it plays, where you can say the deck plays at Bracket 5 (cEDH).",
+      );
+    });
+
+    it("a pick moves the verdict with the shell: the same list read against the new choice", async () => {
+      shellAnswer = fullShell(3);
+      render(sheet());
+      await verdict("open");
+      pick("3");
+      await verdict("reached");
+      pick("4");
+      await verdict("below");
+      pick("2");
+      const line = await verdict("above");
+      expect(line.querySelector("p")?.textContent).toBe(
+        "With these added, these put the deck above Bracket 2:",
+      );
+    });
+
+    it("a kept card above the choice is named in the read's own sentence, and Add stays the player's call", async () => {
+      const kept = changer("Kept Changer");
+      const keptEntryGc: EditorEntry = { cardId: kept.id, zone: "main", qty: 1, tags: [] };
+      shellAnswer = fullShell(0, 98);
+      render(
+        sheet({
+          entries: [leaderEntry, keptEntryGc],
+          cards: new Map([...cardsMap, [kept.id, toEditorCard(kept)]]),
+          goals: { v: 1, targetLevel: 2 },
+        }),
+      );
+      const line = await verdict("above");
+      expect(
+        [...line.querySelectorAll<HTMLElement>("[data-after-conflict]")].map((li) => [
+          li.dataset.afterConflict,
+          li.textContent,
+        ]),
+      ).toEqual([["game-changers", "1 Game Changer: Kept Changer. Brackets 1 and 2 allow none."]]);
+      expect(status()).toBe("With these added, 1 thing puts the deck above Bracket 2.");
+      // Add is still the player's to press.
+      expect(screen.getByRole("button", { name: "Add 98 cards" })).toHaveProperty(
+        "disabled",
+        false,
+      );
+    });
+
+    it("the pinned combo's sheet takes the same choice, and a combo above it is named, not hidden", async () => {
+      shellAnswer = fullShell(0, 98);
+      factsCombos = (ids) =>
+        ids.includes(atraxa.id) && ids.includes(piece.id)
+          ? [
+              {
+                key: "pin-1",
+                cardPieces: [atraxa.id, piece.id].sort(),
+                templates: [],
+                tag: "R",
+                relevant: true,
+                results: ["Infinite combat damage"],
+                popularity: 40,
+              },
+            ]
+          : [];
+      render(
+        sheet({ entries: [leaderEntry, pieceEntry], pinned, goals: { v: 1, targetLevel: 3 } }),
+      );
+      expect(screen.getByRole("dialog", { name: "Build around this combo" })).toBeTruthy();
+      expect(pressed()).toEqual(["3"]);
+      const line = await verdict("above");
+      expect(line.querySelector("p")?.textContent).toBe(
+        "With these added, these put the deck above Bracket 3:",
+      );
+      expect(line.querySelector("[data-after-conflict]")?.textContent).toContain(
+        "Two-card combo with your commander: Atraxa, Praetors' Voice + Zealous Conscripts.",
+      );
+      // At a choice the combo fits, it is what shows the level.
+      pick("4");
+      const fits = await verdict("reached");
+      expect(fits.textContent).toBe(
+        "With these added, the cards show at least Bracket 4 (Optimized). That's your target.",
+      );
+    });
+
+    it("answers that say a level past the choice: what they say, and never That's your target.", async () => {
+      shellAnswer = fullShell(3);
+      render(
+        sheet({
+          goals: { v: 1, targetLevel: 3, answers: { rulesetVersion: 1, play: { cedh: "yes" } } },
+        }),
+      );
+      const line = await verdict("over");
+      expect(line.textContent).toBe(
+        "With these added, the cards and your answers say Bracket 5 (cEDH).",
+      );
+      // At the level the answers say, it is the target.
+      pick("5");
+      const top = await verdict("reached");
+      expect(top.textContent).toBe(
+        "With these added, the cards and your answers say Bracket 5 (cEDH). That's your target.",
+      );
+    });
+
+    it("a call that is the player's (a kept card the read asks about): the deck's own line says it, and no verdict is given", async () => {
+      const edge: CardWire = {
+        ...card({
+          name: "Tectonic Edge",
+          primaryType: "Land",
+          costValue: null,
+          attrs: { type_line: "Land", oracle_text: "", mld: "edge" },
+        }),
+        image: null,
+      };
+      shellAnswer = fullShell(3, 98);
+      render(
+        sheet({
+          entries: [leaderEntry, { cardId: edge.id, zone: "main", qty: 1, tags: [] }],
+          cards: new Map([...cardsMap, [edge.id, toEditorCard(edge)]]),
+          goals: { v: 1, targetLevel: 3 },
+        }),
+      );
+      const line = await verdict("line");
+      expect(line.textContent).toBe(
+        "With these added, the deck's bracket line says:Your target: Bracket 3 · the cards say 3 or 4, one card is your call",
+      );
+      expect(line.textContent).not.toContain("That's your target.");
+    });
+
+    it("a short list (picks unchecked, or a shortfall): the deck's own line, quoted, and it follows the checks", async () => {
+      render(sheet({ goals: { v: 1, targetLevel: 3 } }));
+      const line = await verdict("line");
+      expect(line.textContent).toBe(
+        "With these added, the deck's bracket line says:Bracket: add 86 more cards",
+      );
+      expect(status()).toBe(
+        "With these added, the deck's bracket line says: Bracket: add 86 more cards",
+      );
+      fireEvent.click(screen.getByRole("checkbox", { name: "Include Wastes × 11" }));
+      await waitFor(
+        () =>
+          expect(afterLine()?.textContent).toBe(
+            "With these added, the deck's bracket line says:Bracket: add 97 more cards",
+          ),
+        { timeout: 3000 },
+      );
+      // The second id set was asked once more, and only once.
+      expect(factsCalls()).toHaveLength(2);
+    });
+
+    it("nothing checked: no line, no status, nothing asked", async () => {
+      render(sheet());
+      await verdict("line");
+      fireEvent.click(screen.getByRole("checkbox", { name: "Include Lands" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Include Mana value 2" }));
+      expect(screen.getByRole("button", { name: "Add 0 cards" })).toHaveProperty("disabled", true);
+      expect(afterLine()).toBeNull();
+      expect(status()).toBe("");
+    });
+
+    it("checking: said in the line, never in the status, and Add doesn't wait for it", async () => {
+      shellAnswer = fullShell(3);
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+        if (String(input).startsWith("/api/combos/complete?")) await gate;
+        return routes(input);
+      });
+      const onApply = vi.fn();
+      render(sheet({ goals: { v: 1, targetLevel: 3 }, onApply }));
+      const line = await verdict("checking");
+      expect(line.textContent).toBe("Checking the list with these added…");
+      expect(status()).toBe("");
+      const add = screen.getByRole("button", { name: "Add 99 cards" });
+      expect(add).toHaveProperty("disabled", false);
+      release();
+      await verdict("reached");
+      fireEvent.click(add);
+      expect(onApply).toHaveBeenCalledTimes(1);
+    });
+
+    it("a facts failure is said plainly, with Retry", async () => {
+      shellAnswer = fullShell(3);
+      let fail = true;
+      fetchMock.mockImplementation((input: RequestInfo | URL) => {
+        if (fail && String(input).startsWith("/api/combos/complete?")) {
+          return { ok: false, status: 500, headers: new Headers(), json: async () => ({}) };
+        }
+        return routes(input);
+      });
+      render(sheet({ goals: { v: 1, targetLevel: 3 } }));
+      const line = await verdict("failed");
+      expect(line.textContent).toBe("Couldn't check combos for the list with these added. Retry");
+      expect(status()).toBe("");
+      fail = false;
+      fireEvent.click(within(line).getByRole("button", { name: "Retry" }));
+      await verdict("reached");
+    });
+
+    it("a feed that couldn't be checked: the deck's own line says so, and the target is never claimed", async () => {
+      shellAnswer = fullShell(3);
+      fetchMock.mockImplementation((input: RequestInfo | URL) => {
+        if (String(input).startsWith("/api/combos/complete?")) {
+          return ok({
+            combos: [],
+            freshness: {
+              readAt: "2026-11-30T00:00:00.000Z",
+              feeds: Object.fromEntries(
+                Object.keys(FRESH.feeds).map((feed) => [
+                  feed,
+                  { state: "stale", asOf: "2026-11-15T15:29:34.768Z" },
+                ]),
+              ),
+            },
+          });
+        }
+        return routes(input);
+      });
+      render(sheet({ goals: { v: 1, targetLevel: 3 } }));
+      const line = await verdict("line");
+      expect(line.textContent).toBe(
+        "With these added, the deck's bracket line says:Your target: Bracket 3 · the cards say at least 3. Couldn't check Game Changers, mass land denial, extra turns and combos",
+      );
+      expect(line.textContent).not.toContain("That's your target.");
+    });
+  });
+
+  describe("the layout", () => {
+    const picks = () => document.querySelector<HTMLElement>("[data-slot=autofill-picks]")!;
+    const footer = () => document.querySelector<HTMLElement>("[data-slot=autofill-footer]")!;
+
+    it("from md the picks scroll inside the Modal and never shrink under 10 rem; the footer stays in flow", async () => {
+      render(sheet());
+      await screen.findByText("Lands · 12");
+      expect(picks().className).toContain("overflow-y-auto");
+      expect(picks().className).toContain("min-h-40");
+      expect(footer().className).not.toContain("sticky");
+      // The after-line and Add share the footer.
+      expect(within(footer()).getByRole("button", { name: "Add 13 cards" })).toBeTruthy();
+      expect(footer().querySelector("[data-slot=autofill-after]")).toBeTruthy();
+    });
+
+    it("on a phone the sheet scrolls as one: the picks keep their height, and the footer is pinned on the Drawer's surface", async () => {
+      render(sheet({ phone: true }));
+      await screen.findByText("Lands · 12");
+      expect(picks().className).not.toContain("overflow-y-auto");
+      expect(footer().className).toContain("sticky");
+      expect(footer().className).toContain("bottom-0");
+      expect(footer().className).toContain("bg-popover");
+      // The footer is the scroller's last child, so nothing scrolls under Add but the list.
+      expect(footer().parentElement!.className).toContain("overflow-y-auto");
+      expect(footer().parentElement!.lastElementChild).toBe(footer());
+      expect(within(footer()).getByRole("button", { name: "Add 13 cards" })).toBeTruthy();
+    });
+  });
+
+  describe("Add and Cancel", () => {
+    it("Add hands the pick over with the list it read: the picked level, or null for Not set", async () => {
+      shellAnswer = fullShell(3);
+      const onApply = vi.fn();
+      const first = render(sheet({ onApply }));
+      await verdict("open");
+      pick("3");
+      await verdict("reached");
+      fireEvent.click(screen.getByRole("button", { name: "Add 99 cards" }));
+      const apply = onApply.mock.calls[0][0] as AutofillApply;
+      expect(apply.target).toBe(3);
+      expect(apply.added).toBe(99);
+      // The list the after-line read: the leader and every checked pick.
+      expect(apply.entries.map((e) => e.cardId).sort()).toEqual(idsOf(factsCalls().at(-1)!).sort());
+      first.unmount();
+
+      onApply.mockClear();
+      render(sheet({ goals: { v: 1, targetLevel: 2 }, onApply }));
+      await verdict("above");
+      pick("Not set");
+      await verdict("open");
+      fireEvent.click(screen.getByRole("button", { name: "Add 99 cards" }));
+      expect((onApply.mock.calls[0][0] as AutofillApply).target).toBeNull();
+    });
+
+    it("opening, picking, rerolling and Cancel write nothing: only the shell's POST and the facts GET are ever asked, and nothing is handed over", async () => {
+      shellAnswer = fullShell(3);
+      const onApply = vi.fn();
+      const onClose = vi.fn();
+      render(sheet({ onApply, onClose }));
+      await verdict("open");
+      pick("3");
+      await verdict("reached");
+      fireEvent.click(screen.getByRole("button", { name: "Reroll" }));
+      await asked(3);
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(onApply).not.toHaveBeenCalled();
+      const asks = fetchMock.mock.calls.map(([url, init]) => [
+        (init as RequestInit | undefined)?.method ?? "GET",
+        String(url).split("?")[0],
+      ]);
+      expect(new Set(asks.map((a) => a.join(" ")))).toEqual(
+        new Set(["POST /api/decks/autofill", "GET /api/combos/complete"]),
+      );
+    });
   });
 });

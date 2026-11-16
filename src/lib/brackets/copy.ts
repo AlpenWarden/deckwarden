@@ -26,6 +26,10 @@
  * after-line in the level's own words (the read's sentences follow it),
  * and where the rest of the way is the player's call; the bucket names and
  * the reasons a card would sit above the target are the adapter's.
+ * AUTOFILL-TARGET adds the Autofill sheet's choice of Your target: what Add
+ * will do to the deck's target, the after-line over the list Add would
+ * build ("With these added…", the read's sentences after it when something
+ * is above the choice), and where a shell short of its target goes next.
  */
 import type { BracketsMeta } from "@/lib/games/types";
 
@@ -35,6 +39,8 @@ const ABOVE_TARGET = "Above your target";
 const HOW_IT_PLAYS = "How it plays";
 /** The open questions' block, which Below your target points at. */
 const YOUR_CALL = "Your call";
+/** The bracket line's door to the Why sheet, which the Autofill sheet's after-line points at. */
+const WHY = "Why?";
 
 /**
  * "1 thing", "3 things": the read's conflicts, counted in the words the
@@ -62,7 +68,7 @@ export const BRACKET_COPY = {
   /** D5's failure line, before its Retry. */
   failed: "Couldn't check combos",
   retry: "Retry",
-  why: "Why?",
+  why: WHY,
   sheetTitle: (noun: string) => `Why this ${noun}?`,
   cardsShow: "What the cards show",
   readAssumes: "What this read assumes",
@@ -420,6 +426,64 @@ export const BRACKET_COPY = {
   /** The verdict a screen reader hears then, a whole sentence. */
   upAfterAboveCount: (n: number, level: string) =>
     `After these swaps, ${things(n)} ${n === 1 ? "puts" : "put"} the deck above ${level}.`,
+
+  // AUTOFILL-TARGET (the owner's note of 2026-11-15: "the option to set your
+  // desired bracket as you click the autofill a starter shell button") — the
+  // Autofill sheet's own choice of Your target: what Add will do to the
+  // deck's target, the read of the list Add would build, where a shell short
+  // of its target goes next, and the toast's second line.
+  /** Under the choice, only when Add would move the deck's target: "Adding these cards sets this deck's target to Bracket 2 (Core)." */
+  autofillSets: (level: string) => `Adding these cards sets this deck's target to ${level}.`,
+  /** "…changes this deck's target from Bracket 2 to Bracket 3.", "to" between them (U9's range word). */
+  autofillChanges: (from: string, to: string) =>
+    `Adding these cards changes this deck's target from ${from} to ${to}.`,
+  /** The choice back on Not set, on a deck that has a target. */
+  autofillClears: "Adding these cards clears this deck's target.",
+  /**
+   * After a set or changed target: where a target shows, by `targetShown`'s
+   * rule (link previews only when they draw it), said of any target: this
+   * one isn't the deck's until the cards are added.
+   */
+  autofillTargetShows: (previews: boolean) =>
+    previews
+      ? "A target shows on your share page, in link previews and where the deck is listed."
+      : "A target shows on your share page and where the deck is listed.",
+  /** The after-line, from the read of the list Add would build: "With these added, the cards show at least Bracket 3 (Upgraded)." */
+  autofillAfter: (level: string) => `With these added, the cards show at least ${level}.`,
+  autofillAfterAnswers: (level: string) =>
+    `With these added, the cards and your answers say ${level}.`,
+  autofillAfterNothing: (noun: string) =>
+    `With these added, nothing in the list raises the ${noun}.`,
+  /**
+   * A list nothing flags, under a target the read can't tell from the level
+   * below it (the adapter's bands): the target named, never claimed as
+   * shown. "With these added, nothing in the list goes past Bracket 2 (Core)."
+   */
+  autofillAfterWithin: (level: string) =>
+    `With these added, nothing in the list goes past ${level}.`,
+  /** The commander, a kept card or a pinned combo above the choice; the read's sentences follow. */
+  autofillAfterAbove: (level: string) => `With these added, these put the deck above ${level}:`,
+  /** The verdict a screen reader hears then, a whole sentence. */
+  autofillAfterAboveCount: (n: number, level: string) =>
+    `With these added, ${things(n)} ${n === 1 ? "puts" : "put"} the deck above ${level}.`,
+  /**
+   * A read with something left open (a call that is the player's, a list
+   * short of the format's size, a card that isn't legal, a source it
+   * couldn't check): before the deck's own line, quoted as the adapter says
+   * it. "With these added, the deck's bracket line says:"
+   */
+  autofillAfterLine: (noun: string) => `With these added, the deck's ${noun} line says:`,
+  autofillAfterChecking: "Checking the list with these added…",
+  autofillAfterFailed: "Couldn't check combos for the list with these added.",
+  /** Short of the target, where more of the cards the adapter counts would show it: a target is a ceiling here. */
+  autofillBelowCeiling: "Autofill keeps a shell at or under its target and doesn't build up to it.",
+  /** After it, when the editor has the door: "Once these are in, Why? offers Upgrade toward Bracket 4." (`door` is the sheet's own title.) */
+  autofillBelowUpgrade: (door: string) => `Once these are in, ${WHY} offers ${door}.`,
+  /** Short of a target no count of cards shows (the top level): the rest is the player's answer. */
+  autofillBelowFloor: (level: string) =>
+    `Cards can only show a floor. Once these are in, ${WHY} has ${HOW_IT_PLAYS}, where you can say the deck plays at ${level}.`,
+  /** The toast's second line when Add moved the target: its Undo is the list's alone. */
+  autofillUndoKeeps: "Undo takes the cards back, not the target.",
 } as const;
 
 /** "it stays", "they stay". */
@@ -449,6 +513,23 @@ export function goalsParts(
     parts.push(totalLabel(goals.budget.totalUsd));
   }
   return parts;
+}
+
+/** Not set's value in Your target's choice. */
+export const NO_TARGET = "none";
+
+/**
+ * Your target's options, wherever it is chosen (the Why sheet, and since
+ * AUTOFILL-TARGET the Autofill sheet): the levels by their numbers, then
+ * Not set.
+ */
+export function targetChoices(
+  brackets: Pick<BracketsMeta, "levels">,
+): { value: string; label: string }[] {
+  return [
+    ...brackets.levels.map((l) => ({ value: String(l.level), label: String(l.level) })),
+    { value: NO_TARGET, label: BRACKET_COPY.notSet },
+  ];
 }
 
 /** "Bracket" — the adapter's noun, capitalized (the /precons filter's label, LATER row 151). */
