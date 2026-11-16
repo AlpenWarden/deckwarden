@@ -18,13 +18,20 @@
  * Color filter semantics: exact color identity ("Azorius commanders", not
  * "commanders that include W or U") — the way players name the space. That
  * is the default and what every link without `match` means. COLOR-INCLUDES
- * (the owner's note of 2026-11-15) adds a second reading of the same chips
- * under them, "Including these colors" (`?match=including`): every commander
- * whose identity holds all the picked colors, alone or with others, in the
- * index's own order. Two link chips, no client JavaScript; the reader's mode
- * rides on every link the page builds and in the name form. Colorless is
- * always exact, and the page says so. `src/lib/hub/color-filter.ts` holds
- * the rule, the URL and the words.
+ * (the owner's note of 2026-11-15) adds a second reading of the same chips,
+ * turned on by one toggle chip after them, "Include other colors"
+ * (`?match=including`): every commander whose identity holds all the picked
+ * colors, alone or with others, in the index's own order. A link like the
+ * color chips, no client JavaScript; the reader's mode rides on every link
+ * the page builds and in the name form. Colorless is always exact, and the
+ * page says so. `src/lib/hub/color-filter.ts` holds the rule, the URL and
+ * the words.
+ *
+ * The filter row's height (the owner's review, "Fix phone height"): the
+ * toggle flows in the chips' own wrapping row, so the default page is as
+ * tall as it was before the mode wherever the toggle fits on the chips'
+ * last line and one row taller where it does not; the line that explains
+ * the including reading sits under the whole row and only in that reading.
  */
 import { ArrowLeftIcon, ArrowRightIcon } from "lucide-react";
 import type { Metadata } from "next";
@@ -42,12 +49,12 @@ import { leaderTileImage } from "@/lib/decks/tiles";
 import { COLOR_ORDER } from "@/lib/games/colors";
 import {
   COLOR_FILTER_COPY,
-  COLOR_MATCHES,
   colorFilterEmpty,
   colorFilterLetters,
   colorFilterNote,
   colorFilterQuery,
   MATCH_PARAM,
+  otherMatch,
   parseColorFilter,
   toggleColorLetter,
   type ColorMatch,
@@ -65,8 +72,20 @@ export const metadata: Metadata = {
   alternates: { canonical: "/commanders" },
 };
 
-/** The id that ties the two mode chips to the line under them. */
+/** The id that ties the toggle chip to the line under the filters. */
 const MATCH_NOTE_ID = "commanders-match-note";
+
+/**
+ * The toggle's label keeps one width. A pressed chip is medium weight, which
+ * makes these words 3.4 px wider, and where the chips' row is full to within
+ * that (every touch screen from 1022 px, measured) pressing the toggle would
+ * drop the toggle itself to the next row. So the label always reserves its
+ * pressed width: the same words in medium weight, as generated content with
+ * no height, never drawn and never read out (the `/ ''` alternative text; the
+ * editor header's `data-was` is the precedent), under the visible ones.
+ */
+const TOGGLE_LABEL =
+  "inline-flex flex-col items-center after:invisible after:h-0 after:font-medium after:content-[attr(data-label)_/_'']";
 
 export default async function CommandersPage({ searchParams }: PageProps<"/commanders">) {
   const sp = await searchParams;
@@ -84,11 +103,12 @@ export default async function CommandersPage({ searchParams }: PageProps<"/comma
   const filter = parseColorFilter(sp.colors, sp.match);
   const ciMask = filter.mask;
   const activeLetters = colorFilterLetters(filter);
+  const including = filter.match === "including";
   // Every link the page builds goes through here, so each one carries the
-  // reader's mode; only the two mode chips name another.
+  // reader's mode; only the toggle chip names the other.
   const filterHref = (letters: string, toPage = 1, q = "", match: ColorMatch = filter.match) =>
     `/commanders${colorFilterQuery({ letters, match, page: toPage, q })}`;
-  // The line under the mode chips: nothing in the exact reading, as before.
+  // The line under the filters: nothing in the exact reading, as before.
   const matchNote = colorFilterNote(
     filter,
     [...activeLetters].flatMap((c) => colorChipDef("mtg", c)?.name ?? []),
@@ -133,10 +153,14 @@ export default async function CommandersPage({ searchParams }: PageProps<"/comma
           more filter. */}
       <LeaderPickBanner game="mtg" noun="commander" />
 
-      {/* The filters share one baseline (COLOR-INCLUDES): the name box and
-          the first row of chips sit where `items-center` put them while the
-          chips were one row, and the mode chips hang under the colors. */}
-      <div className="mt-3 flex flex-wrap items-baseline gap-x-4 gap-y-2">
+      {/* The name box, then the chips. The row is top-aligned, not centered:
+          the chips can wrap to a second row beside the box (the toggle, or a
+          color, where the row is too narrow), and a centered row would then
+          float the box between them. From `sm` the chips take the rest of
+          the box's row and wrap there. With a mouse a chip is 24 px and the
+          box 32, so the chips start 4 px lower (`pt-1`), which is where
+          `items-center` put a single row of them; on touch both are 44 px. */}
+      <div className="mt-3 flex flex-wrap items-start gap-x-4 gap-y-2">
         {/* Name filter (W4, REC-2): a plain GET form — Enter submits; the
             current color selection rides along as a hidden input so q and
             colors combine instead of fighting (and, since COLOR-INCLUDES,
@@ -165,62 +189,68 @@ export default async function CommandersPage({ searchParams }: PageProps<"/comma
           {activeLetters && (
             <input type="hidden" name="colors" value={activeLetters.toLowerCase()} />
           )}
-          {filter.match === "including" && (
-            <input type="hidden" name={MATCH_PARAM} value="including" />
-          )}
+          {including && <input type="hidden" name={MATCH_PARAM} value="including" />}
         </form>
-        <nav aria-label="Color identity filter" className="flex min-w-0 flex-col gap-2">
-          <div className="flex flex-wrap gap-1.5">
-            <Chip
-              render={<Link href={filterHref("", 1, rawQ)} />}
-              aria-current={ciMask === null ? "page" : undefined}
-              pressed={ciMask === null}
-            >
-              All
-            </Chip>
-            {COLOR_ORDER.map((c) => {
-              // Toggle the letter within the current selection (both readings).
-              const active = c === "C" ? activeLetters === "C" : activeLetters.includes(c);
-              return (
-                <ColorChipLink
-                  key={c}
-                  game="mtg"
-                  color={c}
-                  href={filterHref(toggleColorLetter(activeLetters, c), 1, rawQ)}
-                  active={active}
-                />
-              );
-            })}
-          </div>
-          {/* How the chips above are read (COLOR-INCLUDES): two links, the
-              current one marked like a picked color. Each keeps the colors
-              and the name and restarts at page 1. */}
-          <div
-            role="group"
-            aria-label={COLOR_FILTER_COPY.matchLabel}
-            aria-describedby={matchNote ? MATCH_NOTE_ID : undefined}
-            className="flex flex-wrap gap-1.5"
+        <nav
+          aria-label="Color identity filter"
+          className="flex min-w-0 flex-wrap gap-1.5 sm:flex-1 sm:pointer-fine:pt-1"
+        >
+          <Chip
+            render={<Link href={filterHref("", 1, rawQ)} />}
+            aria-current={ciMask === null ? "page" : undefined}
+            pressed={ciMask === null}
           >
-            {COLOR_MATCHES.map((match) => (
-              <Chip
-                key={match}
-                render={<Link href={filterHref(activeLetters, 1, rawQ, match)} />}
-                aria-current={filter.match === match ? "page" : undefined}
-                pressed={filter.match === match}
-              >
-                {COLOR_FILTER_COPY[match]}
-              </Chip>
-            ))}
+            All
+          </Chip>
+          {COLOR_ORDER.map((c, i) => {
+            // Toggle the letter within the current selection (both readings).
+            const active = c === "C" ? activeLetters === "C" : activeLetters.includes(c);
+            return (
+              <ColorChipLink
+                key={c}
+                game="mtg"
+                color={c}
+                href={filterHref(toggleColorLetter(activeLetters, c), 1, rawQ)}
+                active={active}
+                // With a mouse the last color keeps a little air after it, so
+                // the toggle that follows on its line does not read as a
+                // seventh color. On the chip before, not on the toggle: a
+                // toggle that wraps starts flush with the chips above it. Not
+                // on touch, where the chips are wider and the row has no
+                // pixel to give: at the page's full width the air alone put
+                // the toggle on a second row (measured, REDESIGN.md).
+                className={i === COLOR_ORDER.length - 1 ? "pointer-fine:mr-1.5" : undefined}
+              />
+            );
+          })}
+          {/* How the chips are read (COLOR-INCLUDES): one toggle, a link like
+              each color chip, pressed while including is on. It keeps the
+              colors and the name and restarts at page 1. Its group draws no
+              box (`contents`), so the toggle flows in the chips' own row and
+              takes the last line's spare room before it takes a new line. */}
+          <div role="group" aria-label={COLOR_FILTER_COPY.matchLabel} className="contents">
+            <Chip
+              render={<Link href={filterHref(activeLetters, 1, rawQ, otherMatch(filter.match))} />}
+              aria-current={including ? "page" : undefined}
+              aria-describedby={matchNote ? MATCH_NOTE_ID : undefined}
+              pressed={including}
+            >
+              <span data-label={COLOR_FILTER_COPY.includeOthers} className={TOGGLE_LABEL}>
+                {COLOR_FILTER_COPY.includeOthers}
+              </span>
+            </Chip>
           </div>
-          {/* `w-0 min-w-full`: the line takes the chips' width and never
-              widens the block, so the filters wrap where they always did. */}
-          {matchNote && (
-            <p id={MATCH_NOTE_ID} className="text-muted-foreground w-0 min-w-full text-sm">
-              {matchNote}
-            </p>
-          )}
         </nav>
       </div>
+
+      {/* What the including reading lists, on its own line under the whole
+          filter row: nothing in the exact reading, so that page pays no
+          height for it. */}
+      {matchNote && (
+        <p id={MATCH_NOTE_ID} className="text-muted-foreground mt-2 text-sm">
+          {matchNote}
+        </p>
+      )}
 
       {rows.length === 0 ? (
         qActive ? (

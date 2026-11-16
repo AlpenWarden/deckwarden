@@ -3,9 +3,10 @@
  * did before the mode, checked against the page's own code from before it
  * (kept here as the reference); `match` is including or it is exactly;
  * Colorless is always exact; every link's query string, with the exact
- * ones the bytes the page built before; the chips' toggling; the line under
- * the chips and the empty sentence; and the copy guard (the PRECON_COPY
- * guard's pattern) over every string the table can produce.
+ * ones the bytes the page built before; the chips' toggling, and the one
+ * toggle chip's link to the other reading; the line under the filters and
+ * the empty sentence; and the copy guard (the PRECON_COPY guard's pattern)
+ * over every string the table can produce.
  */
 import { describe, expect, it } from "vitest";
 
@@ -19,6 +20,7 @@ import {
   colorFilterNote,
   colorFilterQuery,
   MATCH_PARAM,
+  otherMatch,
   parseColorFilter,
   toggleColorLetter,
   type ColorFilter,
@@ -251,7 +253,7 @@ describe("colorFilterQuery — every link's query string", () => {
     expect(colorFilterQuery({ letters: "B", match: "including", page: 1 })).toBe(
       "?colors=b&match=including",
     );
-    // The two mode chips, from an including page: page 1, colors and name kept.
+    // The toggle chip links to the other reading: page 1, colors and name kept.
     expect(colorFilterQuery({ letters: "B", match: "exactly", q: "syr" })).toBe("?colors=b&q=syr");
     expect(colorFilterQuery({ letters: "B", match: "including", q: "syr" })).toBe(
       "?colors=b&match=including&q=syr",
@@ -259,7 +261,7 @@ describe("colorFilterQuery — every link's query string", () => {
   });
 });
 
-describe("colorFilterNote — the line under the two chips", () => {
+describe("colorFilterNote — the line under the filters", () => {
   it("exactly says nothing, whatever is picked", () => {
     expect(colorFilterNote({ mask: null, match: "exactly" }, [])).toBeNull();
     expect(colorFilterNote({ mask: 0, match: "exactly" }, [])).toBeNull();
@@ -338,12 +340,8 @@ describe("colorFilterEmpty — a page past the end", () => {
 /** The table's word-builders: the guard calls each one (a new one must join it here). */
 const BUILDERS = ["includes", "emptyExactly", "emptyIncluding", "emptyAll"];
 
-/** The chips' labels and the group's name: controls, not sentences. */
-const CONTROLS: string[] = [
-  COLOR_FILTER_COPY.matchLabel,
-  COLOR_FILTER_COPY.exactly,
-  COLOR_FILTER_COPY.including,
-];
+/** The toggle's label and its group's name: controls, not sentences. */
+const CONTROLS: string[] = [COLOR_FILTER_COPY.matchLabel, COLOR_FILTER_COPY.includeOthers];
 
 /** Every filter the URL can name: 33 selections in both readings. */
 const FILTERS: ColorFilter[] = COLOR_MATCHES.flatMap((match) => [
@@ -369,14 +367,24 @@ function everyString(): string[] {
   ];
 }
 
-describe("COLOR_FILTER_COPY — the chips' words", () => {
-  it("the two chips take the card search's two words, the default first", () => {
-    expect([...COLOR_MATCHES]).toEqual(["exactly", "including"]);
-    expect(COLOR_MATCHES.map((match) => COLOR_FILTER_COPY[match])).toEqual([
-      "Exactly these colors",
-      "Including these colors",
-    ]);
+describe("COLOR_FILTER_COPY — the toggle's words", () => {
+  it("one toggle chip, named with the card search's word, in a group of its own", () => {
+    expect(COLOR_FILTER_COPY.includeOthers).toBe("Include other colors");
     expect(COLOR_FILTER_COPY.matchLabel).toBe("Color match");
+    // The two chips the build first drew are gone from the table.
+    expect(Object.keys(COLOR_FILTER_COPY)).not.toContain("exactly");
+    expect(Object.keys(COLOR_FILTER_COPY)).not.toContain("including");
+  });
+
+  it("the toggle links to the reading that is not on, and exactly is still the default", () => {
+    expect([...COLOR_MATCHES]).toEqual(["exactly", "including"]);
+    expect(otherMatch("exactly")).toBe("including");
+    expect(otherMatch("including")).toBe("exactly");
+    // Off: the link turns the mode on. On: the link is the exact page again.
+    expect(colorFilterQuery({ letters: "B", match: otherMatch("exactly") })).toBe(
+      "?colors=b&match=including",
+    );
+    expect(colorFilterQuery({ letters: "B", match: otherMatch("including") })).toBe("?colors=b");
   });
 });
 

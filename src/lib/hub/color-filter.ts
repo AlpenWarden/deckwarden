@@ -13,6 +13,13 @@
  * The two words are the card search's own colorset modes (`translate.ts`:
  * `within | including | exactly`), not a new vocabulary.
  *
+ * One control. A single toggle chip after the colors, "Include other
+ * colors", turns the including reading on and off the way each color chip
+ * toggles its color: a link, unpressed by default and pressed under
+ * `match=including`. (The build first drew two chips, one per reading; on a
+ * phone they cost every visitor a row or two, mode or no mode, and the
+ * owner's review of 2026-11-15 asked for the height back.)
+ *
  * The URL: `match=including`. Absent, or any other value, is exactly, so
  * every link that existed before the mode means what it meant, and the page
  * builds the same query string for it, byte for byte. The mode is the
@@ -26,9 +33,14 @@
  */
 import { lettersToMask, maskToLetters, type ColorLetter } from "@/lib/games/colors";
 
-/** The chips' two readings, the default first: the order the page draws them in. */
+/** The chips' two readings, the default first. */
 export const COLOR_MATCHES = ["exactly", "including"] as const;
 export type ColorMatch = (typeof COLOR_MATCHES)[number];
+
+/** The reading the toggle chip links to: the one that is not on. */
+export function otherMatch(match: ColorMatch): ColorMatch {
+  return match === "including" ? "exactly" : "including";
+}
 
 /** The URL parameter beside `colors`, and the name of the name form's hidden input. */
 export const MATCH_PARAM = "match";
@@ -115,18 +127,16 @@ const onThisPage = (page: number) => (page > 1 ? " on this page" : "");
 /**
  * The filter's words, in one table so its guard (color-filter.test.ts) reads
  * every string. U9's policy: periods, colons and commas, no dash, no middle
- * dot. The two chips take the card search's words with "these colors", so
- * each reads as a whole instruction with or without a color picked.
+ * dot. The toggle takes the card search's word, "include", and reads as an
+ * instruction beside the colors it applies to, with or without one picked.
  */
 export const COLOR_FILTER_COPY = {
-  /** The accessible name of the two chips' group. */
+  /** The accessible name of the toggle chip's group. */
   matchLabel: "Color match",
-  /** The default chip. */
-  exactly: "Exactly these colors",
-  /** The second chip. */
-  including: "Including these colors",
+  /** The toggle chip: pressed while the including reading is on. */
+  includeOthers: "Include other colors",
   /**
-   * The rule, under the chips while including is on and a color is picked.
+   * The rule, under the filters while including is on and a color is picked.
    * All five colors leave nothing to combine with, so that line says only
    * what the list is.
    */
@@ -149,7 +159,7 @@ export const COLOR_FILTER_COPY = {
 } as const;
 
 /**
- * The line under the two chips, or null. Exactly says nothing, as before.
+ * The line under the filters, or null. Exactly says nothing, as before.
  * Including always says what it is doing: the rule for the picked colors
  * (`names`, the picked colors' names in WUBRG order), what a pick will do
  * while none is, or that Colorless is exact.

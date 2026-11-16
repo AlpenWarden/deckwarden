@@ -11,9 +11,9 @@
  * rule (one door per combo row, the most-played row first), never by a
  * combo count. COLOR-INCLUDES pins the index's second reading of its color
  * chips (`?match=including`) beside the exact one, which stays the default:
- * who is on an including page and who is not, the mode on every link, an
- * including list paged to its end against the database's own count, and
- * Colorless always exact.
+ * who is on an including page and who is not, the one toggle chip that turns
+ * it on and off, the mode on every link, an including list paged to its end
+ * against the database's own count, and Colorless always exact.
  *
  *   pnpm smoke:hubs
  *   BASE_URL=http://localhost:3111 pnpm smoke:hubs
@@ -156,7 +156,7 @@ async function main() {
       page2.status === 200 && !page2.text.includes(`/c/${top.slug as string}"`),
     );
 
-    // ---- "Including these colors" (COLOR-INCLUDES) ---------------------------
+    // ---- "Include other colors" (COLOR-INCLUDES) -----------------------------
     // The second reading of the same chips. Read off the anchors the server
     // wrote, never off the whole text: the page's payload repeats every href.
     /** The hub slugs a page lists, in order. */
@@ -186,7 +186,7 @@ async function main() {
       includingW.text.includes("Commanders whose colors include White, alone or with others."),
     );
     check(
-      "including: every link carries the mode but the Exactly chip, and Next is page 2 of the same list",
+      "including: every link carries the mode but the toggle, which turns it off, and Next is page 2 of the same list",
       filterLinks(includingW.text)
         .filter((href) => !href.includes("match=including"))
         .join(" ") === "/commanders?colors=w" &&
@@ -199,12 +199,27 @@ async function main() {
         /<input[^>]*type="hidden"[^>]*name="match"[^>]*value="including"/.test(includingW.text),
     );
     check(
-      "exactly is the default: the one link that names a mode is the Including chip, and no input does",
+      "exactly is the default: the one link that names a mode is the toggle, and no input does",
       filterLinks(monoWhite.text)
         .filter((href) => href.includes("match="))
         .join(" ") === "/commanders?colors=w&match=including" &&
         !/<input[^>]*name="match"/.test(monoWhite.text),
       filterLinks(monoWhite.text),
+    );
+    /** The toggle chip's opening tag, wherever a page writes one. */
+    const toggle = (text: string) =>
+      [...text.matchAll(/<a\b([^>]*)><span[^>]*>Include other colors<\/span><\/a>/g)].map(
+        (m) => m[1],
+      );
+    check(
+      "one toggle chip turns the mode on and off: unpressed by default, pressed under including",
+      toggle(monoWhite.text).length === 1 &&
+        !toggle(monoWhite.text)[0].includes("aria-current") &&
+        toggle(monoWhite.text)[0].includes('href="/commanders?colors=w&amp;match=including"') &&
+        toggle(includingW.text).length === 1 &&
+        toggle(includingW.text)[0].includes('aria-current="page"') &&
+        toggle(includingW.text)[0].includes('href="/commanders?colors=w"'),
+      { off: toggle(monoWhite.text), on: toggle(includingW.text) },
     );
     const otherMode = await page("/commanders?colors=w&match=within");
     check(

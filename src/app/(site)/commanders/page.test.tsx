@@ -1,13 +1,14 @@
 /**
- * /commanders' filter rows (COLOR-INCLUDES), the real page with its one
- * loader mocked: the color chips and All, the two mode chips in their named
- * group, the line under them, the name form's hidden inputs, Previous and
- * Next, and the two empty states' links. Exactly is the default and builds
- * the links the page built before the mode; including rides on every link;
- * the mode first and a color second works; Colorless is always exact and
- * the page says so; and the loader is handed the mask and the reader's
- * choice (what it runs for them is `src/lib/hub/queries.test.ts`'s). The
- * filter rows are in the server's markup as plain links.
+ * /commanders' filters (COLOR-INCLUDES), the real page with its one loader
+ * mocked: the color chips and All, the one toggle chip after them in its
+ * named group, the line under the filter row, the name form's hidden
+ * inputs, Previous and Next, and the two empty states' links. Exactly is the
+ * default and builds the links the page built before the mode; including
+ * rides on every link; the mode first and a color second works; Colorless is
+ * always exact and the page says so; and the loader is handed the mask and
+ * the reader's choice (what it runs for them is
+ * `src/lib/hub/queries.test.ts`'s). The filters are in the server's markup
+ * as plain links.
  */
 import { render, screen, within } from "@testing-library/react";
 import { renderToString } from "react-dom/server";
@@ -55,6 +56,10 @@ async function renderPage(query: Query) {
   return render(await page(query));
 }
 
+/** The toggle chip's words. */
+const TOGGLE = "Include other colors";
+const COLORS = ["White", "Blue", "Black", "Red", "Green", "Colorless"];
+
 /** The filter's landmark and what is in it. */
 function filterNav() {
   const nav = screen.getByRole("navigation", { name: "Color identity filter" });
@@ -65,7 +70,8 @@ function filterNav() {
   return { nav, group, link, href, current };
 }
 
-const COLORS = ["White", "Blue", "Black", "Red", "Green", "Colorless"];
+/** The line under the filter row, when the page draws one. */
+const noteLine = () => document.getElementById("commanders-match-note");
 
 /** The name form's hidden inputs, as `name=value`. */
 function hiddenInputs(container: HTMLElement): string[] {
@@ -104,7 +110,7 @@ describe("/commanders — exactly, the default", () => {
     expect(screen.getByRole("link", { name: "Next" }).getAttribute("href")).toBe(
       "/commanders?colors=b&page=2",
     );
-    // No link and no input names the mode.
+    // One link names the mode, the toggle that would turn it on, and no input does.
     expect(
       [...container.querySelectorAll("a")]
         .map((a) => a.getAttribute("href") ?? "")
@@ -112,24 +118,86 @@ describe("/commanders — exactly, the default", () => {
     ).toEqual(["/commanders?colors=b&match=including"]);
   });
 
-  it("draws the two mode chips under the colors, Exactly current, with no line", async () => {
+  it("draws one toggle after the colors: a link, unpressed, in its own named group, with no line", async () => {
     await renderPage({ colors: "b" });
     const f = filterNav();
-    const modes = within(f.group).getAllByRole("link");
-    expect(modes.map((a) => a.textContent)).toEqual([
-      "Exactly these colors",
-      "Including these colors",
-    ]);
-    expect(f.href("Exactly these colors")).toBe("/commanders?colors=b");
-    expect(f.href("Including these colors")).toBe("/commanders?colors=b&match=including");
-    expect(f.current("Exactly these colors")).toBe("page");
-    expect(f.current("Including these colors")).toBeNull();
-    expect(f.link("Exactly these colors").className).toContain("ring-accent-game");
-    expect(f.link("Including these colors").className).not.toContain("ring-accent-game");
-    // The group follows the color row inside the one landmark.
+    const toggles = within(f.group).getAllByRole("link");
+    expect(toggles.map((a) => a.textContent)).toEqual([TOGGLE]);
+    expect(f.href(TOGGLE)).toBe("/commanders?colors=b&match=including");
+    expect(f.current(TOGGLE)).toBeNull();
+    expect(f.link(TOGGLE).className).not.toContain("ring-accent-game");
+    expect(f.link(TOGGLE).getAttribute("aria-describedby")).toBeNull();
+
+    // It follows the colors in the chips' own row: the group draws no box.
     expect(f.nav.lastElementChild).toBe(f.group);
-    expect(f.group.getAttribute("aria-describedby")).toBeNull();
+    expect(f.group.className).toBe("contents");
+    expect(within(f.nav).getAllByRole("link")).toHaveLength(8);
+    expect(within(f.nav).getAllByRole("link").at(-1)).toBe(f.link(TOGGLE));
+    // The last color alone keeps the air that sets the toggle apart, and with
+    // a mouse only: on touch the row has no pixel to give (REDESIGN.md).
+    expect(COLORS.filter((name) => f.link(name).className.includes("pointer-fine:mr-1.5"))).toEqual(
+      ["Colorless"],
+    );
+    for (const name of ["All", ...COLORS, TOGGLE]) {
+      expect([
+        name,
+        f
+          .link(name)
+          .className.split(" ")
+          .filter((c) => /^m[lrx]-/.test(c)),
+      ]).toEqual([name, []]);
+    }
+
+    // The exact page pays no height for a line.
+    expect(noteLine()).toBeNull();
     expect(f.nav.querySelector("p")).toBeNull();
+  });
+
+  it("the toggle's label reserves its pressed width, so pressing it never moves it", async () => {
+    // A pressed chip is medium weight and its words 3.4 px wider; where the
+    // row is that full the toggle would drop a row on its own press. The
+    // label holds the same words in medium weight as generated content with
+    // no height, never drawn and never read out, in both states.
+    const labelOf = () => filterNav().link(TOGGLE).firstElementChild as HTMLElement;
+    const off = await renderPage({ colors: "b" });
+    const classes = labelOf().className;
+    expect(labelOf().tagName).toBe("SPAN");
+    expect(labelOf().getAttribute("data-label")).toBe(TOGGLE);
+    expect(labelOf().textContent).toBe(TOGGLE);
+    expect(classes.split(" ")).toEqual(
+      expect.arrayContaining([
+        "inline-flex",
+        "flex-col",
+        "after:invisible",
+        "after:h-0",
+        "after:font-medium",
+        "after:content-[attr(data-label)_/_'']",
+      ]),
+    );
+    off.unmount();
+    await renderPage({ colors: "b", match: "including" });
+    expect(labelOf().className).toBe(classes);
+    expect(labelOf().getAttribute("data-label")).toBe(TOGGLE);
+    // The link is still named by its words alone.
+    expect(filterNav().link(TOGGLE).textContent).toBe(TOGGLE);
+  });
+
+  it("the filter row is top-aligned, and the chips carry a mouse pointer's 4 px with it", async () => {
+    // jsdom lays nothing out: the pixels are the harness's (REDESIGN.md). This
+    // pins the pair that makes them. The row no longer centers or shares a
+    // baseline, so a second row of chips cannot move the name box; from `sm`
+    // the chips take the rest of the box's row and wrap there; and a 24 px
+    // chip is centered on the 32 px box by 4 px, with a mouse only (on touch
+    // both are 44 px).
+    await renderPage({ colors: "b" });
+    const f = filterNav();
+    const row = f.nav.parentElement as HTMLElement;
+    expect(row.className).toContain("items-start");
+    expect(row.className).not.toMatch(/items-(center|baseline)/);
+    expect(f.nav.className.split(" ")).toEqual(
+      expect.arrayContaining(["flex", "flex-wrap", "sm:flex-1", "sm:pointer-fine:pt-1"]),
+    );
+    expect(row.querySelector("form")?.className).toBe("w-full sm:w-56");
   });
 
   it("any other value of match is exactly: the same request and the same links", async () => {
@@ -182,30 +250,36 @@ describe("/commanders — including", () => {
     );
     // The name form sends the colors and the mode with the name.
     expect(hiddenInputs(container)).toEqual(["colors=b", "match=including"]);
-    // Only one link on the page leaves the mode: the Exactly chip.
+    // Only one link on the page leaves the mode: the toggle, which turns it off.
     const filterLinks = [...container.querySelectorAll('main a[href^="/commanders?"]')].map(
       (a) => a.getAttribute("href") ?? "",
     );
     expect(filterLinks.filter((href) => !href.includes("match=including"))).toEqual([
       "/commanders?colors=b&q=sy",
     ]);
+    expect(f.href(TOGGLE)).toBe("/commanders?colors=b&q=sy");
   });
 
-  it("marks Including, restarts both chips at page 1, and states the rule under them", async () => {
+  it("presses the toggle, links it back to the exact page 1, and states the rule under the filter row", async () => {
     const { container } = await renderPage({ colors: "bg", match: "including", page: "2" });
     const f = filterNav();
-    expect(f.current("Including these colors")).toBe("page");
-    expect(f.current("Exactly these colors")).toBeNull();
-    expect(f.href("Exactly these colors")).toBe("/commanders?colors=bg");
-    expect(f.href("Including these colors")).toBe("/commanders?colors=bg&match=including");
-    // Both picked colors stay marked.
+    expect(f.current(TOGGLE)).toBe("page");
+    expect(f.link(TOGGLE).className).toContain("ring-accent-game");
+    expect(f.href(TOGGLE)).toBe("/commanders?colors=bg");
+    // Both picked colors stay marked beside it.
     expect(COLORS.filter((name) => f.current(name) === "page")).toEqual(["Black", "Green"]);
 
-    const note = f.nav.querySelector("p") as HTMLElement;
+    // The line is the filter row's next sibling, outside the landmark, and
+    // describes the toggle.
+    const note = noteLine() as HTMLElement;
     expect(note.textContent).toBe(
       "Commanders whose colors include Black and Green, alone or with others.",
     );
-    expect(f.group.getAttribute("aria-describedby")).toBe(note.id);
+    expect(note.tagName).toBe("P");
+    expect(f.nav.contains(note)).toBe(false);
+    expect(f.nav.parentElement?.nextElementSibling).toBe(note);
+    expect(f.link(TOGGLE).getAttribute("aria-describedby")).toBe(note.id);
+
     // The rank is still a position in the list shown: page 2 opens at 61.
     const tiles = [...container.querySelectorAll('a[href^="/c/"]')];
     expect(tiles).toHaveLength(60);
@@ -225,7 +299,8 @@ describe("/commanders — including", () => {
     });
     const f = filterNav();
     expect(f.current("All")).toBe("page");
-    expect(f.current("Including these colors")).toBe("page");
+    expect(f.current(TOGGLE)).toBe("page");
+    expect(f.href(TOGGLE)).toBe("/commanders");
     expect(["All", ...COLORS].map(f.href)).toEqual([
       "/commanders?match=including",
       "/commanders?colors=w&match=including",
@@ -235,7 +310,7 @@ describe("/commanders — including", () => {
       "/commanders?colors=g&match=including",
       "/commanders?colors=c&match=including",
     ]);
-    expect(f.nav.querySelector("p")?.textContent).toBe(
+    expect(noteLine()?.textContent).toBe(
       "Pick a color to see every commander whose colors include it.",
     );
     expect(hiddenInputs(container)).toEqual(["match=including"]);
@@ -253,16 +328,17 @@ describe("/commanders — including", () => {
     });
     const f = filterNav();
     expect(f.current("Colorless")).toBe("page");
-    // The reader's mode stays marked and stays on the links.
-    expect(f.current("Including these colors")).toBe("page");
+    // The reader's mode stays pressed and stays on the links.
+    expect(f.current(TOGGLE)).toBe("page");
     expect(f.href("Black")).toBe("/commanders?colors=b&match=including");
-    const note = f.nav.querySelector("p") as HTMLElement;
+    const note = noteLine() as HTMLElement;
     expect(note.textContent).toBe(
       "Colorless is always exact: these commanders have no colors to include.",
     );
     // Visible text, not a title: a phone has no hover.
     expect(note.className).not.toContain("sr-only");
     expect(f.nav.querySelector("[title]")).toBeNull();
+    expect(note.hasAttribute("title")).toBe(false);
   });
 });
 
@@ -306,13 +382,33 @@ describe("/commanders — the empty states", () => {
 });
 
 describe("/commanders — the server's markup", () => {
-  it("the mode chips and the hidden inputs are plain HTML: links with href and aria-current", async () => {
+  /** The toggle's opening tag, as the server wrote it. */
+  const toggleTag = (html: string) =>
+    html.match(/<a\b[^>]*>(?=<span[^>]*>Include other colors<\/span><\/a>)/)?.[0] ?? "";
+  /** How often the words are text in the document (the label's attribute aside). */
+  const written = (html: string) => html.match(/>Include other colors</g)?.length ?? 0;
+
+  it("under including the toggle is a plain link back to the exact page, marked current, and the line and the hidden input are HTML", async () => {
     const html = renderToString(await page({ colors: "b", match: "including" }));
-    expect(html).toMatch(
-      /<a[^>]*aria-current="page"[^>]*href="\/commanders\?colors=b&amp;match=including"[^>]*>Including these colors<\/a>/,
-    );
-    expect(html).toMatch(/<a[^>]*href="\/commanders\?colors=b"[^>]*>Exactly these colors<\/a>/);
+    expect(written(html)).toBe(1);
+    const tag = toggleTag(html);
+    expect(tag).toContain('href="/commanders?colors=b"');
+    expect(tag).toContain('aria-current="page"');
+    expect(tag).toContain('aria-describedby="commanders-match-note"');
     expect(html).toContain('<input type="hidden" name="match" value="including"/>');
-    expect(html).toContain("Commanders whose colors include Black, alone or with others.");
+    expect(html).toMatch(
+      /<p id="commanders-match-note"[^>]*>Commanders whose colors include Black, alone or with others\.<\/p>/,
+    );
+  });
+
+  it("by default the toggle is a plain link to the including page, unmarked, and no line is written", async () => {
+    const html = renderToString(await page({ colors: "b" }));
+    expect(written(html)).toBe(1);
+    const tag = toggleTag(html);
+    expect(tag).toContain('href="/commanders?colors=b&amp;match=including"');
+    expect(tag).not.toContain("aria-current");
+    expect(tag).not.toContain("aria-describedby");
+    expect(html).not.toContain("commanders-match-note");
+    expect(html).not.toContain('name="match"');
   });
 });
