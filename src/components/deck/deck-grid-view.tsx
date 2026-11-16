@@ -19,11 +19,19 @@
  *
  * U3a (WAVE5 D4): the text view's `GroupHeading` — label and count on
  * space — on the editor and, since U6 (WAVE5 D7), the share page too.
+ *
+ * PRECON-CHANGES: `beyondPrecon` (the editor's alone) badges each card the
+ * list holds beyond the precon's copies: a circled plus and "Added", named
+ * "Not in the precon", in the top-left corner under the id and owned
+ * badges (a badge of its own, so their row is as it was). The share page
+ * passes nothing.
  */
+import { CirclePlusIcon } from "lucide-react";
 import { useId } from "react";
 
 import { CardImage } from "@/components/cards/card-image";
 import { GroupHeading } from "@/components/deck/deck-text-view";
+import { PRECON_COPY } from "@/lib/collection/precon-copy";
 import type { EditorCard, EditorEntry } from "@/lib/decks/editor-state";
 import type { DeckGroup } from "@/lib/decks/view-model";
 import type { GameAdapter } from "@/lib/games/types";
@@ -36,6 +44,11 @@ interface DeckGridViewProps {
   onPreview: (card: EditorCard) => void;
   /** Card ids the viewer owns any printing of (P3.7); absent = no collection, no badges. */
   owned?: ReadonlySet<string>;
+  /**
+   * PRECON-CHANGES: identity → the copies the list holds beyond the precon's
+   * (precon-changes.ts `beyondPrecon`); absent = no precon lineage, no badges.
+   */
+  beyondPrecon?: ReadonlyMap<string, number>;
   /** For the printed-id badge (C13); absent = no id badges. */
   adapter?: GameAdapter;
   /** Editor: group headers stick to the top of the scrolling pane (C12). */
@@ -54,6 +67,7 @@ export function DeckGridView({
   severity,
   onPreview,
   owned,
+  beyondPrecon,
   adapter,
   stickyHeaders = false,
   headings = true,
@@ -75,6 +89,7 @@ export function DeckGridView({
               const badge = adapter?.display.idBadge?.(card);
               const level = severity.get(card.id);
               const levelId = level ? `${idPrefix}-${entry.zone}-${card.id}` : undefined;
+              const beyond = beyondPrecon?.get(card.id) ?? 0;
               return (
                 <li key={`${entry.zone}:${entry.cardId}`} className="relative">
                   <button
@@ -125,6 +140,22 @@ export function DeckGridView({
                           ✓ Owned
                         </span>
                       )}
+                    </span>
+                  )}
+                  {/* PRECON-CHANGES: its own badge, under the id / owned row when there is one. */}
+                  {beyond > 0 && (
+                    <span
+                      role="img"
+                      data-slot="precon-mark"
+                      aria-label={PRECON_COPY.rowMark(beyond, entry.qty)}
+                      className={cn(
+                        BADGE_CLASS,
+                        "absolute left-1 inline-flex items-center gap-1",
+                        badge || owned?.has(card.id) ? "top-7" : "top-1",
+                      )}
+                    >
+                      <CirclePlusIcon aria-hidden className="size-3" />
+                      {PRECON_COPY.added}
                     </span>
                   )}
                 </li>

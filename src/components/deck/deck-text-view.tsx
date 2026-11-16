@@ -57,8 +57,15 @@
  * hovered minus or plus tints with its inner corners square, the outer two
  * keep the 9.6 px radius. The buttons still reveal one by one (the count
  * never hides, R3) at 24 px, 44 on touch (D1); the count keeps `data-slot="qty"`.
+ *
+ * PRECON-CHANGES: `beyondPrecon` (the editor's alone, on a deck started from
+ * a precon) marks each row whose identity the list holds beyond the precon's
+ * copies: a circled plus in the foreground ink after the owned mark, inside
+ * the same truncating name button, named "Not in the precon" ("2 not in the
+ * precon" when only some of the row's copies are). A shape with a name, never
+ * a color alone. The share page passes nothing.
  */
-import { ArrowLeftRightIcon, XIcon } from "lucide-react";
+import { ArrowLeftRightIcon, CirclePlusIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
 
 import { CHROME_CLASS } from "@/components/chrome-material";
@@ -66,6 +73,7 @@ import { CardNamePreview } from "@/components/deck/card-name-preview";
 import { CostPips } from "@/components/deck/cost-pips";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup, ButtonGroupText } from "@/components/ui/button-group";
+import { PRECON_COPY } from "@/lib/collection/precon-copy";
 import type { EditorCard, EditorEntry } from "@/lib/decks/editor-state";
 import type { DeckGroup } from "@/lib/decks/view-model";
 import type { GameAdapter } from "@/lib/games/types";
@@ -208,6 +216,11 @@ interface DeckTextViewProps {
   onPreview: (card: EditorCard) => void;
   /** Card ids the viewer owns any printing of (P3.7); absent = no collection, no marks. */
   owned?: ReadonlySet<string>;
+  /**
+   * PRECON-CHANGES: identity → the copies the list holds beyond the precon's
+   * (precon-changes.ts `beyondPrecon`); absent = no precon lineage, no marks.
+   */
+  beyondPrecon?: ReadonlyMap<string, number>;
   /** Editor: group headers stick to the top of the scrolling pane (C12). */
   stickyHeaders?: boolean;
   /** The row ("zone:cardId") whose quantity badge pops, with a nonce so each pop remounts (F3). */
@@ -233,6 +246,7 @@ export function DeckTextView({
   canSwap,
   onPreview,
   owned,
+  beyondPrecon,
   stickyHeaders = false,
   pop = null,
   preview = false,
@@ -257,6 +271,7 @@ export function DeckTextView({
               const badge = adapter.display.idBadge?.(card);
               const stats = adapter.display.rowStats?.(card);
               const words = caption?.(card);
+              const beyond = beyondPrecon?.get(card.id) ?? 0;
               const nameButton = (
                 <button
                   type="button"
@@ -288,6 +303,18 @@ export function DeckTextView({
                       className="shrink-0 text-xs text-emerald-700 dark:text-emerald-400"
                     >
                       ✓
+                    </span>
+                  )}
+                  {/* PRECON-CHANGES: beside the owned mark, never in its place. */}
+                  {beyond > 0 && (
+                    <span
+                      role="img"
+                      data-slot="precon-mark"
+                      aria-label={PRECON_COPY.rowMark(beyond, entry.qty)}
+                      title={PRECON_COPY.rowMark(beyond, entry.qty)}
+                      className="text-foreground shrink-0"
+                    >
+                      <CirclePlusIcon aria-hidden className="size-3.5" />
                     </span>
                   )}
                   {/* Printed id (C13) and the row stats (C15) — One Piece; Magic declares neither. */}

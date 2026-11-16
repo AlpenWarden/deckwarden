@@ -122,6 +122,16 @@
  * Swap to fit's: ONE `applyListSwap`, "Swapped N cards" with one Undo, focus
  * back to "Why?", the cards coming in priced against `ownedSetForPricing`.
  *
+ * PRECON-CHANGES (the owner's pick of 2026-11-15, LATER row 345): what a
+ * deck started from a precon has changed from the box, derived on every
+ * render from the precon's own list (`precon.cards`) and the list on screen
+ * (`preconChanges`), never stored: the deck pane's second line ("Changed
+ * from the precon: 25 out, 25 in."), the rows' marks, and "precon-changes",
+ * the sheet "See changes" opens with both lists. So an Undo, a reload or an
+ * edit by hand moves all three in the same render. The sheet prices its Add
+ * list against the collection's set alone, the ownership line's own: the
+ * precon's copies are already out of that list.
+ *
  * Game-agnostic by construction: zones, labels, and card display all come off
  * the adapter registry (FormatDef, display.*) — nothing MTG-specific here.
  */
@@ -160,6 +170,7 @@ import {
 } from "@/components/editor/editor-layout";
 import { HistoryDialog } from "@/components/editor/history-dialog";
 import { ExportDialog, ImportDialog } from "@/components/editor/import-export";
+import { PreconChangesSheet } from "@/components/editor/precon-changes-sheet";
 import { RecommendationsPanel } from "@/components/editor/recommendations-panel";
 import { SearchPane, type SearchPaneHandle } from "@/components/editor/search-pane";
 import { SwapInSheet, SwapSheet } from "@/components/editor/swap-sheet";
@@ -212,6 +223,7 @@ import {
   withTotal,
   type DeckGoals,
 } from "@/lib/decks/goals";
+import { beyondPrecon, preconChanges } from "@/lib/decks/precon-changes";
 import {
   ownedForPricing,
   ownedPreconCopies,
@@ -1754,6 +1766,15 @@ export function DeckEditor({
     setDialogFromMenu(false);
     setDialog("fit");
   }, []);
+  // PRECON-CHANGES: the deck pane's "See changes": the sheet with both lists.
+  // Focus goes back to that control once the sheet closes, by name (a click
+  // doesn't focus a button everywhere, so "what was focused" can't be trusted).
+  const openPreconChanges = useCallback(() => {
+    closeFocusRef.current = () =>
+      document.querySelector<HTMLElement>("[data-slot=precon-changes-line] button");
+    setDialogFromMenu(false);
+    setDialog("precon-changes");
+  }, []);
 
   // Whole-list swap with Undo (W9b): Import and Autofill both land here.
   // The previous list is captured for the toast's Undo, which restores it
@@ -2297,6 +2318,18 @@ export function DeckEditor({
   const ownedSetForPricing = useMemo(
     () => ownedForPricing(hasCollection ? owned : null, preconCopies),
     [hasCollection, owned, preconCopies],
+  );
+  // PRECON-CHANGES: what the list on screen changed from the precon's own
+  // list, derived on every render and never stored: the deck pane's second
+  // line, the sheet's two lists and the rows' marks. Null without a lineage.
+  const preconList = precon?.cards ?? null;
+  const preconDiff = useMemo(
+    () => (preconList && format ? preconChanges(preconList, entries, format) : null),
+    [preconList, entries, format],
+  );
+  const preconBeyond = useMemo(
+    () => (preconDiff ? (beyondPrecon(preconDiff) ?? undefined) : undefined),
+    [preconDiff],
   );
   // "You own N/100 · missing ≈ $Y" (P3.7): pure math over the same entries,
   // card prices and owned set; null (nothing rendered) without a collection
@@ -2870,6 +2903,20 @@ export function DeckEditor({
               onClose={() => setDialog(null)}
             />
           )}
+          {/* PRECON-CHANGES: the "Changes from <precon>" sheet, opened only by the deck pane's "See changes". */}
+          {dialog === "precon-changes" && precon && preconDiff && (
+            <PreconChangesSheet
+              adapter={load.adapter}
+              precon={precon}
+              changes={preconDiff}
+              cards={cards}
+              // The collection's set alone, the ownership line's: the precon's copies are not in the Add list.
+              owned={hasCollection ? owned : null}
+              phone={tier === "phone"}
+              finalFocus={sheetFinalFocus}
+              onClose={() => setDialog(null)}
+            />
+          )}
           {dialog === "shortcuts" && (
             <ShortcutsSheet
               mainZoneLabel={mainZone?.label ?? "the deck"}
@@ -2936,6 +2983,9 @@ export function DeckEditor({
           ownership={ownership}
           precon={precon}
           onAnswerPrecon={handleAnswerPrecon}
+          preconChanges={preconDiff}
+          onSeePreconChanges={openPreconChanges}
+          beyondPrecon={preconBeyond}
           onAddTokens={tokenZoneOf(load.format) ? handleAddTokens : undefined}
           hiddenTokens={hiddenTokens}
           onHideToken={handleHideToken}

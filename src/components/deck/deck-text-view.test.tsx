@@ -575,3 +575,73 @@ describe("DeckTextView — the stuck heading (U3b, WAVE5 D4)", () => {
     expect(observer.disconnected).toBe(true);
   });
 });
+
+describe("DeckTextView — the precon mark (PRECON-CHANGES)", () => {
+  const rows = group([{ card: sol }, { card: forest, qty: 14 }]);
+  const mark = (name: string) =>
+    screen
+      .getByRole("button", { name: new RegExp(`^${name}`) })
+      .querySelector("[data-slot=precon-mark]");
+
+  it("a row the precon did not hold is marked by a shape with a name, never a color alone", () => {
+    render(
+      <DeckTextView
+        adapter={mtg}
+        groups={rows}
+        severity={new Map()}
+        onPreview={() => {}}
+        beyondPrecon={new Map([[sol.id, 1]])}
+      />,
+    );
+    const el = mark("Sol Ring")!;
+    expect(el.getAttribute("role")).toBe("img");
+    expect(el.getAttribute("aria-label")).toBe("Not in the precon");
+    expect(el.getAttribute("title")).toBe("Not in the precon");
+    expect(el.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+    // The foreground ink: no hue carries it.
+    expect(el.className).toContain("text-foreground");
+    expect(el.className).not.toMatch(/emerald|amber|destructive/);
+    expect(mark("Forest")).toBeNull();
+  });
+
+  it("only some of a row's copies beyond the precon's: the name says how many", () => {
+    render(
+      <DeckTextView
+        adapter={mtg}
+        groups={rows}
+        severity={new Map()}
+        onPreview={() => {}}
+        beyondPrecon={new Map([[forest.id, 2]])}
+      />,
+    );
+    expect(mark("Forest")!.getAttribute("aria-label")).toBe("2 not in the precon");
+    expect(mark("Sol Ring")).toBeNull();
+  });
+
+  it("beside the owned mark, after it, both inside the name button", () => {
+    render(
+      <DeckTextView
+        adapter={mtg}
+        groups={rows}
+        severity={new Map()}
+        onPreview={() => {}}
+        owned={new Set([sol.id])}
+        beyondPrecon={new Map([[sol.id, 1]])}
+      />,
+    );
+    const button = screen.getByRole("button", { name: /^Sol Ring/ });
+    const marks = [...button.querySelectorAll("[role=img]")].map((m) =>
+      m.getAttribute("aria-label"),
+    );
+    expect(marks).toEqual(["In your collection", "Not in the precon"]);
+    expect(button.querySelector("[data-slot=precon-mark]")!.className).toContain("shrink-0");
+  });
+
+  it("no map, no mark: the share page's rows are as they were", () => {
+    const { container } = render(
+      <DeckTextView adapter={mtg} groups={rows} severity={new Map()} onPreview={() => {}} />,
+    );
+    expect(container.querySelector("[data-slot=precon-mark]")).toBeNull();
+    expect(screen.getByRole("button", { name: "Sol Ring" })).toBeTruthy();
+  });
+});

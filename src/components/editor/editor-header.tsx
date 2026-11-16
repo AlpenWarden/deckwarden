@@ -110,7 +110,9 @@ export type EditorDialog =
   // BRACKET-UP: the "Upgrade toward" sheet — the Why sheet's Below your target door.
   | "target-up"
   // Y9a: the Games dialog — More's "Games…" (live decks, games with a journal).
-  | "games";
+  | "games"
+  // PRECON-CHANGES: the "Changes from <precon>" sheet — the deck pane's "See changes".
+  | "precon-changes";
 
 export function EditorHeader({
   adapter,

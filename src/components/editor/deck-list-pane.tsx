@@ -90,6 +90,14 @@
  * collection or an owned precon (the editor decides); its method names the
  * precon's rule when one is owned. The rows' "In your collection" mark
  * stays the collection's.
+ *
+ * PRECON-CHANGES: `preconChanges` puts "Changed from the precon: 25 out, 25
+ * in." with "See changes" (precon-changes-line.tsx) directly after that
+ * line, on every deck with a lineage, and `beyondPrecon` marks the rows the
+ * precon did not hold in both views. Both are derived by the editor from
+ * the precon's own list and the list on screen; the line arrives with the
+ * precon line, and keeps its height when the first change lands. The Tokens
+ * section takes no marks: tokens count toward no size.
  */
 import { ChevronDownIcon, PlusIcon } from "lucide-react";
 import Link from "next/link";
@@ -105,6 +113,7 @@ import { TokensSection } from "@/components/deck/tokens-section";
 import { useTokenFill } from "@/components/deck/use-token-fill";
 import { GROUP_OPTIONS, Segmented, SORT_OPTIONS, VIEW_OPTIONS } from "@/components/deck/segmented";
 import { ValidationPanel } from "@/components/deck/validation-panel";
+import { PreconChangesLine } from "@/components/editor/precon-changes-line";
 import { PreconLine } from "@/components/editor/precon-line";
 import { EmptyState } from "@/components/empty-state";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -163,6 +172,12 @@ interface DeckListPaneProps {
   precon?: { name: string; owns: boolean | null } | null;
   /** PRECON-OWNED: the line's Yes / No — the editor's edit. */
   onAnswerPrecon?: (owns: boolean) => void;
+  /** PRECON-CHANGES: copies out of the box and copies added, from the list on screen; absent = no line. */
+  preconChanges?: { outQty: number; inQty: number } | null;
+  /** PRECON-CHANGES: the line's "See changes" — the editor's sheet. */
+  onSeePreconChanges?: () => void;
+  /** PRECON-CHANGES: identity → the copies the list holds beyond the precon's; absent = no marks. */
+  beyondPrecon?: ReadonlyMap<string, number>;
   /**
    * "Add cards" (R4): the phone's way into Search — the summary row's
    * primary action (phones only) and the empty state's action (every tier;
@@ -225,6 +240,9 @@ export function DeckListPane({
   ownership = null,
   precon = null,
   onAnswerPrecon,
+  preconChanges = null,
+  onSeePreconChanges,
+  beyondPrecon,
   onAddCards,
   onAutofill,
   doors = [],
@@ -467,6 +485,14 @@ export function DeckListPane({
       {precon && onAnswerPrecon && (
         <PreconLine className="mt-3" precon={precon} onAnswer={onAnswerPrecon} />
       )}
+      {/* PRECON-CHANGES: what the list changed from the box, with the same list. */}
+      {precon && preconChanges && (
+        <PreconChangesLine
+          className={onAnswerPrecon ? "mt-1 pointer-coarse:mt-0" : "mt-3"}
+          changes={preconChanges}
+          onSee={onSeePreconChanges}
+        />
+      )}
 
       {/* A quiet first screen (Y2a): nothing to view, group or sort yet.
           U3a: "View" is the group's name, not a label (Text / Grid says it).
@@ -602,6 +628,7 @@ export function DeckListPane({
           canSwap={canSwap}
           onPreview={onPreview}
           owned={owned}
+          beyondPrecon={beyondPrecon}
           stickyHeaders
           pop={pop}
         />
@@ -611,6 +638,7 @@ export function DeckListPane({
           severity={severity}
           onPreview={onPreview}
           owned={owned}
+          beyondPrecon={beyondPrecon}
           adapter={adapter}
           stickyHeaders
         />

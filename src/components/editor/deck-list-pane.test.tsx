@@ -509,6 +509,151 @@ describe("DeckListPane — Do you own this precon? (PRECON-OWNED)", () => {
   });
 });
 
+describe("DeckListPane — Changed from the precon (PRECON-CHANGES)", () => {
+  const sol = toEditorCard({ ...card({ name: "Sol Ring", primaryType: "Artifact" }), image: null });
+  const forest = toEditorCard({
+    ...card({ name: "Forest", primaryType: "Land", costValue: null }),
+    image: null,
+  });
+  const listed: EditorEntry[] = [
+    ...entries,
+    { cardId: sol.id, zone: "main", qty: 1, tags: [] },
+    { cardId: forest.id, zone: "main", qty: 14, tags: [] },
+  ];
+  const listedCards = new Map([...cards, [sol.id, sol], [forest.id, forest]]);
+  function withChanges(over: Partial<React.ComponentProps<typeof DeckListPane>> = {}) {
+    return (
+      <DeckListPane
+        adapter={mtg}
+        format={COMMANDER}
+        entries={listed}
+        cards={listedCards}
+        issues={[]}
+        analytics={[]}
+        onSetQty={() => undefined}
+        onRemove={() => {}}
+        onPreview={() => {}}
+        extras={false}
+        precon={{ name: "Breed Lethality", owns: true }}
+        onAnswerPrecon={() => {}}
+        preconChanges={{ outQty: 0, inQty: 0 }}
+        onSeePreconChanges={() => {}}
+        {...over}
+      />
+    );
+  }
+  const line = () => document.querySelector<HTMLElement>("[data-slot=precon-changes-line]");
+
+  it("the second line: directly after the precon line and before View / Group / Sort", () => {
+    render(withChanges());
+    const el = line()!;
+    expect(el.tagName).toBe("P");
+    expect(el.previousElementSibling?.getAttribute("data-slot")).toBe("precon-line");
+    expect(
+      within(el.nextElementSibling as HTMLElement).getByRole("group", { name: "View" }),
+    ).toBeTruthy();
+  });
+
+  it("no changes: the sentence alone, with nothing to press", () => {
+    render(withChanges());
+    expect(line()!.textContent).toBe("No changes from the precon yet.");
+    expect(line()!.dataset.state).toBe("none");
+    expect(within(line()!).queryByRole("button")).toBeNull();
+  });
+
+  it("changed: the copies out and in, then See changes after a gap, which is the editor's", () => {
+    const seen: number[] = [];
+    render(
+      withChanges({
+        preconChanges: { outQty: 25, inQty: 27 },
+        onSeePreconChanges: () => seen.push(1),
+      }),
+    );
+    expect(line()!.textContent).toBe("Changed from the precon: 25 out, 27 in. See changes");
+    expect(line()!.dataset.state).toBe("changed");
+    const see = within(line()!).getByRole("button", { name: "See changes" });
+    expect(see.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(document.getElementById(see.getAttribute("aria-describedby")!)!.textContent).toBe(
+      "Changed from the precon: 25 out, 27 in.",
+    );
+    // After a gap, underlined, 44 px on touch (U9).
+    expect(line()!.className).toContain("gap-x-1.5");
+    expect(see.className).toContain("underline");
+    expect(see.className).toContain("pointer-coarse:min-h-11");
+    fireEvent.click(see);
+    expect(seen).toEqual([1]);
+  });
+
+  it("the line keeps its box when the first change lands: the control's 44 px on touch either way", () => {
+    const { rerender } = render(withChanges());
+    const classes = () => line()!.className.split(" ");
+    expect(classes()).toContain("pointer-coarse:min-h-11");
+    rerender(withChanges({ preconChanges: { outQty: 1, inQty: 1 } }));
+    expect(classes()).toContain("pointer-coarse:min-h-11");
+    // The words wrap inside their own box beside the control, never under it.
+    expect(classes()).toContain("flex");
+    expect(line()!.querySelector("span")!.className).toContain("min-w-0");
+    expect(within(line()!).getByRole("button").className).toContain("shrink-0");
+  });
+
+  it("no lineage, or no changes handed in: no line", () => {
+    const { rerender } = render(withChanges({ precon: null }));
+    expect(line()).toBeNull();
+    rerender(withChanges({ preconChanges: null }));
+    expect(line()).toBeNull();
+    expect(document.querySelector("[data-slot=precon-line]")).not.toBeNull();
+  });
+
+  it("while a seed lands there is no line; it comes with the list and the precon line", () => {
+    const { rerender } = render(
+      withChanges({
+        entries: [],
+        cards: new Map(),
+        precon: null,
+        preconChanges: null,
+        seeding: true,
+      }),
+    );
+    expect(line()).toBeNull();
+    rerender(withChanges());
+    expect(line()!.textContent).toBe("No changes from the precon yet.");
+  });
+
+  it("the rows' marks, in both views: beside the owned mark, and none in the Tokens section", () => {
+    render(
+      withChanges({
+        owned: new Set([sol.id]),
+        beyondPrecon: new Map([
+          [sol.id, 1],
+          [forest.id, 2],
+        ]),
+      }),
+    );
+    const names = () =>
+      [...document.querySelectorAll("[data-slot=precon-mark]")].map((m) =>
+        m.getAttribute("aria-label"),
+      );
+    // Text view: the type groups run Artifact then Land.
+    expect(names()).toEqual(["Not in the precon", "2 not in the precon"]);
+    const row = screen.getByRole("button", { name: /^Sol Ring/ });
+    expect(
+      [...row.querySelectorAll("[role=img]")].map((m) => m.getAttribute("aria-label")),
+    ).toEqual(["In your collection", "Not in the precon"]);
+
+    fireEvent.click(within(screen.getByRole("group", { name: "View" })).getByText("Grid"));
+    expect(names()).toEqual(["Not in the precon", "2 not in the precon"]);
+    expect(
+      [...document.querySelectorAll("[data-slot=precon-mark]")].map((m) => m.textContent),
+    ).toEqual(["Added", "Added"]);
+    expect(document.querySelector("[data-slot=tokens-section] [data-slot=precon-mark]")).toBeNull();
+  });
+
+  it("no map: no row is marked", () => {
+    render(withChanges({ preconChanges: { outQty: 2, inQty: 0 } }));
+    expect(document.querySelector("[data-slot=precon-mark]")).toBeNull();
+  });
+});
+
 describe("DeckListPane — one primary door in the empty state (FRESH-UI-EDITOR)", () => {
   const doors = startDoors(mtg, COMMANDER);
   const PRIMARY = "bg-primary";

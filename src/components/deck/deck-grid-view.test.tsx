@@ -88,3 +88,57 @@ describe("DeckGridView — the group heading (U3a)", () => {
     expect(share.container.querySelector("section")?.hasAttribute("class")).toBe(false);
   });
 });
+
+describe("DeckGridView — the precon badge (PRECON-CHANGES)", () => {
+  const badge = (name: string) =>
+    screen
+      .getByRole("button", { name: `Show ${name}` })
+      .closest("li")!
+      .querySelector<HTMLElement>("[data-slot=precon-mark]");
+
+  it("a card the precon did not hold: a circled plus and Added, named Not in the precon, in the top-left corner", () => {
+    render(
+      <DeckGridView
+        groups={groups}
+        severity={new Map()}
+        onPreview={() => {}}
+        beyondPrecon={new Map([[bolt.id, 1]])}
+      />,
+    );
+    const el = badge("Lightning Bolt")!;
+    expect(el.textContent).toBe("Added");
+    expect(el.getAttribute("role")).toBe("img");
+    expect(el.getAttribute("aria-label")).toBe("Not in the precon");
+    expect(el.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+    const classes = el.className.split(" ");
+    expect(classes).toEqual(expect.arrayContaining(["absolute", "left-1", "top-1"]));
+    expect(badge("Sol Ring")).toBeNull();
+    // The button keeps its name.
+    expect(screen.getByRole("button", { name: "Show Lightning Bolt" })).toBeTruthy();
+  });
+
+  it("under the owned badge when the card has one, which stays where it was", () => {
+    render(
+      <DeckGridView
+        groups={groups}
+        severity={new Map()}
+        onPreview={() => {}}
+        owned={new Set([bolt.id])}
+        beyondPrecon={new Map([[bolt.id, 1]])}
+      />,
+    );
+    const el = badge("Lightning Bolt")!;
+    expect(el.className.split(" ")).toContain("top-7");
+    const owned = screen.getByLabelText("In your collection");
+    expect(owned.textContent).toBe("✓ Owned");
+    expect(owned.parentElement!.className).toContain("top-1 left-1");
+    expect(owned.parentElement!.contains(el)).toBe(false);
+  });
+
+  it("no map, no badge", () => {
+    const { container } = render(
+      <DeckGridView groups={groups} severity={new Map()} onPreview={() => {}} />,
+    );
+    expect(container.querySelector("[data-slot=precon-mark]")).toBeNull();
+  });
+});
