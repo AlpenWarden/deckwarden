@@ -12,8 +12,18 @@
  *
  * Determinism: same input → same output. Ties break by popularity (asc,
  * nulls last), then name, then id.
+ *
+ * COMMANDER-FIT: the list's themes are the fifth signal and the only one
+ * that reads the deck in front of it. A candidate carrying a theme's word
+ * scores that theme's pull (its strength, scaled by how much the word says
+ * of a card outside the list), and its line LEADS the evidence — it is the
+ * reason this card is here for this list, where the lines after it would
+ * say the same of any list in these colors. Callers that hand in no themes
+ * (Autofill, Swap Lab) get the order they always got: the four older
+ * weights keep their ratios, so a list without themes is ranked as before.
  */
-import type { CurveCardInput, RecommendMeta } from "@/lib/games/types";
+import type { CurveCardInput, DeckTheme, RecommendMeta } from "@/lib/games/types";
+import { themeConfidence, themeOf, themePull } from "./themes";
 import type {
   CandidateCard,
   CandidateCombo,
@@ -32,7 +42,34 @@ import type {
  * (P3.1 shipped without tournaments at .45/.35/.20; the P3.8 rebalance takes
  * proportionally from all three.)
  */
-export const WEIGHTS = { popularity: 0.3, tournaments: 0.3, combos: 0.25, curve: 0.15 } as const;
+const BEFORE_THEMES = { popularity: 0.3, tournaments: 0.3, combos: 0.25, curve: 0.15 } as const;
+
+/**
+ * The themes' seat (COMMANDER-FIT), set on the precons (2026-11-16, the dev
+ * branch, two seeds): ten nonland cards held out of each list, and how
+ * often Suggestions' 25 rows bring them back. On the 66 lists built around
+ * a subtype, 0.4 % of the held-out theme cards came back without the signal
+ * and 2.7 % of all the held-out cards; at .25, 28.3 % and 11.1 %, with 16
+ * of the 25 rows carrying the theme (the second seed: 0.9 to 27.8 %, and
+ * 3.8 to 11.3 %). .3 brings back 13.2 % and .4 13.6 %, with the theme on 19
+ * and 23 of the rows: past .25 the older signals leave a typal list almost
+ * entirely, a cost the precons can't see — they hold few of the staples
+ * those signals are good at (4.0 % of the other held-out cards came back
+ * even before). .25 takes three quarters of the gain there is (8.4 of 10.9
+ * points) and keeps the older signals a third of the list. The 85 lists
+ * read for no theme are ranked as before, card for card.
+ */
+export const THEME_WEIGHT = 0.25;
+
+const REST = 1 - THEME_WEIGHT;
+
+export const WEIGHTS = {
+  popularity: BEFORE_THEMES.popularity * REST,
+  tournaments: BEFORE_THEMES.tournaments * REST,
+  combos: BEFORE_THEMES.combos * REST,
+  curve: BEFORE_THEMES.curve * REST,
+  themes: THEME_WEIGHT,
+} as const;
 
 /** Rank at which the popularity signal reads 0.5 (rank 1 ≈ 1.0, 10k ≈ 0.17). */
 export const POPULARITY_PIVOT = 2000;
@@ -139,6 +176,12 @@ export interface RankInput {
   tournamentsByCandidate?: ReadonlyMap<string, TournamentSignal>;
   tournamentContext?: TournamentContext | null;
   /**
+   * The list's themes (COMMANDER-FIT), strongest first, matched against
+   * each candidate's `themeText`. Absent or empty = no theme evidence — a
+   * list read for none, or a caller that doesn't read them.
+   */
+  themes?: readonly DeckTheme[];
+  /**
    * The cut; absent = every candidate, ranked (Y6a: the engine ranks all,
    * applies the deck's goals, and only then slices — recommend/goals.ts).
    */
@@ -153,6 +196,21 @@ export function rankCandidates(input: RankInput): Recommendation[] {
   for (const cand of candidates) {
     const evidence: RecommendationEvidence[] = [];
     let score = 0;
+
+    // The list's own reason leads (see the module doc).
+    const theme =
+      meta.themes && input.themes ? themeOf(meta.themes, input.themes, cand.themeText) : null;
+    if (meta.themes && theme) {
+      const { why, howOften } = meta.themes.evidence(theme);
+      evidence.push({
+        source: meta.themes.source,
+        why,
+        with: [],
+        howOften,
+        confidence: themeConfidence(theme),
+      });
+      score += WEIGHTS.themes * themePull(theme);
+    }
 
     if (meta.popularity && cand.popularity !== null) {
       const { why, howOften } = meta.popularity.evidence(cand.popularity);

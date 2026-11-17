@@ -65,6 +65,11 @@ export interface CandidateCard {
   flags: Record<string, unknown>;
   /** Swap Lab's role keys (Y7a) — present only when the gather asked for roles. */
   roles?: string[];
+  /**
+   * The card's text at the adapter's `themes.path` (COMMANDER-FIT) — present
+   * only when the gather read themes from the list; null = it holds none.
+   */
+  themeText?: string | null;
 }
 
 /** One combo a candidate would complete the card requirements of. */

@@ -263,6 +263,64 @@ export type CurveCardInput = Pick<CardData, "primaryType" | "costValue">;
 export type CutSide = "cut" | "keep";
 
 /**
+ * One theme of a list (COMMANDER-FIT): a word its cards carry in the text
+ * the adapter declares (Magic: a type on the type line) — because many of
+ * the list's cards share it, or because a leader's rules text names it.
+ * Counted and read, never judged: the evidence says which of the two it is.
+ */
+export interface DeckTheme {
+  /** The word as cards print it ("Sliver", "Enchantment") — the match key. */
+  word: string;
+  /** Cards in the list that carry it, copies counted, the leaders included. */
+  count: number;
+  /** The leader whose rules text names it; null = the list's count alone. */
+  namedBy: string | null;
+  /** How much of a theme it is, in (0, 1] — the rankers' scale. */
+  strength: number;
+  /**
+   * How much it says of a card OUTSIDE the list that it carries the word,
+   * in (0, 1]: 1 for a word few cards carry, less for an everyday one the
+   * adapter still reads as a theme (Magic: a fifth of the most played cards
+   * are artifacts). Both directions scale a theme's strength by it: among
+   * candidates an everyday word picks from thousands, and in the list the
+   * cards that make such a theme work often don't carry the word at all
+   * (an enchantment deck's enchantresses are creatures).
+   */
+  selectivity: number;
+}
+
+/**
+ * Themes declaration (COMMANDER-FIT) — what a list is built around, as far
+ * as stored card facts can say it. The core (src/lib/recommend/themes.ts,
+ * rank.ts, cuts.ts, queries.ts) names no word and no game: it hands the
+ * adapter the list's texts, matches a card's words against what comes back,
+ * and finds more cards carrying a theme's word through `path`. Absent = no
+ * theme signal for this game, in either direction.
+ */
+export interface ThemesMeta {
+  /** Evidence-source slug; the sibling `sources` map names it. */
+  source: string;
+  /** The single-segment attrs path of the text a theme is a word of (MTG: "type_line"). */
+  path: string;
+  /** The single-segment attrs path of a leader's rules text (MTG: "oracle_text"). */
+  leaderPath: string;
+  /** The words of a card's `path` text that could be a theme (MTG: its subtypes and three card types). */
+  wordsOf(text: string): string[];
+  /**
+   * The list's themes, strongest first; [] = none found, which is an
+   * answer (a list built around nothing its type lines show), never a
+   * guess. `cards` is the whole playable list with its copies, the leaders
+   * among them; `leaders` says which they are and what their rules read.
+   */
+  read(list: {
+    leaders: readonly { name: string; text: string; rules: string }[];
+    cards: readonly { text: string; qty: number }[];
+  }): DeckTheme[];
+  /** Why a card carrying a theme's word is a suggestion (the add direction). */
+  evidence(theme: DeckTheme): { why: string; howOften: string | null };
+}
+
+/**
  * Cut Coach phrasing (P3.4) — the cut-direction face of RecommendMeta. Each
  * block phrases a signal whose DATA the sibling declarations already carry:
  * `popularity`/`curve`/`combos` reuse those blocks' sources and predicates
@@ -331,6 +389,16 @@ export interface CutsMeta {
     source: string;
     minUsd: number;
     evidence(i: { usd: string }): { why: string };
+  };
+  /**
+   * What cutting a card costs one of the list's themes (COMMANDER-FIT), over
+   * the sibling `themes` declaration — always the keep side. `others` is how
+   * many of the list's other cards carry the theme's word, this card's own
+   * copies left out. The machine fires it only for a card that carries a
+   * theme the caller read from the list; no themes handed in, no line.
+   */
+  themes?: {
+    evidence(i: { theme: DeckTheme; others: number }): { why: string };
   };
 }
 
@@ -500,6 +568,13 @@ export interface RecommendMeta {
       since: string | null;
     }): { why: string; howOften: string };
   };
+  /**
+   * The list's themes (COMMANDER-FIT): cards that carry a word the list is
+   * built around — the one signal that reads the deck in front of it and
+   * its leader, where popularity is global. Absent = no theme signal, no
+   * theme candidates and no theme evidence (One Piece).
+   */
+  themes?: ThemesMeta;
   /**
    * Display metadata for evidence sources, keyed by the source slugs above
    * (P3.2's panel): human name + optional credit link, so attribution is a

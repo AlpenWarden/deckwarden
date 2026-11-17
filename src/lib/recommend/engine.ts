@@ -13,7 +13,14 @@
  *      commander set in settled top-16 lists, re-checked through the same
  *      filter. Commander-specific tech the global pool never surfaces is
  *      the point; a commander set with no aggregated lists contributes no
- *      candidates and no evidence (honest absence).
+ *      candidates and no evidence (honest absence);
+ *   D. the list's themes (COMMANDER-FIT) — the most played cards carrying a
+ *      word the list is built around (Magic: a type most of its cards share,
+ *      or one its commander's rules text names), re-checked through the
+ *      same filter. The one source that reads the deck in front of it and
+ *      its leader: without it a Sliver was never a candidate for a Sliver
+ *      list (the popularity pool ends long before the first one). A list
+ *      its adapter reads no theme from contributes none.
  *
  * A deck with no leader has ci_mask 0, so only colorless-identity cards fit
  * — correct (that IS the empty color identity), just sparse; P3.2 decides
@@ -43,6 +50,13 @@
  * corpus at a target of 4, the 25 best rows held enough Game Changer
  * spells for 90 of 179 precons, the whole list for all of them), then the
  * rest.
+ *
+ * COMMANDER-FIT: `recommendForSnapshot` reads the list's themes first — ONE
+ * statement by primary key for the list's own texts (queries.ts'
+ * loadThemeRows), then the adapter's pure read — and hands them to the
+ * gather (source D, and each candidate row's text) and to the ranker. Only
+ * Suggestions passes them: Autofill and Swap Lab call `gatherSignals` and
+ * the ranker without, and get what they got before.
  */
 import type { DeckGoals } from "@/lib/decks/goals";
 import { playableEntries } from "@/lib/decks/playable";
@@ -54,6 +68,7 @@ import type {
   CardData,
   CompleteCombo,
   DeckEntry,
+  DeckTheme,
   GameAdapter,
 } from "@/lib/games/types";
 import {
@@ -68,11 +83,14 @@ import {
   loadCandidateRows,
   loadComboSignals,
   loadDeckEntries,
+  loadThemeCandidates,
+  loadThemeRows,
   loadTournamentCandidates,
   loadTournamentSignals,
   type CandidateFilter,
   type ReadFacts,
 } from "./queries";
+import { readThemes, THEME_POOL_LIMIT, THEME_POOL_THEMES } from "./themes";
 import type { CandidateCard, CandidateCombo } from "./types";
 
 export const DEFAULT_LIMIT = 25;
@@ -185,6 +203,13 @@ export interface GatherOptions {
    * list without it).
    */
   excludeCardIds?: readonly string[];
+  /**
+   * The list's themes (COMMANDER-FIT), strongest first — Suggestions' alone.
+   * With them the strongest few each bring a pool of the most played cards
+   * carrying their word (source D), and every candidate row carries the
+   * text the ranker matches. Absent or empty = no theme source, no text.
+   */
+  themes?: readonly DeckTheme[];
 }
 
 /** The game's adapter, or undefined for an unknown game id or one without an adapter (azuki). */
@@ -214,6 +239,8 @@ export async function gatherSignals(
   const flagPaths = adapter.brackets?.flagPaths;
 
   const deckCardIds = [...new Set(snapshot.entries.map((e) => e.cardId))];
+  const themes = meta.themes && opts.themes && opts.themes.length > 0 ? opts.themes : [];
+  const themePath = themes.length > 0 ? meta.themes?.path : undefined;
 
   const filter: CandidateFilter = {
     gameId: snapshot.gameId,
@@ -225,9 +252,10 @@ export async function gatherSignals(
     exclude: meta.exclude,
     scope: opts.scope,
     roles: opts.roles,
+    themePath,
   };
 
-  const [pool, comboSignals, tournamentPool] = await Promise.all([
+  const [pool, comboSignals, tournamentPool, themePools] = await Promise.all([
     loadCandidatePool(filter, opts.poolLimit ?? POOL_LIMIT, flagPaths),
     meta.combos && (opts.includeCombos ?? true)
       ? loadComboSignals(deckCardIds, snapshot.ciMask, snapshot.leaderIds)
@@ -240,21 +268,34 @@ export async function gatherSignals(
           flagPaths,
         )
       : Promise.resolve([]),
+    // Source D: one pool per theme, the strongest few — in parallel.
+    themePath !== undefined
+      ? Promise.all(
+          themes
+            .slice(0, THEME_POOL_THEMES)
+            .map((t) =>
+              loadThemeCandidates({ ...filter, themePath }, t.word, THEME_POOL_LIMIT, flagPaths),
+            ),
+        )
+      : Promise.resolve([]),
   ]);
   const combosByCandidate = comboSignals.byCandidate;
 
-  // Combo-sourced candidates outside the popularity pool still face the same
-  // deterministic filter (legality/budget/...) before they may rank.
+  // Each source's cards once, in source order: popularity, tournaments, themes.
   const pooled = new Set(pool.map((c) => c.id));
-  for (const c of tournamentPool) pooled.add(c.id);
+  const beyondPool: CandidateCard[] = [];
+  for (const c of [...tournamentPool, ...themePools.flat()]) {
+    if (pooled.has(c.id)) continue;
+    pooled.add(c.id);
+    beyondPool.push(c);
+  }
+
+  // Combo-sourced candidates outside those pools still face the same
+  // deterministic filter (legality/budget/...) before they may rank.
   const comboOnlyIds = [...combosByCandidate.keys()].filter((id) => !pooled.has(id));
   const comboRows = await loadCandidateRows(filter, comboOnlyIds, flagPaths);
 
-  const candidates = [
-    ...pool,
-    ...tournamentPool.filter((c) => !pool.some((p) => p.id === c.id)),
-    ...comboRows,
-  ];
+  const candidates = [...pool, ...beyondPool, ...comboRows];
 
   return { candidates, combosByCandidate, combosTruncated: comboSignals.truncated };
 }
@@ -364,6 +405,40 @@ export function goalsRead(
   };
 }
 
+/**
+ * The list's themes (COMMANDER-FIT): its own texts by primary key, then the
+ * adapter's pure read. [] for a game that declares none — no statement is
+ * spent — and for a list the adapter reads none from.
+ */
+export async function snapshotThemes(
+  adapter: GameAdapter,
+  snapshot: RecommendSnapshot,
+): Promise<DeckTheme[]> {
+  const meta = adapter.recommend?.themes;
+  if (!meta || snapshot.entries.length === 0) return [];
+  const rows = await loadThemeRows(
+    snapshot.gameId,
+    snapshot.entries.map((e) => e.cardId),
+    snapshot.leaderIds,
+    meta,
+  );
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const leaders = new Set(snapshot.leaderIds);
+  // Copies per card over every zone; a leader is read once, as a leader.
+  const qty = new Map<string, number>();
+  for (const e of snapshot.entries) qty.set(e.cardId, (qty.get(e.cardId) ?? 0) + e.qty);
+  return readThemes(
+    meta,
+    [...qty].flatMap(([cardId, n]) => {
+      const row = byId.get(cardId);
+      if (!row) return [];
+      return leaders.has(cardId)
+        ? [{ text: row.text, qty: n, leader: { name: row.name, rules: row.rules } }]
+        : [{ text: row.text, qty: n }];
+    }),
+  );
+}
+
 export async function recommendForSnapshot(
   snapshot: RecommendSnapshot,
   opts: RecommendOptions = {},
@@ -374,10 +449,12 @@ export async function recommendForSnapshot(
 
   const limit = Math.min(Math.max(1, opts.limit ?? DEFAULT_LIMIT), MAX_LIMIT);
   const withRead = readable(adapter, snapshot);
+  const themes = await snapshotThemes(adapter, snapshot);
   const [{ candidates, combosByCandidate, combosTruncated }, completeCombos] = await Promise.all([
     gatherSignals(snapshot, {
       maxPriceUsd: opts.maxPriceUsd,
       ownedCardIds: opts.ownedCardIds,
+      themes,
     }),
     withRead ? loadCompleteCombos(snapshot.entries.map((e) => e.cardId)) : Promise.resolve(null),
   ]);
@@ -403,6 +480,7 @@ export async function recommendForSnapshot(
     combosByCandidate,
     tournamentsByCandidate: tournaments.byCandidate,
     tournamentContext: tournaments.context,
+    themes,
   });
   const read =
     completeCombos !== null

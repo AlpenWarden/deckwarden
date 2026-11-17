@@ -8,7 +8,7 @@
  *
  * Covers: every recommendation carries evidence (no bare scores) · sources
  * are the real ones (edhrec_rank / spellbook / curve-template /
- * topdeck-top16) · deck cards and basic lands never come back ·
+ * topdeck-top16 / deck-types) · deck cards and basic lands never come back ·
  * color-identity fit · combo participation names its deck partners (Basalt
  * Monolith → Rings of Brighthearth) · budget and limit params · tiny-deck
  * curve evidence degrades to low confidence · no-store caching · (P3.7)
@@ -50,6 +50,12 @@
  * snapshot with the same goals answers the same list and the same hidden
  * cards. The goals are cleared before the Radar section. The Radar's rows
  * carry the combo's tag and "relevant" mark now (Y6a's plumbing).
+ *
+ * COMMANDER-FIT: the list's themes, through the draft route (nothing is
+ * created). Edgar Markov alone — a commander whose rules text names its own
+ * type — gets Vampires, each row leading with the list's own line and
+ * carrying the older evidence after it; the Talrand fixture names no type
+ * and no row of its deck carries the line.
  */
 import { BASE } from "./smoke/guard"; // first import: a non-local BASE_URL exits 1 here
 
@@ -150,7 +156,14 @@ interface RadarBody {
   };
 }
 
-const SOURCES = new Set(["edhrec_rank", "spellbook", "curve-template", "topdeck-top16"]);
+const SOURCES = new Set([
+  "edhrec_rank",
+  "spellbook",
+  "curve-template",
+  "topdeck-top16",
+  // COMMANDER-FIT: a card that carries one of the list's themes says so.
+  "deck-types",
+]);
 const CONFIDENCES = new Set(["high", "medium", "low"]);
 const BASICS = new Set(["Plains", "Island", "Swamp", "Mountain", "Forest", "Wastes"]);
 
@@ -347,6 +360,41 @@ async function main() {
       body: "{",
     });
     check("snapshot with malformed JSON → 400", malformed.status === 400);
+
+    // --- The list's themes (COMMANDER-FIT), through the draft route again,
+    // so nothing is created. A commander whose rules text names its own type
+    // gets that type's cards from the first card on, each one saying so
+    // before anything else; the fixture's commander names no type, so no
+    // row of its deck carries the line.
+    const edgar = await findCard("edgar markov");
+    const typal = await api("POST", "/api/recommendations", {
+      body: { game: "mtg", format: "commander", leaderIds: [edgar.id], entries: [] },
+    });
+    const typalRecs = (typal.json as RecsBody)?.recommendations ?? [];
+    const themed = typalRecs.filter((r) => r.evidence[0]?.source === "deck-types");
+    check(
+      "a commander that names its own type → that type's cards are suggested, the list's own line leading",
+      typal.status === 200 &&
+        themed.length >= 5 &&
+        themed.every(
+          (r) =>
+            r.evidence[0].why === "Has the Vampire type, which Edgar Markov's rules text names",
+        ),
+      {
+        status: typal.status,
+        themed: themed.length,
+        first: typalRecs.slice(0, 3).map((r) => [r.name, r.evidence[0]?.why]),
+      },
+    );
+    check(
+      "a theme row still carries the older evidence after its own line (never a bare theme claim)",
+      themed.length > 0 &&
+        themed.every((r) => r.evidence.every((e) => SOURCES.has(e.source) && e.why.length > 0)),
+    );
+    check(
+      "a commander that names no type → no theme line on any row (honest absence)",
+      recs.length > 0 && recs.every((r) => r.evidence.every((e) => e.source !== "deck-types")),
+    );
 
     // --- Goals (Y6a): the deck's own target and budget, off the row --------
     const plain = res.json as RecsBody;

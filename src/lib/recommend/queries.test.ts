@@ -4,12 +4,14 @@ import { describe, expect, it } from "vitest";
 import { TOKEN_DOC } from "@/lib/cards/tokens";
 
 import {
+  attrTextColumn,
   candidateConditions,
   candidatePoolOrder,
   flagsColumn,
   roleKeys,
   rolesColumn,
   sharedRolesCount,
+  themeWordCondition,
   type CandidateFilter,
 } from "./queries";
 
@@ -232,5 +234,54 @@ describe("Swap Lab's role columns", () => {
     );
     expect(q.params).toEqual(['{"roles":["mana-rock"]}', '{"roles":["ramp"]}']);
     expect(dialect.sqlToQuery(sharedRolesCount({ path: "roles", any: [] })).sql).toBe("0");
+  });
+});
+
+describe("the list's themes (COMMANDER-FIT)", () => {
+  const dialect = new PgDialect();
+
+  it("a card's text comes off the declared path, with no parameter", () => {
+    const q = dialect.sqlToQuery(attrTextColumn("type_line"));
+    expect(q.sql).toBe(`"card_identities"."attrs"->>'type_line'`);
+    expect(q.params).toEqual([]);
+    expect(() => attrTextColumn("type_line'; --")).toThrow(/Invalid attrs path/);
+  });
+
+  it("a theme word is two bound halves: the full-text match, then the whole word at the path", () => {
+    const q = dialect.sqlToQuery(themeWordCondition("type_line", "Sliver"));
+    expect(q.sql).toBe(
+      `("card_identities"."search_text" @@ plainto_tsquery('english', $1) AND "card_identities"."attrs"->>'type_line' ~ $2)`,
+    );
+    // \m … \M: Postgres' word boundaries — "Rat" is not "Pirate".
+    expect(q.params).toEqual(["Sliver", "\\mSliver\\M"]);
+    expect(dialect.sqlToQuery(themeWordCondition("type_line", "Time Lord")).params).toEqual([
+      "Time Lord",
+      "\\mTime Lord\\M",
+    ]);
+  });
+
+  it("rejects a word that could be a pattern, and a path the search document doesn't cover", () => {
+    for (const word of [
+      "",
+      "Sliver|Elf",
+      "Sliver.*",
+      "(Sliver)",
+      "Sliver\\M",
+      "Sliver%",
+      " Elf",
+      "Elf ",
+    ]) {
+      expect(() => themeWordCondition("type_line", word)).toThrow(/Invalid theme word/);
+    }
+    for (const word of ["Sliver", "Time Lord", "Urza's", "Power-Plant"]) {
+      expect(() => themeWordCondition("type_line", word)).not.toThrow();
+    }
+    expect(() => themeWordCondition("flavor_text", "Sliver")).toThrow(/No search index covers/);
+  });
+
+  it("the themes path is a projection, never a condition: it narrows nothing", () => {
+    expect(candidateConditions({ ...BASE, themePath: "type_line" })).toHaveLength(
+      candidateConditions(BASE).length,
+    );
   });
 });

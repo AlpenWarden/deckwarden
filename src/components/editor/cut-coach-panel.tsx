@@ -25,6 +25,12 @@
  * last fetch simply carries no tournament line until the next settled
  * fetch measures it (byCard presence, never a fabricated zero).
  *
+ * COMMANDER-FIT: the list's themes are read HERE too, from the same entries
+ * and client-held cards on every edit (recommend/themes.ts — the read the
+ * server makes for Suggestions), so a card that carries one says what
+ * cutting it takes from the theme and ranks lower for it. No fetch: the
+ * type lines and the commander's rules text are already in the editor.
+ *
  * The gate is the deck's size computation, not a new one: deckSizeCount
  * over countsTowardSize zones vs FormatDef.deckSize.max — exactly what the
  * deck list header and validate count. Under the limit the tab stays (no
@@ -55,6 +61,7 @@ import {
   type CutEntryInput,
   type TournamentCutSignals,
 } from "@/lib/recommend/cuts";
+import { themeByCard, themesOfList, type ThemeListEntry } from "@/lib/recommend/themes";
 import type { FormatDef, GameAdapter } from "@/lib/games/types";
 
 interface CutCoachPanelProps {
@@ -137,13 +144,19 @@ export function CutCoachPanel({
   const ranking = useMemo(() => {
     if (overBy <= 0) return null;
     const cutEntries: CutEntryInput[] = [];
+    const themeEntries: ThemeListEntry[] = [];
+    const excludedZones = new Set(format.zones.filter((z) => z.isLeaderZone).map((z) => z.id));
     // The playable list (DECK-TOKENS): cutting a token never brings the 100 down.
     for (const e of playableEntries(entries, format)) {
       const card = cards.get(e.cardId);
-      if (card) cutEntries.push({ card, zone: e.zone, qty: e.qty, tags: e.tags });
+      if (!card) continue;
+      cutEntries.push({ card, zone: e.zone, qty: e.qty, tags: e.tags });
+      themeEntries.push({ card, qty: e.qty, isLeader: excludedZones.has(e.zone) });
     }
-    const excludedZones = new Set(format.zones.filter((z) => z.isLeaderZone).map((z) => z.id));
     const presentIds = new Set(entries.map((e) => e.cardId));
+    // The list's themes (COMMANDER-FIT), read from the same entries.
+    const themesMeta = adapter.recommend?.themes;
+    const themes = themesOfList(themesMeta, themeEntries);
     return rankCuts({
       meta: adapter.recommend ?? {},
       roleTargets: adapter.hub?.roles ?? [],
@@ -152,6 +165,7 @@ export function CutCoachPanel({
       completeCombosByCard: completeCombosByCard(combosInDeck ?? [], presentIds),
       tournamentsByCard: new Map(Object.entries(tournaments?.byCard ?? {})),
       tournamentContext: tournaments?.context ?? null,
+      themeByCard: themeByCard(themesMeta, themes, themeEntries),
     });
   }, [overBy, entries, cards, format, adapter, combosInDeck, tournaments]);
 

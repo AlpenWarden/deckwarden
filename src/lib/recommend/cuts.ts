@@ -30,9 +30,22 @@
  *
  * Determinism: same input → same output. Ties break by popularity (desc,
  * nulls last — least-played first), then name, then card id, then zone.
+ *
+ * COMMANDER-FIT: a card that carries one of the list's themes (the caller's
+ * `themeByCard` — recommend/themes.ts) gets a keep line saying what cutting
+ * it takes from that theme, and the theme's PROTECTION comes off its score.
+ * Without it the Coach's strongest argument, global rank, named a typal
+ * list's own type first: a Sliver is played in Sliver decks alone, so its
+ * rank is deep, and 14 of the Sliver precon's 15 cheapest cuts were
+ * Slivers. Protection is a subtraction, not combos' ordering rule, and a
+ * small one: a theme's weakest card may still be the right cut, the least
+ * played of its cards still come first among them, and the cards that make
+ * a theme work without carrying its word (a typal list's "choose a creature
+ * type" cards, an enchantment list's enchantresses) are what the Coach
+ * names instead — more protection only moves the cuts onto them.
  */
 import { deckComboStatus, type DeckComboLike } from "@/lib/combos/view";
-import type { CurveCardInput, CutSide, RecommendMeta } from "@/lib/games/types";
+import type { CurveCardInput, CutSide, DeckTheme, RecommendMeta } from "@/lib/games/types";
 import {
   COMBO_EVIDENCE_CAP,
   CURVE_CONFIDENCE_FLOOR,
@@ -44,6 +57,7 @@ import {
   type TournamentContext,
   type TournamentSignal,
 } from "./rank";
+import { themeConfidence, themePull } from "./themes";
 import type { Confidence, RecommendationEvidence } from "./types";
 
 /** One tradeoff line: the shared evidence shape plus which side it argues. */
@@ -118,6 +132,24 @@ export const CUT_WEIGHTS = {
   price: 0.1,
 } as const;
 
+/**
+ * What a theme at full pull takes off a card's cut score (COMMANDER-FIT) —
+ * not one of the weights above: those are reasons to cut and sum to 1, this
+ * is a reason to keep. Set on the precons (2026-11-16, the dev branch, two
+ * seeds): eight cards from OTHER precons slipped into each list, and how
+ * often the Coach names a stranger before a card that belongs (0.5 = it
+ * can't tell). On the lists with a theme (95 and 96 of 174) that is 0.667
+ * and 0.658 without protection, 0.762 and 0.752 at .15, and 0.795 and 0.785
+ * at .5. Most of it is there at .15, and what more protection buys is paid
+ * by the wrong cards: at .25, with an everyday word protecting in full, the
+ * Sliver precon's fifteen cheapest cuts held no Sliver (its weakest came
+ * after a ramp staple) and the enchantment precon's fifth and sixth were
+ * its enchantresses. .15 is what the popularity signal holds against a card
+ * at rank 2,000, the staple boundary: a full-strength theme cancels that
+ * much and no more.
+ */
+export const THEME_PROTECTION = 0.15;
+
 /** Price at which the price signal saturates (contribution caps at 1). */
 export const PRICE_SATURATION_USD = 50;
 
@@ -130,8 +162,9 @@ export interface CutCandidate {
   cheapestUsd: number | null;
   popularity: number | null;
   /**
-   * Cut-side weighted sum in [0, 1] — ordering/transparency only. Clients
-   * must render evidence, never this number alone (rank.ts's rule).
+   * Cut-side weighted sum, less a theme's protection, in [0, 1] —
+   * ordering/transparency only. Clients must render evidence, never this
+   * number alone (rank.ts's rule).
    */
   score: number;
   /** Member of ≥1 complete in-deck combo — sorts after all non-members. */
@@ -142,8 +175,9 @@ export interface CutCandidate {
    * Non-empty, in presentation order — the lead line is WHY the card ranks
    * where it does: combo warnings first (the tradeoff that matters most),
    * then the cut-side lines (popularity, tournaments, curve, role, price),
-   * then any non-combo keep line ("widely played", a measured tournament
-   * staple) as the trailing cost.
+   * then the keep lines as the trailing cost: the list's theme it carries
+   * first (the list's own), then "widely played" or a measured tournament
+   * staple.
    */
   evidence: CutEvidence[];
 }
@@ -167,6 +201,13 @@ export interface RankCutsInput {
    */
   tournamentsByCard?: ReadonlyMap<string, TournamentSignal>;
   tournamentContext?: TournamentContext | null;
+  /**
+   * The one of the list's themes each card carries that counts (COMMANDER-FIT
+   * — recommend/themes.ts' themeByCard, read from the same entries). Absent
+   * or empty = no theme signal: a list read for none, or a caller that
+   * doesn't read them (Swap in, Upgrade toward and Swap Lab don't yet).
+   */
+  themeByCard?: ReadonlyMap<string, DeckTheme>;
 }
 
 export interface RankCutsResult {
@@ -270,6 +311,33 @@ export function rankCuts(input: RankCutsInput): RankCutsResult {
       }
     }
 
+    // Keep lines other than a combo break wait here for the tail.
+    const keepTail: CutEvidence[] = [];
+
+    // The list's theme this card carries: the first of the trailing costs —
+    // it is the list's own, where the keep lines after it are any list's —
+    // and its protection comes off the score at the end. A cost, not the
+    // lead: a card's cut signals still say why it ranks where it does, and
+    // they are what tells one card of a theme from the next.
+    const theme = input.themeByCard?.get(card.id);
+    let protection = 0;
+    if (meta.themes && cuts.themes && theme) {
+      const { why } = cuts.themes.evidence({
+        theme,
+        // Copies counted: the theme's other cards, this entry's own left out.
+        others: Math.max(0, theme.count - entry.qty),
+      });
+      keepTail.push({
+        source: meta.themes.source,
+        why,
+        with: [],
+        howOften: null, // the count is the list's own and already in the sentence
+        confidence: themeConfidence(theme),
+        side: "keep",
+      });
+      protection = THEME_PROTECTION * themePull(theme);
+    }
+
     // Popularity: score rises with rank (same pivot as the add direction,
     // inverted), and the adapter's tier call decides which side the words
     // argue — a staple's line is a keep warning, not a cut reason. A
@@ -277,7 +345,6 @@ export function rankCuts(input: RankCutsInput): RankCutsResult {
     // card ranks where it does (a combo break, or its cut signals), with
     // "it's widely played" rendered after as the cost it is.
     let popularitySide: CutSide | null = null;
-    const keepTail: CutEvidence[] = [];
     if (meta.popularity && cuts.popularity && card.popularity !== null) {
       const { why, howOften, side } = cuts.popularity.evidence(card.popularity);
       popularitySide = side;
@@ -407,6 +474,7 @@ export function rankCuts(input: RankCutsInput): RankCutsResult {
       unranked += 1;
       continue; // no stated tradeoff, no coaching — disclosed via the count
     }
+    score = Math.max(0, score - protection);
 
     ranked.push({
       cardId: card.id,

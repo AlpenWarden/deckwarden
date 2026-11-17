@@ -1,15 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import type { RecommendMeta } from "@/lib/games/types";
+import type { DeckTheme, RecommendMeta } from "@/lib/games/types";
 import {
   completeCombosByCard,
   CUT_WEIGHTS,
   rankCuts,
+  THEME_PROTECTION,
   type CutCandidate,
   type CutComboInput,
   type CutEntryInput,
   type RankCutsInput,
 } from "./cuts";
+import { popularityScore } from "./rank";
 
 /**
  * Minimal game-ignorant meta mirroring the MTG shape: tier boundary at
@@ -523,5 +525,185 @@ describe("completeCombosByCard", () => {
   it("drops a combo whose piece has already been cut from the entries", () => {
     const map = completeCombosByCard(combos, new Set(["a", "t"]));
     expect(map.size).toBe(0);
+  });
+});
+
+describe("the list's themes (COMMANDER-FIT)", () => {
+  /** The synthetic meta with themes declared in both directions. */
+  const THEMED: RecommendMeta = {
+    ...META,
+    themes: {
+      source: "themes",
+      path: "clan",
+      leaderPath: "rules",
+      wordsOf: (text) => text.split("/"),
+      read: () => [],
+      evidence: () => ({ why: "add-theme", howOften: null }),
+    },
+    cuts: {
+      ...META.cuts,
+      themes: {
+        evidence: ({ theme, others }) => ({ why: `${theme.word} with ${others} others` }),
+      },
+    },
+  };
+  const lion: DeckTheme = {
+    word: "Lion",
+    count: 20,
+    namedBy: null,
+    strength: 1,
+    selectivity: 1,
+  };
+  const cub: DeckTheme = {
+    word: "Cub",
+    count: 6,
+    namedBy: "Boss",
+    strength: 0.5,
+    selectivity: 1,
+  };
+  /** A fringe card's popularity contribution — the whole raw score of the entries below. */
+  const FRINGE = CUT_WEIGHTS.popularity * (1 - popularityScore(40000));
+
+  it("gives a card that carries a theme a keep line after its cut signals, and takes the theme's protection off its score", () => {
+    const result = rank({
+      meta: THEMED,
+      entries: [
+        entry({ id: "lion", popularity: 40000 }),
+        entry({ id: "stray", popularity: 40000 }),
+      ],
+      themeByCard: new Map([["lion", lion]]),
+    });
+    // Same measured play, and the card outside the theme is the cheaper cut.
+    expect(result.cuts.map((c) => c.cardId)).toEqual(["stray", "lion"]);
+    expect(byId(result, "stray").score).toBeCloseTo(FRINGE, 10);
+    expect(byId(result, "lion").score).toBeCloseTo(FRINGE - THEME_PROTECTION, 10);
+    // The cut signal still leads — it is why the card ranks where it does.
+    expect(byId(result, "lion").evidence.map((e) => [e.source, e.side])).toEqual([
+      ["pop", "cut"],
+      ["themes", "keep"],
+    ]);
+    expect(byId(result, "lion").evidence[1]).toEqual({
+      source: "themes",
+      why: "Lion with 19 others",
+      with: [],
+      howOften: null,
+      confidence: "high",
+      side: "keep",
+    });
+    expect(byId(result, "stray").evidence.map((e) => e.source)).toEqual(["pop"]);
+  });
+
+  it("protects less under a weaker theme, at medium confidence", () => {
+    const result = rank({
+      meta: THEMED,
+      entries: [entry({ id: "cub", popularity: 40000 })],
+      themeByCard: new Map([["cub", cub]]),
+    });
+    expect(byId(result, "cub").score).toBeCloseTo(FRINGE - THEME_PROTECTION * 0.5, 10);
+    expect(byId(result, "cub").evidence[1]).toMatchObject({
+      why: "Cub with 5 others",
+      confidence: "medium",
+    });
+  });
+
+  it("protects by the theme's pull: an everyday word shields a card less than a word few cards carry", () => {
+    const folk: DeckTheme = { ...lion, word: "Folk", selectivity: 0.3 };
+    const result = rank({
+      meta: THEMED,
+      entries: [entry({ id: "folk", popularity: 40000 })],
+      themeByCard: new Map([["folk", folk]]),
+    });
+    expect(byId(result, "folk").score).toBeCloseTo(FRINGE - THEME_PROTECTION * 0.3, 10);
+  });
+
+  it("keeps a theme's fringe card a cheaper cut than a staple: protection is no immunity", () => {
+    const result = rank({
+      meta: THEMED,
+      entries: [entry({ id: "staple", popularity: 12 }), entry({ id: "lion", popularity: 40000 })],
+      themeByCard: new Map([["lion", lion]]),
+    });
+    expect(result.cuts.map((c) => c.cardId)).toEqual(["lion", "staple"]);
+  });
+
+  it("leaves the entry's own copies out of the theme's other cards", () => {
+    const result = rank({
+      meta: THEMED,
+      entries: [entry({ id: "rats", popularity: 40000, qty: 7 })],
+      themeByCard: new Map([["rats", lion]]),
+    });
+    expect(byId(result, "rats").evidence[1].why).toBe("Lion with 13 others");
+  });
+
+  it("keeps the least played of a theme's cards first among them", () => {
+    const result = rank({
+      meta: THEMED,
+      entries: [
+        entry({ id: "played", popularity: 12000 }),
+        entry({ id: "unplayed", popularity: 40000 }),
+      ],
+      themeByCard: new Map([
+        ["played", lion],
+        ["unplayed", lion],
+      ]),
+    });
+    expect(result.cuts.map((c) => c.cardId)).toEqual(["unplayed", "played"]);
+  });
+
+  it("never takes a score below zero, and leads a staple's keep lines with the list's own", () => {
+    const result = rank({
+      meta: THEMED,
+      entries: [entry({ id: "staple", popularity: 12 })],
+      themeByCard: new Map([["staple", lion]]),
+    });
+    expect(byId(result, "staple").score).toBe(0);
+    expect(byId(result, "staple").evidence.map((e) => [e.source, e.side])).toEqual([
+      ["themes", "keep"],
+      ["pop", "keep"],
+    ]);
+  });
+
+  it("lets a combo it would break lead, then the cut signals, then the theme", () => {
+    const result = rank({
+      meta: THEMED,
+      entries: [entry({ id: "piece", popularity: 40000 }), entry({ id: "plain", popularity: 12 })],
+      completeCombosByCard: new Map([
+        ["piece", [{ withPieces: [{ cardId: "x", name: "X" }], results: ["Win"], popularity: 9 }]],
+      ]),
+      themeByCard: new Map([["piece", lion]]),
+    });
+    expect(byId(result, "piece").evidence.map((e) => e.source)).toEqual(["combo", "pop", "themes"]);
+    // Combo membership is still the ordering rule: last, whatever the score.
+    expect(result.cuts.map((c) => c.cardId)).toEqual(["plain", "piece"]);
+  });
+
+  it("lists a card whose only signal is its theme, where it would have gone unranked", () => {
+    const entries = [entry({ id: "quiet" })];
+    const without = rank({ meta: THEMED, entries });
+    expect(without).toEqual({ cuts: [], unranked: 1 });
+    const withTheme = rank({ meta: THEMED, entries, themeByCard: new Map([["quiet", lion]]) });
+    expect(withTheme.unranked).toBe(0);
+    expect(byId(withTheme, "quiet")).toMatchObject({ score: 0 });
+    expect(byId(withTheme, "quiet").evidence.map((e) => e.side)).toEqual(["keep"]);
+  });
+
+  it("says nothing of themes with none handed in, or under a meta that declares no cut phrasing for them", () => {
+    const entries = [entry({ id: "lion", popularity: 40000 })];
+    const noSignal = rank({ meta: THEMED, entries });
+    const noPhrasing = rank({
+      meta: { ...THEMED, cuts: META.cuts },
+      entries,
+      themeByCard: new Map([["lion", lion]]),
+    });
+    const noDeclaration = rank({ entries, themeByCard: new Map([["lion", lion]]) });
+    for (const result of [noSignal, noPhrasing, noDeclaration]) {
+      expect(byId(result, "lion").evidence.map((e) => e.source)).toEqual(["pop"]);
+      expect(byId(result, "lion").score).toBeCloseTo(FRINGE, 10);
+    }
+  });
+
+  it("is a reason to keep, not one of the reasons to cut: the weights still sum to 1 without it", () => {
+    expect(Object.keys(CUT_WEIGHTS)).not.toContain("themes");
+    expect(THEME_PROTECTION).toBeGreaterThan(0);
+    expect(THEME_PROTECTION).toBeLessThanOrEqual(1);
   });
 });

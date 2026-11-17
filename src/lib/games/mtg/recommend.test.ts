@@ -13,6 +13,7 @@ import {
   TOURNAMENT_STAPLE_SHARE,
   WIDELY_PLAYED_RANK,
 } from "./recommend";
+import { mtgCutThemes, mtgThemes } from "./themes";
 
 describe("curve template ↔ hub template coherence", () => {
   it("curve buckets + hub lands = the hub template's 99 role slots", () => {
@@ -236,9 +237,17 @@ describe("cut phrasing (P3.4 — the tradeoff in the deck's own terms)", () => {
       "role-template",
       "price",
       "topdeck-top16",
+      "deck-types",
     ]) {
       expect(mtgRecommend.sources?.[slug]?.label).toBeTruthy();
     }
+  });
+
+  it("wires the list's themes in both directions under one source the panel can name (COMMANDER-FIT)", () => {
+    expect(mtgRecommend.themes).toBe(mtgThemes);
+    expect(mtgRecommend.cuts?.themes).toBe(mtgCutThemes);
+    // The player's own list and its commander: no outside dataset, so no link.
+    expect(mtgRecommend.sources?.[mtgThemes.source]).toEqual({ label: "Your list" });
   });
 });
 

@@ -13,6 +13,7 @@
  */
 import type { AutofillMeta, CurveCardInput, RecommendMeta } from "../types";
 import { mtgSwap } from "./swap";
+import { mtgCutThemes, mtgThemes } from "./themes";
 
 /**
  * Editorial nonland target curve, buckets 0–7+ (the analytics histogram
@@ -194,6 +195,10 @@ export const mtgRecommend: RecommendMeta = {
     },
   },
 
+  // The list's themes (COMMANDER-FIT): a type most of its cards share, or
+  // one its commander's rules text names — declared and phrased in ./themes.ts.
+  themes: mtgThemes,
+
   combos: {
     source: "spellbook",
     evidence({ withNames, results, templates, popularity }) {
@@ -317,6 +322,8 @@ export const mtgRecommend: RecommendMeta = {
         };
       },
     },
+    // What cutting a card takes from one of the list's themes — ./themes.ts.
+    themes: mtgCutThemes,
   },
 
   // Evidence-source display names + credit links (P3.2 panel). Spellbook's
@@ -333,6 +340,9 @@ export const mtgRecommend: RecommendMeta = {
     "land-template": { label: "Land template" },
     "role-template": { label: "Role template" },
     price: { label: "Card price" },
+    // The list's themes (COMMANDER-FIT): counted on the player's own list and
+    // read off its commander — no outside dataset, so no link.
+    "deck-types": { label: "Your list" },
     // Swap Lab's role matches (Y7a): community tags, credited and linked (D0).
     scryfall_tagger: { label: "Scryfall Tagger", href: "https://tagger.scryfall.com" },
   },

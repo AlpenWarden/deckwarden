@@ -54,3 +54,89 @@ describe("CutCoachPanel — the Tokens zone (DECK-TOKENS)", () => {
     expect(screen.queryByRole("button", { name: "Cut one copy of Treasure" })).toBeNull();
   });
 });
+
+describe("CutCoachPanel — the list's themes (COMMANDER-FIT)", () => {
+  /** A deep-rank card: the Coach's strongest cut argument without a theme. */
+  const fringe = (name: string, typeLine: string) =>
+    editorCard(
+      card({
+        name,
+        primaryType: "Creature",
+        costValue: 3,
+        popularity: 12000,
+        attrs: { type_line: typeLine, oracle_text: "" },
+      }),
+    );
+
+  function renderPanel(commanderRules: string) {
+    const commander = editorCard(
+      card({
+        name: "Hive Tester",
+        isLeaderCandidate: true,
+        attrs: { type_line: "Legendary Creature — Sliver", oracle_text: commanderRules },
+      }),
+    );
+    const slivers = Array.from({ length: 30 }, (_, i) =>
+      fringe(`Test Sliver ${String(i + 1).padStart(2, "0")}`, "Creature — Sliver"),
+    );
+    // Twelve types, three cards of each at most: none of them a theme.
+    const OTHER = "Beast Bird Cat Dog Elk Fox Goat Horse Insect Lizard Ox Rat".split(" ");
+    const strays = Array.from({ length: 33 }, (_, i) =>
+      fringe(
+        `Test Stray ${String(i + 1).padStart(2, "0")}`,
+        `Creature — ${OTHER[i % OTHER.length]}`,
+      ),
+    );
+    const lands = basicLands(37).map(editorCard);
+    const all = [...slivers, ...strays, ...lands];
+    const entries: EditorEntry[] = [
+      { cardId: commander.id, zone: "commander", qty: 1, tags: [] },
+      ...all.map((c) => ({ cardId: c.id, zone: "main", qty: 1, tags: [] })),
+    ];
+    render(
+      <CutCoachPanel
+        adapter={mtg}
+        format={COMMANDER}
+        deckId={null}
+        entries={entries}
+        cards={new Map([commander, ...all].map((c) => [c.id, c]))}
+        saveStatus="saved"
+        active
+        onSetQty={() => undefined}
+      />,
+    );
+    return screen
+      .getAllByRole("button", { name: /^Cut one copy of / })
+      .map((b) => b.getAttribute("aria-label")!.replace("Cut one copy of ", ""));
+  }
+
+  it("ranks the cards that share the list's type after the ones that don't, on the same measured play", () => {
+    // 30 Slivers and 33 creatures of other types at the same rank and cost, over by one.
+    const order = renderPanel("Slivers you control have flying.");
+    const firstSliver = order.findIndex((n) => n.startsWith("Test Sliver"));
+    const lastStray = order.findLastIndex((n) => n.startsWith("Test Stray"));
+    expect(firstSliver).toBeGreaterThan(lastStray);
+    expect(order.filter((n) => n.startsWith("Test Sliver"))).toHaveLength(30);
+  });
+
+  it("says what cutting a theme's card takes from the list, as a cost after its cut signals", async () => {
+    renderPanel("Slivers you control have flying.");
+    const row = screen
+      .getByRole("button", { name: "Expand tradeoffs for Test Sliver 01" })
+      .closest("li")!;
+    // Collapsed, the lead is still why the card ranks where it does.
+    expect(row.textContent).toContain("Outside the widely-played tier of Commander cards");
+    expect(row.textContent).toContain("Your list");
+    expect(row.textContent).not.toContain("Has the Sliver type");
+    screen.getByRole("button", { name: "Expand tradeoffs for Test Sliver 01" }).click();
+    await screen.findByRole("button", { name: "Collapse tradeoffs for Test Sliver 01" });
+    expect(row.textContent).toContain(
+      "Has the Sliver type, which Hive Tester's rules text names. Cutting it leaves 30 in your list",
+    );
+    // A card outside the theme carries no such line.
+    const stray = screen
+      .getByRole("button", { name: "Expand tradeoffs for Test Stray 01" })
+      .closest("li")!;
+    expect(stray.textContent).not.toContain("Your list");
+  });
+});

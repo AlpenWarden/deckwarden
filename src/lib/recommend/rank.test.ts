@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import type { RecommendMeta } from "@/lib/games/types";
+import type { DeckTheme, RecommendMeta } from "@/lib/games/types";
 import type { CandidateCard, CandidateCombo } from "./types";
 import {
   COMBO_EVIDENCE_CAP,
   CURVE_CONFIDENCE_FLOOR,
+  THEME_WEIGHT,
   TOURNAMENT_SHRINK_K,
   WEIGHTS,
   comboScore,
@@ -170,11 +171,16 @@ describe("tournament signal (P3.8)", () => {
     expect(tournamentConfidence(20)).toBe("high");
   });
 
-  it("weights still sum to 1 after the P3.8 rebalance", () => {
-    expect(WEIGHTS.popularity + WEIGHTS.tournaments + WEIGHTS.combos + WEIGHTS.curve).toBeCloseTo(
-      1,
-      10,
-    );
+  it("weights still sum to 1 with the themes seated, and the four older ones keep their P3.8 ratios", () => {
+    expect(Object.values(WEIGHTS).reduce((a, b) => a + b, 0)).toBeCloseTo(1, 10);
+    expect(WEIGHTS.themes).toBe(THEME_WEIGHT);
+    // .3 / .3 / .25 / .15, each scaled by the same 1 − THEME_WEIGHT: a list
+    // without themes is ranked in the order it always was.
+    const rest = 1 - THEME_WEIGHT;
+    expect(WEIGHTS.popularity).toBeCloseTo(0.3 * rest, 10);
+    expect(WEIGHTS.tournaments).toBeCloseTo(0.3 * rest, 10);
+    expect(WEIGHTS.combos).toBeCloseTo(0.25 * rest, 10);
+    expect(WEIGHTS.curve).toBeCloseTo(0.15 * rest, 10);
   });
 });
 
@@ -354,6 +360,142 @@ describe("determinism & ordering", () => {
     const recs = rank(cands, new Map(), FULLISH_DECK, 3);
     expect(recs).toHaveLength(3);
     expect(recs[0].popularity).toBe(100); // best rank survived the cut
+  });
+});
+
+describe("the list's themes (COMMANDER-FIT)", () => {
+  /** The synthetic meta with a themes declaration: a theme is a clan on the card's text. */
+  const THEMED: RecommendMeta = {
+    ...META,
+    themes: {
+      source: "test-themes",
+      path: "clan",
+      leaderPath: "rules",
+      wordsOf: (text) => text.split("/"),
+      read: () => [],
+      evidence: (theme) => ({
+        why: `clan ${theme.word}`,
+        howOften: theme.namedBy ? `${theme.count} share it` : null,
+      }),
+    },
+  };
+  const lion: DeckTheme = {
+    word: "Lion",
+    count: 20,
+    namedBy: null,
+    strength: 1,
+    selectivity: 1,
+  };
+  const crane: DeckTheme = {
+    word: "Crane",
+    count: 6,
+    namedBy: "Boss",
+    strength: 0.5,
+    selectivity: 1,
+  };
+  /** An everyday word at full strength: it says a third as much of a card outside the list. */
+  const folk: DeckTheme = {
+    word: "Folk",
+    count: 30,
+    namedBy: null,
+    strength: 1,
+    selectivity: 0.3,
+  };
+  /** Outside the curve, so only the signals under test score. */
+  const off = (over: Partial<CandidateCard>) => candidate({ primaryType: "Resource", ...over });
+  /** `themes: null` hands none in at all (a caller that doesn't read them). */
+  const rankThemed = (candidates: CandidateCard[], themes: DeckTheme[] | null = [lion, crane]) =>
+    rankCandidates({
+      meta: THEMED,
+      deckCards: FULLISH_DECK,
+      candidates,
+      combosByCandidate: new Map(),
+      ...(themes ? { themes } : {}),
+    });
+
+  it("scores a theme's strength for a card that carries its word, and leads the evidence with it", () => {
+    const [rec] = rankThemed([off({ popularity: 100, themeText: "Lion" })]);
+    expect(rec.evidence.map((e) => e.source)).toEqual(["test-themes", "test-popularity"]);
+    expect(rec.evidence[0]).toEqual({
+      source: "test-themes",
+      why: "clan Lion",
+      with: [],
+      howOften: null,
+      confidence: "high",
+    });
+    expect(rec.score).toBeCloseTo(
+      WEIGHTS.themes * 1 + WEIGHTS.popularity * popularityScore(100),
+      10,
+    );
+  });
+
+  it("scores a weaker theme less, at medium confidence", () => {
+    const [rec] = rankThemed([off({ themeText: "Crane" })]);
+    expect(rec.evidence).toEqual([
+      {
+        source: "test-themes",
+        why: "clan Crane",
+        with: [],
+        howOften: "6 share it",
+        confidence: "medium",
+      },
+    ]);
+    expect(rec.score).toBeCloseTo(WEIGHTS.themes * 0.5, 10);
+  });
+
+  it("counts a card on two themes once, for the strongest", () => {
+    const [rec] = rankThemed([off({ themeText: "Crane/Lion" })]);
+    expect(rec.evidence.map((e) => e.why)).toEqual(["clan Lion"]);
+    expect(rec.score).toBeCloseTo(WEIGHTS.themes, 10);
+  });
+
+  it("scales an everyday theme by what its word says of a card outside the list, and takes the theme that pulls hardest", () => {
+    const [everyday] = rankThemed([off({ themeText: "Folk" })], [folk, crane]);
+    expect(everyday.score).toBeCloseTo(WEIGHTS.themes * 0.3, 10);
+    expect(everyday.evidence[0].confidence).toBe("high"); // the count is still the list's own
+    // Folk pulls 0.3, Crane 0.5: a card on both is there for the Cranes.
+    const [both] = rankThemed([off({ themeText: "Folk/Crane" })], [folk, crane]);
+    expect(both.evidence.map((e) => e.why)).toEqual(["clan Crane"]);
+    expect(both.score).toBeCloseTo(WEIGHTS.themes * 0.5, 10);
+  });
+
+  it("puts a card of a full-strength theme above a far more played card outside it", () => {
+    const recs = rankThemed([
+      off({ name: "Staple", popularity: 20 }),
+      off({ name: "Deep Lion", popularity: 6000, themeText: "Lion" }),
+    ]);
+    expect(recs.map((r) => r.name)).toEqual(["Deep Lion", "Staple"]);
+  });
+
+  it("makes a card of the list's theme a suggestion even with no rank at all", () => {
+    const recs = rankThemed([
+      off({ popularity: null, themeText: "Lion" }),
+      off({ popularity: null }),
+    ]);
+    expect(recs).toHaveLength(1);
+    expect(recs[0].evidence[0].source).toBe("test-themes");
+  });
+
+  it("says nothing of themes for a card outside them, without its text, or with none handed in", () => {
+    const outside = rankThemed([off({ popularity: 100, themeText: "Scorpion" })]);
+    const noText = rankThemed([off({ popularity: 100 })]);
+    const noThemes = rankThemed([off({ popularity: 100, themeText: "Lion" })], null);
+    const empty = rankThemed([off({ popularity: 100, themeText: "Lion" })], []);
+    for (const [rec] of [outside, noText, noThemes, empty]) {
+      expect(rec.evidence.map((e) => e.source)).toEqual(["test-popularity"]);
+      expect(rec.score).toBeCloseTo(WEIGHTS.popularity * popularityScore(100), 10);
+    }
+  });
+
+  it("says nothing of themes under a meta that declares none, whatever is handed in", () => {
+    const [rec] = rankCandidates({
+      meta: META,
+      deckCards: FULLISH_DECK,
+      candidates: [off({ popularity: 100, themeText: "Lion" })],
+      combosByCandidate: new Map(),
+      themes: [lion],
+    });
+    expect(rec.evidence.map((e) => e.source)).toEqual(["test-popularity"]);
   });
 });
 

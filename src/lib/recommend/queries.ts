@@ -16,6 +16,12 @@
  * that share at least one of the swapped card's roles — matched with `@>`
  * per role, which the jsonb_path_ops GIN (ci_attrs_gin) serves (`?|` would
  * not) — while the pool orders the closest matches first.
+ *
+ * COMMANDER-FIT adds the list's themes: `loadThemeRows` reads the list's own
+ * texts (one statement by primary key), `loadThemeCandidates` is the fourth
+ * candidate source — the most played cards carrying a theme's word, through
+ * the SAME filter — and `themePath` puts that text on every candidate row,
+ * so a staple that carries the word says so too.
  */
 import { and, asc, desc, eq, inArray, notInArray, sql, type SQL } from "drizzle-orm";
 
@@ -63,6 +69,12 @@ export interface CandidateFilter {
    * empty `any` matches nothing — a card with no role has no alternatives.
    */
   roles?: { path: string; any: readonly string[] };
+  /**
+   * The adapter's `themes.path` (COMMANDER-FIT): each candidate row carries
+   * its text there, for the ranker's theme match. A projection, never a
+   * condition — it narrows nothing.
+   */
+  themePath?: string;
 }
 
 /** One whitelisted column scope (W9a; Y7a adds the cost window). */
@@ -190,6 +202,16 @@ export function flagsColumn(flagPaths: FlagPaths | undefined): SQL<Record<string
 }
 
 /**
+ * A card's text at a declared single-segment attrs path (COMMANDER-FIT) —
+ * null where it holds none. Exported for tests; the path faces exclude's key
+ * check before `sql.raw`.
+ */
+export function attrTextColumn(path: string): SQL<string | null> {
+  if (!JSONB_KEY_RE.test(path)) throw new Error(`Invalid attrs path: ${path}`);
+  return sql<string | null>`${cardIdentities.attrs}->>${sql.raw(`'${path}'`)}`;
+}
+
+/**
  * A card's roles (Y7a) as the declared path holds them — a jsonb array, or
  * null for a card with none. Exported for tests; the path faces exclude's
  * key check before `sql.raw`.
@@ -207,9 +229,14 @@ export function roleKeys(value: unknown): string[] {
 /**
  * The candidate rows' columns — with the adapter's flags (Y6a) and the
  * external key the read's questions use; with the filter's roles path
- * (Y7a), each card's roles too.
+ * (Y7a), each card's roles too; with its themes path (COMMANDER-FIT), the
+ * text a theme is a word of.
  */
-function candidateProjection(flagPaths: FlagPaths | undefined, rolesPath?: string) {
+function candidateProjection(
+  flagPaths: FlagPaths | undefined,
+  rolesPath?: string,
+  themePath?: string,
+) {
   return {
     id: cardIdentities.id,
     name: cardIdentities.name,
@@ -221,6 +248,7 @@ function candidateProjection(flagPaths: FlagPaths | undefined, rolesPath?: strin
     externalKey: cardIdentities.externalKey,
     flags: flagsColumn(flagPaths),
     ...(rolesPath !== undefined ? { roles: rolesColumn(rolesPath) } : {}),
+    ...(themePath !== undefined ? { themeText: attrTextColumn(themePath) } : {}),
   };
 }
 
@@ -246,7 +274,7 @@ export async function loadCandidatePool(
   flagPaths?: FlagPaths,
 ): Promise<CandidateCard[]> {
   const rows = await getDb()
-    .select(candidateProjection(flagPaths, filter.roles?.path))
+    .select(candidateProjection(flagPaths, filter.roles?.path, filter.themePath))
     .from(cardIdentities)
     .where(and(...candidateConditions(filter), sql`${cardIdentities.popularity} IS NOT NULL`))
     .orderBy(...candidatePoolOrder(filter))
@@ -271,7 +299,7 @@ export async function loadCandidateRows(
 ): Promise<CandidateCard[]> {
   if (ids.length === 0) return [];
   const rows = await getDb()
-    .select(candidateProjection(flagPaths, filter.roles?.path))
+    .select(candidateProjection(flagPaths, filter.roles?.path, filter.themePath))
     .from(cardIdentities)
     .where(and(...candidateConditions(filter), inArray(cardIdentities.id, [...ids])));
   return toCandidates(rows);
@@ -397,7 +425,7 @@ export async function loadTournamentCandidates(
 ): Promise<CandidateCard[]> {
   if (leaderIds.length === 0) return [];
   const rows = await getDb()
-    .select(candidateProjection(flagPaths, filter.roles?.path))
+    .select(candidateProjection(flagPaths, filter.roles?.path, filter.themePath))
     .from(commanderCardStats)
     .innerJoin(cardIdentities, eq(cardIdentities.id, commanderCardStats.cardIdentityId))
     .where(
@@ -409,6 +437,95 @@ export async function loadTournamentCandidates(
     .orderBy(desc(commanderCardStats.lists), asc(cardIdentities.id))
     .limit(limit);
   return toCandidates(rows);
+}
+
+/** A theme word as adapters hand it over: letters, with spaces, hyphens or apostrophes inside. */
+const THEME_WORD_RE = /^[A-Za-z]+(?:[ '-][A-Za-z]+)*$/;
+
+/**
+ * The attrs paths a theme word can be looked up at: the two texts every
+ * card's search document is built from (schema.ts' `search_text`: the name,
+ * `type_line` and `oracle_text`). A word at any other path would be missed
+ * by the full-text half below, so such a path is refused until it has an
+ * index of its own.
+ */
+const THEME_SEARCH_PATHS: ReadonlySet<string> = new Set(["type_line", "oracle_text"]);
+
+/**
+ * "This card carries the word" (COMMANDER-FIT), over the adapter's themes
+ * path. Two halves, both bound parameters: the full-text match finds the
+ * few hundred rows that mention the word anywhere (ci_search_gin), and the
+ * regex keeps the ones that carry it at `path`, as a whole word (`\m` …
+ * `\M`: "Rat" is not "Pirate"). Exported for tests; the word and the path
+ * each face their own check, so a declaration can never smuggle a pattern.
+ */
+export function themeWordCondition(path: string, word: string): SQL {
+  if (!THEME_SEARCH_PATHS.has(path)) throw new Error(`No search index covers attrs path: ${path}`);
+  if (!THEME_WORD_RE.test(word)) throw new Error(`Invalid theme word: ${word}`);
+  return sql`(${cardIdentities.searchText} @@ plainto_tsquery('english', ${word}) AND ${attrTextColumn(path)} ~ ${`\\m${word}\\M`})`;
+}
+
+/**
+ * Theme-sourced candidates (COMMANDER-FIT, the engine's source D): the most
+ * played cards that carry one of the list's theme words, through the SAME
+ * deterministic filter as every other source — the cards a global
+ * popularity pool of a few hundred never reaches (the most played Sliver
+ * sits past rank 1,000). Unranked cards come last rather than not at all:
+ * a new card of the list's type is still one.
+ */
+export async function loadThemeCandidates(
+  filter: CandidateFilter & { themePath: string },
+  word: string,
+  limit: number,
+  flagPaths?: FlagPaths,
+): Promise<CandidateCard[]> {
+  const rows = await getDb()
+    .select(candidateProjection(flagPaths, filter.roles?.path, filter.themePath))
+    .from(cardIdentities)
+    .where(and(...candidateConditions(filter), themeWordCondition(filter.themePath, word)))
+    .orderBy(sql`${cardIdentities.popularity} ASC NULLS LAST`, asc(cardIdentities.id))
+    .limit(limit);
+  return toCandidates(rows);
+}
+
+/** One of the list's cards as the themes read takes it (`loadThemeRows`). */
+export interface ThemeFactRow {
+  id: string;
+  name: string;
+  /** The card's text at the adapter's `themes.path`; null = none. */
+  text: string | null;
+  /** A leader's rules text (`themes.leaderPath`); null for every other card. */
+  rules: string | null;
+}
+
+/**
+ * The list's own texts for the themes read (COMMANDER-FIT): every card's
+ * text at `path`, and the leaders' rules text beside it — only theirs, so a
+ * hundred rules texts never leave the database for one read. One statement
+ * by primary key.
+ */
+export async function loadThemeRows(
+  gameId: number,
+  ids: readonly string[],
+  leaderIds: readonly string[],
+  paths: { path: string; leaderPath: string },
+): Promise<ThemeFactRow[]> {
+  if (ids.length === 0) return [];
+  const rules =
+    leaderIds.length > 0
+      ? sql<
+          string | null
+        >`CASE WHEN ${inArray(cardIdentities.id, [...leaderIds])} THEN ${attrTextColumn(paths.leaderPath)} END`
+      : sql<string | null>`NULL`;
+  return getDb()
+    .select({
+      id: cardIdentities.id,
+      name: cardIdentities.name,
+      text: attrTextColumn(paths.path),
+      rules,
+    })
+    .from(cardIdentities)
+    .where(and(eq(cardIdentities.gameId, gameId), inArray(cardIdentities.id, [...new Set(ids)])));
 }
 
 /**

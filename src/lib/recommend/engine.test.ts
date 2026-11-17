@@ -9,6 +9,11 @@
  * leader, every entry's facts, a game with `brackets`. BRACKET-UP's power
  * first: the Game Changers a target needs lead, found past the 25 best and
  * never a land (the upgrade pairs by cost), the rest in their own order.
+ *
+ * COMMANDER-FIT — the list's themes: read first, with ONE statement for the
+ * list's own texts, then handed to the gather (a pool per theme, the
+ * strongest few, and each candidate row's text) and to the ranker. A list
+ * read for no theme spends no pool statement and asks for no text.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -21,6 +26,8 @@ const mocks = vi.hoisted(() => ({
   loadCandidateRows: vi.fn(),
   loadComboSignals: vi.fn(),
   loadDeckEntries: vi.fn(),
+  loadThemeCandidates: vi.fn(),
+  loadThemeRows: vi.fn(),
   loadTournamentCandidates: vi.fn(),
   loadTournamentSignals: vi.fn(),
   loadCompleteCombos: vi.fn(),
@@ -31,12 +38,15 @@ vi.mock("./queries", () => ({
   loadCandidateRows: mocks.loadCandidateRows,
   loadComboSignals: mocks.loadComboSignals,
   loadDeckEntries: mocks.loadDeckEntries,
+  loadThemeCandidates: mocks.loadThemeCandidates,
+  loadThemeRows: mocks.loadThemeRows,
   loadTournamentCandidates: mocks.loadTournamentCandidates,
   loadTournamentSignals: mocks.loadTournamentSignals,
 }));
 vi.mock("@/lib/combos/queries", () => ({ loadCompleteCombos: mocks.loadCompleteCombos }));
 
 const { recommendForSnapshot, POOL_LIMIT } = await import("./engine");
+const { THEME_POOL_LIMIT, THEME_POOL_THEMES } = await import("./themes");
 const { mtgAdapter } = await import("@/lib/games/mtg/adapter");
 
 const LEADER = "10000000-0000-4000-8000-000000000000";
@@ -89,6 +99,16 @@ beforeEach(() => {
   mocks.loadTournamentCandidates.mockResolvedValue([]);
   mocks.loadTournamentSignals.mockResolvedValue({ context: null, byCandidate: new Map() });
   mocks.loadCompleteCombos.mockResolvedValue([]);
+  // The list's own texts: a commander that names no type — no theme.
+  mocks.loadThemeRows.mockResolvedValue([
+    {
+      id: LEADER,
+      name: "Test Commander",
+      text: "Legendary Creature — Human Wizard",
+      rules: "Flying",
+    },
+  ]);
+  mocks.loadThemeCandidates.mockResolvedValue([]);
 });
 
 describe("recommendForSnapshot — rank all → goals → slice (Y6a)", () => {
@@ -231,5 +251,112 @@ describe("recommendForSnapshot — power first (BRACKET-UP)", () => {
       powerFirst: true,
     });
     expect(names(two.recommendations).some((n) => n.startsWith("Changer"))).toBe(false);
+  });
+});
+
+describe("recommendForSnapshot — the list's themes (COMMANDER-FIT)", () => {
+  /** A commander whose rules text names its own type: a theme from the first card. */
+  const HIVEMIND = {
+    id: LEADER,
+    name: "Test Hivemind",
+    text: "Legendary Creature — Sliver",
+    rules: "Slivers you control have flying.",
+  };
+  const sliver = (n: number, over: Partial<CandidateCard> = {}): CandidateCard => ({
+    id: `40000000-0000-4000-8000-${String(n).padStart(12, "0")}`,
+    name: `Sliver ${n}`,
+    primaryType: "Land", // outside the curve, like the pool
+    costValue: null,
+    ciMask: 0,
+    cheapestUsd: "1.00",
+    popularity: 60 + n, // past every pool card
+    externalKey: `oracle-sliver-${n}`,
+    flags: {},
+    themeText: "Creature — Sliver",
+    ...over,
+  });
+
+  it("reads the list's own texts with one statement, then asks a pool for the theme and the text on every row", async () => {
+    mocks.loadThemeRows.mockResolvedValue([HIVEMIND]);
+    mocks.loadThemeCandidates.mockResolvedValue([sliver(1), sliver(2)]);
+    const out = await recommendForSnapshot(snapshot(false));
+
+    expect(mocks.loadThemeRows).toHaveBeenCalledTimes(1);
+    expect(mocks.loadThemeRows).toHaveBeenCalledWith(
+      GAME_ID.mtg,
+      [LEADER],
+      [LEADER],
+      mtgAdapter.recommend!.themes,
+    );
+    expect(mocks.loadThemeCandidates).toHaveBeenCalledTimes(1);
+    const [filter, word, limit, flagPaths] = mocks.loadThemeCandidates.mock.calls[0];
+    expect(word).toBe("Sliver");
+    expect(limit).toBe(THEME_POOL_LIMIT);
+    expect(filter.themePath).toBe("type_line");
+    expect(flagPaths).toBe(mtgAdapter.brackets!.flagPaths);
+    // The same filter as every other source, and the text rides their rows too.
+    expect(filter.excludeCardIds).toEqual([LEADER]);
+    expect(mocks.loadCandidatePool.mock.calls[0][0].themePath).toBe("type_line");
+
+    // The theme's cards lead the list, and their own line leads their evidence.
+    expect(out.recommendations.slice(0, 2).map((r) => r.name)).toEqual(["Sliver 1", "Sliver 2"]);
+    expect(out.recommendations[0].evidence[0]).toMatchObject({
+      source: "deck-types",
+      why: "Has the Sliver type, which Test Hivemind's rules text names",
+    });
+    // A pool card outside the theme says nothing about it.
+    expect(out.recommendations[2].evidence.map((e) => e.source)).toEqual(["edhrec_rank"]);
+  });
+
+  it("takes a card once when the theme's pool and the popularity pool both hold it", async () => {
+    mocks.loadThemeRows.mockResolvedValue([HIVEMIND]);
+    mocks.loadThemeCandidates.mockResolvedValue([
+      { ...POOL[30], themeText: "Creature — Sliver" },
+      sliver(1),
+    ]);
+    const out = await recommendForSnapshot(snapshot(false), { limit: 50 });
+    const listed = out.recommendations.map((r) => r.name);
+    expect(new Set(listed).size).toBe(listed.length);
+    expect(listed.filter((n) => n === POOL[30].name)).toHaveLength(1);
+  });
+
+  it("a list read for no theme spends no pool statement and asks for no text", async () => {
+    const out = await recommendForSnapshot(snapshot(false));
+    expect(mocks.loadThemeRows).toHaveBeenCalledTimes(1);
+    expect(mocks.loadThemeCandidates).not.toHaveBeenCalled();
+    expect(mocks.loadCandidatePool.mock.calls[0][0].themePath).toBeUndefined();
+    expect(out.recommendations.map((r) => r.name)).toEqual(POOL.slice(0, 25).map((c) => c.name));
+  });
+
+  it("asks a pool for the strongest few themes only", async () => {
+    const list = [
+      { n: 22, text: "Creature — Sliver" },
+      { n: 15, text: "Creature — Goblin" },
+      { n: 12, text: "Creature — Bird" },
+      { n: 10, text: "Creature — Cat" },
+    ].flatMap(({ n, text }, group) =>
+      Array.from({ length: n }, (_, i) => ({
+        id: `5${group}000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`,
+        text,
+      })),
+    );
+    mocks.loadThemeRows.mockResolvedValue([
+      { id: LEADER, name: "Test Commander", text: "Legendary Creature — Human", rules: "Flying" },
+      ...list.map((c) => ({ id: c.id, name: c.id, text: c.text, rules: null })),
+    ]);
+    const base = snapshot(false);
+    await recommendForSnapshot({
+      ...base,
+      entries: [
+        ...base.entries,
+        ...list.map((c) => ({ cardId: c.id, qty: 1, primaryType: "Creature", costValue: 2 })),
+      ],
+    });
+    expect(THEME_POOL_THEMES).toBe(3);
+    expect(mocks.loadThemeCandidates.mock.calls.map((call) => call[1])).toEqual([
+      "Sliver",
+      "Goblin",
+      "Bird",
+    ]);
   });
 });
