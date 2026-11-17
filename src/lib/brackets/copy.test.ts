@@ -119,6 +119,7 @@ const BUILDERS = [
   "autofillAfterAbove",
   "autofillAfterAboveCount",
   "autofillAfterLine",
+  "autofillBelowShort",
   "autofillBelowUpgrade",
   "autofillBelowFloor",
 ];
@@ -158,7 +159,8 @@ function autofillLines(): string[] {
   lines.push(C.autofillTargetShows(true), C.autofillTargetShows(false));
   lines.push(C.autofillAfterNothing(brackets.noun), C.autofillAfterLine(brackets.noun));
   lines.push(C.autofillAfterChecking, C.autofillAfterFailed);
-  lines.push(C.autofillBelowCeiling, C.autofillUndoKeeps);
+  // The adapter's own word for the cards that count (`toward.many`), as the after-line passes it.
+  lines.push(C.autofillBelowShort("Game Changers"), C.autofillUndoKeeps);
   lines.push(...targetChoices(brackets).map((o) => o.label));
   return lines;
 }
@@ -909,10 +911,12 @@ describe("AUTOFILL-TARGET's words — the choice, its note, the after-line", () 
     ]);
   });
 
-  it("short of the target: a ceiling, the door by the Upgrade sheet's own title, or How it plays by its heading", () => {
-    expect(C.autofillBelowCeiling).toBe(
-      "Autofill keeps a shell at or under its target and doesn't build up to it.",
+  it("short of the target: Autofill ran out (AUTOFILL-REACH), the door by the Upgrade sheet's own title, or How it plays by its heading", () => {
+    // Autofill builds up to a target, so the old ceiling sentence is gone: short means it ran out.
+    expect(C.autofillBelowShort("Game Changers")).toBe(
+      "Autofill had no more Game Changers to bring in.",
     );
+    expect(Object.keys(C)).not.toContain("autofillBelowCeiling");
     expect(C.autofillBelowUpgrade(C.upTitle(levelNumberLabel(mtg, 4)))).toBe(
       "Once these are in, Why? offers Upgrade toward Bracket 4.",
     );

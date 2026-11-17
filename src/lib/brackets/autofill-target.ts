@@ -37,9 +37,12 @@
  *     target of 1 or 2 says nothing goes past the target, and names it. It
  *     is never said to show it: the cards can't tell those levels apart.
  *   - **below**: what the cards show, and where the rest is. Where more of
- *     the cards the adapter counts (`toward`) would show the target, a
- *     target is a ceiling for Autofill and Upgrade toward is the next step;
- *     where no count shows it (the top level), the rest is How it plays.
+ *     the cards the adapter counts (`toward`) would show the target,
+ *     Autofill ran out of them (it builds up to a target that is set,
+ *     AUTOFILL-REACH, so a shell is short only where the candidates, a
+ *     per-card budget or the kept cards left none to bring in) and Upgrade
+ *     toward is the next step; where no count shows it (the top level), the
+ *     rest is How it plays.
  *   - **open**: no target chosen. What the cards show, nothing else.
  */
 import type { BracketFactor, BracketInput, BracketRead, BracketsMeta } from "@/lib/games/types";
@@ -174,11 +177,12 @@ export function autofillAfter(i: {
   if (inBand) return { kind: "within", head: shows, notes: [], status: shows };
 
   // Short of the target: a count of the cards the adapter counts would show
-  // it (a ceiling Autofill doesn't build up to), or no count does.
+  // it (Autofill builds up to a target, AUTOFILL-REACH, so it ran out of
+  // them), or no count does.
   const toward = brackets.toward?.(read, i.input, target) ?? null;
   const notes = toward
     ? [
-        C.autofillBelowCeiling,
+        C.autofillBelowShort(toward.many),
         ...(i.upgradeDoor
           ? [C.autofillBelowUpgrade(C.upTitle(levelNumberLabel(brackets, target)))]
           : []),

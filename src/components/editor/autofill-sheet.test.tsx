@@ -905,7 +905,7 @@ describe("AutofillSheet — Your target (AUTOFILL-TARGET)", () => {
       expect(line.textContent).not.toContain("That's your target.");
     });
 
-    it("short of the target: what the cards show, the ceiling, and the door when the editor has one", async () => {
+    it("short of the target: what the cards show, that Autofill ran out, and the door when the editor has one", async () => {
       shellAnswer = fullShell(3);
       const first = render(sheet({ goals: { v: 1, targetLevel: 4 }, upgradeDoor: true }));
       const line = await verdict("below");
@@ -914,7 +914,7 @@ describe("AutofillSheet — Your target (AUTOFILL-TARGET)", () => {
       );
       expect(line.textContent).not.toContain("That's your target.");
       expect(line.textContent).toContain(
-        "Autofill keeps a shell at or under its target and doesn't build up to it. Once these are in, Why? offers Upgrade toward Bracket 4.",
+        "Autofill had no more Game Changers to bring in. Once these are in, Why? offers Upgrade toward Bracket 4.",
       );
       // The status says the verdict alone.
       expect(status()).toBe("With these added, the cards show at least Bracket 3 (Upgraded).");
@@ -922,7 +922,7 @@ describe("AutofillSheet — Your target (AUTOFILL-TARGET)", () => {
 
       render(sheet({ goals: { v: 1, targetLevel: 4 } }));
       const plain = await verdict("below");
-      expect(plain.textContent).toContain("doesn't build up to it.");
+      expect(plain.textContent).toContain("Autofill had no more Game Changers to bring in.");
       expect(plain.textContent).not.toContain("Upgrade toward");
     });
 

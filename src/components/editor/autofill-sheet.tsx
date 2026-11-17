@@ -46,7 +46,9 @@
  * a pick of the sheet's own wins for as long as it's open (the budget is
  * one-shot — no "Save as this deck's budget" here). With a budget, the goals
  * line reads above the controls, without its Change: the Why sheet is
- * another dialog. The notes say what the target kept out.
+ * another dialog. The notes say what the target kept out, and what
+ * building up to it brought in or is still short (AUTOFILL-REACH: the
+ * route's doing, this sheet sends the same body).
  *
  * Your target (AUTOFILL-TARGET, the owner's note of 2026-11-15: "the option
  * to set your desired bracket as you click the autofill a starter shell

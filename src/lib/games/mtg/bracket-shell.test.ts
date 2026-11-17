@@ -8,11 +8,14 @@
  *    the combo (its factor's level, its question's level) — in plain words.
  * 3. D0's copy guard over both: no "approve", no Spellbook tag names, no
  *    notation.
+ * 4. `reachNotes` (AUTOFILL-REACH, the owner's call of 2026-11-17): what
+ *    Autofill brought in to show the target and what it is still short,
+ *    exact text, counts and never card names, every line naming its source.
  */
 import { describe, expect, it } from "vitest";
 
 import type { BracketFreshness, CompleteCombo } from "../types";
-import { assessBracket, mtgComboBadge, mtgShellNotes } from "./brackets";
+import { assessBracket, mtgComboBadge, mtgReachNotes, mtgShellNotes } from "./brackets";
 import { card, cardMap, commanderDeck, entry, fillers, type MtgCard } from "./test-fixtures";
 
 const FRESH: BracketFreshness = {
@@ -61,6 +64,47 @@ describe("mtgShellNotes — what the target kept out, one line per rule", () => 
     ]);
     expect(mtgShellNotes({}, 2)).toEqual([]);
     expect(mtgShellNotes({ "game-changers": 0 }, 2)).toEqual([]);
+  });
+});
+
+describe("mtgReachNotes — what building up to the target brought in, and what it is still short", () => {
+  it("what came in, at the targets a count of Game Changers shows", () => {
+    expect(mtgReachNotes({ added: 1, short: 0 }, 4)).toEqual([
+      "Added 1 Game Changer to show your Bracket 4 target (Wizards' list)",
+    ]);
+    expect(mtgReachNotes({ added: 2, short: 0 }, 4)).toEqual([
+      "Added 2 Game Changers to show your Bracket 4 target (Wizards' list)",
+    ]);
+    expect(mtgReachNotes({ added: 1, short: 0 }, 3)).toEqual([
+      "Added 1 Game Changer to show your Bracket 3 target (Wizards' list)",
+    ]);
+  });
+
+  it("a target of 5 is never claimed: the four that show Bracket 4 came in, the most cards can show", () => {
+    expect(mtgReachNotes({ added: 2, short: 0 }, 5)).toEqual([
+      "Added 2 Game Changers to show Bracket 4, the most a list of cards can show (Wizards' list)",
+    ]);
+    expect(mtgReachNotes({ added: 0, short: 1 }, 5)).toEqual([
+      "Still 1 Game Changer short of Bracket 4. Autofill had no more to bring in (Wizards' list)",
+    ]);
+  });
+
+  it("still short: how many, and the budget when one narrowed the candidates", () => {
+    expect(mtgReachNotes({ added: 0, short: 4 }, 4)).toEqual([
+      "Still 4 Game Changers short of Bracket 4. Autofill had no more to bring in (Wizards' list)",
+    ]);
+    expect(mtgReachNotes({ added: 0, short: 1, budgetUsd: 1 }, 3)).toEqual([
+      "Still 1 Game Changer short of Bracket 3. Autofill had no more to bring in under the $1-a-card budget (Wizards' list)",
+    ]);
+    // Both: what came in first, then what is still missing.
+    expect(mtgReachNotes({ added: 2, short: 2, budgetUsd: 5 }, 4)).toEqual([
+      "Added 2 Game Changers to show your Bracket 4 target (Wizards' list)",
+      "Still 2 Game Changers short of Bracket 4. Autofill had no more to bring in under the $5-a-card budget (Wizards' list)",
+    ]);
+  });
+
+  it("nothing brought in and nothing short says nothing", () => {
+    expect(mtgReachNotes({ added: 0, short: 0 }, 4)).toEqual([]);
   });
 });
 
@@ -204,6 +248,8 @@ describe("D0's copy guard over the notes and the badges", () => {
       mtgShellNotes({ "game-changers": 2, "land-denial": 1, "extra-turns": 1, combo: 2 }, t),
     ),
     ...[1, 2, 3].flatMap((t) => mtgShellNotes({ "game-changers": 1, combo: 1 }, t)),
+    ...[3, 4, 5].flatMap((t) => mtgReachNotes({ added: 2, short: 1, budgetUsd: 5 }, t)),
+    ...[3, 4, 5].flatMap((t) => mtgReachNotes({ added: 1, short: 2 }, t)),
     ...CASES.flatMap((k) => mtgComboBadge(k.combo, new Set())?.words ?? []),
     mtgComboBadge(combo("cmd", [commander, a, b]), COMMANDER)!.words,
   ];
@@ -218,5 +264,12 @@ describe("D0's copy guard over the notes and the badges", () => {
       every.filter((s) => /ruthless|spicy|powerful|oddball|precon appropriate|casual/i.test(s)),
     ).toEqual([]);
     expect(every.filter((s) => /\d\+|est\./i.test(s))).toEqual([]);
+  });
+
+  it("U9's marks hold in the reach notes: no dash aside, no middle dot, and every line names its source", () => {
+    const reach = every.filter((s) => /^(Added|Still) /.test(s));
+    expect(reach).toHaveLength(12);
+    expect(reach.filter((s) => /[—–·]/.test(s))).toEqual([]);
+    expect(reach.filter((s) => !s.endsWith("(Wizards' list)"))).toEqual([]);
   });
 });

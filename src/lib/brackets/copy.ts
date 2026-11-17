@@ -475,8 +475,13 @@ export const BRACKET_COPY = {
   autofillAfterLine: (noun: string) => `With these added, the deck's ${noun} line says:`,
   autofillAfterChecking: "Checking the list with these added…",
   autofillAfterFailed: "Couldn't check combos for the list with these added.",
-  /** Short of the target, where more of the cards the adapter counts would show it: a target is a ceiling here. */
-  autofillBelowCeiling: "Autofill keeps a shell at or under its target and doesn't build up to it.",
+  /**
+   * Short of the target, where more of the cards the adapter counts would
+   * show it (AUTOFILL-REACH: Autofill builds up to a target, so a shell is
+   * short only where it ran out): "Autofill had no more Game Changers to
+   * bring in." (`many` is the adapter's word for the cards that count.)
+   */
+  autofillBelowShort: (many: string) => `Autofill had no more ${many} to bring in.`,
   /** After it, when the editor has the door: "Once these are in, Why? offers Upgrade toward Bracket 4." (`door` is the sheet's own title.) */
   autofillBelowUpgrade: (door: string) => `Once these are in, ${WHY} offers ${door}.`,
   /** Short of a target no count of cards shows (the top level): the rest is the player's answer. */

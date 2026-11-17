@@ -187,7 +187,7 @@ describe("autofillAfter — step 0's rows", () => {
     }
   });
 
-  it("target 4: four Game Changers reach it; three stop at 3, a ceiling Autofill doesn't build up to, with the door named", () => {
+  it("target 4: four Game Changers reach it; three stop at 3, where Autofill ran out of them, with the door named", () => {
     expect(after({ target: 4, changers: 4 }).words).toMatchObject({
       kind: "reached",
       head: "With these added, the cards show at least Bracket 4 (Optimized). That's your target.",
@@ -197,16 +197,16 @@ describe("autofillAfter — step 0's rows", () => {
       kind: "below",
       head: "With these added, the cards show at least Bracket 3 (Upgraded).",
       notes: [
-        "Autofill keeps a shell at or under its target and doesn't build up to it.",
+        "Autofill had no more Game Changers to bring in.",
         "Once these are in, Why? offers Upgrade toward Bracket 4.",
       ],
       status: "With these added, the cards show at least Bracket 3 (Upgraded).",
     });
     expect(short.line).toBe("Your target: Bracket 4 · the cards say at least 3");
-    // Without the editor's door (a game that can't swap Suggestions in), the ceiling alone.
+    // Without the editor's door (a game that can't swap Suggestions in), that sentence alone.
     expect(after({ target: 4, changers: 3, upgradeDoor: false }).words).toMatchObject({
       kind: "below",
-      notes: ["Autofill keeps a shell at or under its target and doesn't build up to it."],
+      notes: ["Autofill had no more Game Changers to bring in."],
     });
   });
 
@@ -215,13 +215,13 @@ describe("autofillAfter — step 0's rows", () => {
       kind: "below",
       head: "With these added, nothing in the list raises the bracket.",
       notes: [
-        "Autofill keeps a shell at or under its target and doesn't build up to it.",
+        "Autofill had no more Game Changers to bring in.",
         "Once these are in, Why? offers Upgrade toward Bracket 3.",
       ],
     });
   });
 
-  it("target 5: never claimed from cards. At 4 the rest is How it plays; short of 4, the ceiling", () => {
+  it("target 5: never claimed from cards. At 4 the rest is How it plays; short of 4, Autofill ran out", () => {
     const top = after({ target: 5, changers: 9 });
     expect(top.words).toEqual({
       kind: "below",
@@ -236,7 +236,7 @@ describe("autofillAfter — step 0's rows", () => {
       kind: "below",
       head: "With these added, the cards show at least Bracket 3 (Upgraded).",
       notes: [
-        "Autofill keeps a shell at or under its target and doesn't build up to it.",
+        "Autofill had no more Game Changers to bring in.",
         "Once these are in, Why? offers Upgrade toward Bracket 5.",
       ],
     });

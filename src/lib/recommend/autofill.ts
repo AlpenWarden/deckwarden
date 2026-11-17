@@ -24,6 +24,17 @@
  * card — so with goals absent the windows, the stream and the shell are
  * exactly what they were (pinned by the fixed-seed golden). Below the
  * adapter's `lockMinTarget` the route turns the lock tier off.
+ *
+ * Reach (AUTOFILL-REACH, the owner's call of 2026-11-17: "autofill should
+ * build up to the target if the target is set first"): once the shell is
+ * planned, the goals say what it is still short of its target by the
+ * adapter's own measure (shell-goals.ts' `missing`), and the best-ranked
+ * candidates that count come in, each in the place of the weakest sampled
+ * pick of its own group, so the size and the curve hold. Each passes the
+ * same ceiling check as every other pick. Nothing is sampled: no `rand()`
+ * runs, so a seed still means one list, and a shell that already shows its
+ * target is the shell it was before this step existed. With no goals, or a
+ * check that names nothing missing, the step does nothing.
  */
 import type { AutofillMeta, RecommendMeta } from "@/lib/games/types";
 import { deckCurve, type TournamentContext, type TournamentSignal } from "./rank";
@@ -50,7 +61,15 @@ export function shortfallNote(
     : `Filled ${picked} of ${slots}. Too few candidates in ${where}.`;
 }
 
-export type PickTier = "locked" | "combo" | "sampled" | "filler";
+/** "reach": brought in after the plan because it counts toward the target (AUTOFILL-REACH). */
+export type PickTier = "locked" | "combo" | "sampled" | "reach" | "filler";
+
+/** What the reach step did: counting cards brought in, and how many the shell is still short. */
+export interface ShellReach {
+  added: number;
+  /** Still missing when nothing more could come in (no candidate that counts and fits, or no pick to replace). */
+  short: number;
+}
 
 export interface ShellPick {
   cardId: string;
@@ -111,6 +130,8 @@ export interface ShellDraft {
   groupOrder: { id: string; label: string }[];
   baseSource: string;
   baseLabel: string;
+  /** Set when the shell was short of its target after planning (AUTOFILL-REACH); the route words it through the adapter. */
+  reach?: ShellReach;
 }
 
 /** Resolved filler picks the route hands to `finishShell`. */
@@ -353,6 +374,89 @@ export function buildShell(input: ShellInput): ShellDraft {
     if (colorless) colorlessUsed += 1;
     baseTaken += 1;
   }
+
+  // Reach (AUTOFILL-REACH): the shell is planned; where it is short of its
+  // target by the adapter's measure, the best-ranked candidates that count
+  // come in, each in the place of the weakest sampled pick of its own group
+  // (the nearest bucket's when its own has none, the planner's borrowing
+  // order). A swap, so the size, the base count and the curve hold; kept
+  // cards, locked staples, combo completions and cards that count never
+  // leave. Deterministic: rank order and scores, never `rand()`.
+  if (goals?.missing) {
+    const colorlessIds = new Set(input.basePool.filter((r) => r.ciMask === 0).map((r) => r.cardId));
+    const lastBucket = curve.buckets.length - 1;
+    const order: { rec: Recommendation; group: string }[] = [];
+    for (const rec of input.pool) {
+      const bucket = curve.bucketOf({ primaryType: rec.primaryType, costValue: rec.costValue });
+      if (bucket !== null) order.push({ rec, group: `curve-${Math.min(bucket, lastBucket)}` });
+    }
+    for (const rec of input.basePool) order.push({ rec, group: "base" });
+
+    /** The weakest sampled pick of `group` that may leave (the later pick on a tie); −1 = none. */
+    const weakestIn = (group: string, stays: (cardId: string) => boolean): number => {
+      let at = -1;
+      for (let k = 0; k < draft.picks.length; k++) {
+        const p = draft.picks[k];
+        if (p.group !== group || p.tier !== "sampled" || stays(p.cardId)) continue;
+        if (at === -1 || p.score <= draft.picks[at].score) at = k;
+      }
+      return at;
+    };
+    /** The pick a card of `group` takes the place of: its own group's, then the nearest bucket's. */
+    const leaverFor = (group: string, stays: (cardId: string) => boolean): number => {
+      const own = weakestIn(group, stays);
+      if (own !== -1 || group === "base") return own;
+      const b = Number(group.slice("curve-".length));
+      for (let d = 1; d <= lastBucket; d++) {
+        for (const donor of [b - d, b + d]) {
+          if (donor < 0 || donor > lastBucket) continue;
+          const at = weakestIn(`curve-${donor}`, stays);
+          if (at !== -1) return at;
+        }
+      }
+      return -1;
+    };
+
+    let added = 0;
+    let short = 0;
+    for (;;) {
+      const missing = goals.missing(chosen);
+      short = missing?.more ?? 0;
+      if (!missing) break;
+      let took = false;
+      for (const { rec, group } of order) {
+        if (picked.has(rec.cardId) || !missing.counts(rec.cardId)) continue;
+        // The colorless-identity cap on the base: at the cap, a colorless
+        // card comes in only for a colorless one.
+        const atCap =
+          group === "base" &&
+          colorlessIds.has(rec.cardId) &&
+          colorlessUsed >= autofill.base.maxColorlessIdentity;
+        const out = leaverFor(
+          group,
+          atCap ? (id) => missing.counts(id) || !colorlessIds.has(id) : (id) => missing.counts(id),
+        );
+        if (out === -1) continue;
+        const leaving = draft.picks[out].cardId;
+        // The ceiling, against the list as it would stand without the card that leaves.
+        const without = chosen.filter((id) => id !== leaving);
+        if (goals.conflicts(rec.cardId, without).length > 0) continue;
+        draft.picks[out] = toPick(rec, zone, group, "reach");
+        chosen[chosen.indexOf(leaving)] = rec.cardId;
+        picked.add(rec.cardId);
+        if (group === "base") {
+          colorlessUsed +=
+            (colorlessIds.has(rec.cardId) ? 1 : 0) - (colorlessIds.has(leaving) ? 1 : 0);
+        }
+        added += 1;
+        took = true;
+        break;
+      }
+      if (!took) break;
+    }
+    if (added > 0 || short > 0) draft.reach = { added, short };
+  }
+
   draft.fillerNeed = needBase - baseTaken;
   return draft;
 }

@@ -15,6 +15,13 @@
  *
  * `skippedByGoals` counts what the target kept out, for the notes: the
  * shell the same seed plans with no goals, walked in pick order.
+ *
+ * AUTOFILL-REACH (the owner's call of 2026-11-17, "autofill should build up
+ * to the target if the target is set first"): a target is no longer only a
+ * ceiling. `missing` says what the list as it stands still needs for the
+ * cards to show it, by the adapter's own measure (`toward`, BRACKET-UP's
+ * power first), so the planner can bring those cards in. Core still names
+ * none of them: which cards count, and how many, is the adapter's answer.
  */
 import type {
   BracketAnswers,
@@ -35,10 +42,26 @@ export interface ShellGoals {
    * plus `picks` (the shell so far, in pick order); empty = it fits.
    */
   conflicts(cardId: string, picks: readonly string[]): BracketConflict[];
+  /**
+   * What the kept list plus `picks` still needs for the cards to show the
+   * target (AUTOFILL-REACH): how many more cards that count, and whether a
+   * candidate is one. Null when nothing is missing: the floor is at the
+   * target, no count of cards shows it, or the adapter declares no measure.
+   * Optional: a check without it holds the ceiling and nothing else.
+   */
+  missing?(picks: readonly string[]): ShellMissing | null;
+}
+
+/** What a shell is short of its target by (the adapter's `toward`, asked about a growing list). */
+export interface ShellMissing {
+  /** How many more counting cards the list needs. */
+  more: number;
+  /** Whether the candidate counts, by its declared flags. */
+  counts(cardId: string): boolean;
 }
 
 export interface ShellGoalsInput {
-  meta: Pick<BracketsMeta, "assess" | "impact">;
+  meta: Pick<BracketsMeta, "assess" | "impact" | "toward">;
   /** The kept list as the read takes it: the leaders and the kept cards, in their zones. */
   deck: DeckSnapshot;
   /** Its cards, as the read sees them (their declared flags). */
@@ -99,6 +122,19 @@ export function shellGoals(i: ShellGoalsInput): ShellGoals {
       if (!card) return [];
       const { input, read } = stateFor(picks);
       return i.meta.impact({ ...input, read, card, completes: byPiece.get(cardId) ?? [] });
+    },
+    missing(picks) {
+      if (!i.meta.toward) return null;
+      const { input, read } = stateFor(picks);
+      const toward = i.meta.toward(read, input, i.targetLevel);
+      if (!toward || toward.more <= 0) return null;
+      return {
+        more: toward.more,
+        counts: (cardId) => {
+          const card = i.candidates.get(cardId);
+          return card !== undefined && toward.counts(card);
+        },
+      };
     },
   };
 }

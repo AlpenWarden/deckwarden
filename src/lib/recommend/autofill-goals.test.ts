@@ -12,7 +12,11 @@
  * - the lock tier: on with no target and at 4, off at 3 and below;
  * - WAVE4 E's acceptance: the shell a target of 2 builds reads within it
  *   ("Your target: Bracket 2 · nothing here goes past Core"), while the same
- *   seed without goals reads above it.
+ *   seed without goals reads above it;
+ * - AUTOFILL-REACH (the owner's call of 2026-11-17): a target that is set is
+ *   built up to. A shell short of it takes the best-ranked Game Changers in
+ *   for its weakest sampled picks, group for group; one that already shows
+ *   it is untouched, pick for pick; nothing is sampled.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -45,7 +49,7 @@ import type {
   CompleteCombo,
   RecommendMeta,
 } from "@/lib/games/types";
-import { buildShell, locksStaples, type ShellInput } from "./autofill";
+import { buildShell, locksStaples, type ShellInput, type ShellPick } from "./autofill";
 import type { TournamentSignal } from "./rank";
 import { shellGoals } from "./shell-goals";
 import type { Recommendation } from "./types";
@@ -407,5 +411,304 @@ describe("WAVE4 E's acceptance: a target-2 shell reads within its target", () =>
       expect(read.conflicts).toEqual([]);
       expect(read.review.filter((q) => q.raisesTo > 2)).toEqual([]);
     }
+  });
+});
+
+describe("AUTOFILL-REACH — a target that is set is built up to (the owner's call of 2026-11-17)", () => {
+  /** The planner as it was before the reach step: the same check, holding the ceiling alone. */
+  const ceilingOnly = (targetLevel: number, keep: MtgCard[] = []) => ({
+    conflicts: goalsFor(targetLevel, keep).conflicts,
+  });
+  const cardsOf = (picks: readonly ShellPick[]) => picks.map((p) => byId.get(p.cardId)!);
+  const groupCounts = (picks: readonly ShellPick[]) => {
+    const counts: Record<string, number> = {};
+    for (const p of picks) counts[p.group] = (counts[p.group] ?? 0) + 1;
+    return counts;
+  };
+  // Pools where only a count of Game Changers can raise the read: land denial,
+  // a chain of extra turns or a two-card combo shows a higher bracket alone,
+  // and a floor already at the target takes nothing (pinned below).
+  const quiet = (c: MtgCard) =>
+    c.attrs.mld === undefined && c.attrs.extra_turn !== true && !c.name.startsWith("Half");
+  const changerPool = recs.filter((r) => quiet(byId.get(r.cardId)!));
+  const changerLands = landRecs.filter((r) => quiet(byId.get(r.cardId)!));
+  const rich = (over: Partial<ShellInput> = {}) =>
+    shellInput({ pool: changerPool, basePool: changerLands, ...over });
+  // The same with the Game Changers at the bottom of every bucket and none
+  // among the lands, on a shell small enough that no window reaches them
+  // (4 lands + [3, 4, 3], windows of 6, 8 and 6 over ten plain cards): the
+  // plan itself holds none, so everything the step does shows.
+  const SMALL = 14;
+  const lowChangers = changerPool
+    .map((r) => (isGc(byId.get(r.cardId)!) ? { ...r, score: 0.01 } : r))
+    .sort((a, b) => b.score - a.score);
+  const plainLands = changerLands.filter((r) => !isGc(byId.get(r.cardId)!));
+  const bare = (over: Partial<ShellInput> = {}) =>
+    shellInput({ slots: SMALL, pool: lowChangers, basePool: plainLands, ...over });
+
+  it("target 4: every shell holds the four that show it; one that already did is untouched, pick for pick", () => {
+    let carried = 0;
+    let untouched = 0;
+    for (const seed of SEEDS) {
+      const before = buildShell(rich({ seed, goals: ceilingOnly(4) }));
+      const after = buildShell(rich({ seed, goals: goalsFor(4) }));
+      const had = count(cardsOf(before.picks), isGc);
+      if (had >= 4) {
+        expect(after).toEqual(before);
+        expect(after.reach).toBeUndefined();
+        untouched += 1;
+      } else {
+        expect(count(cardsOf(after.picks), isGc)).toBe(4);
+        expect(after.reach).toEqual({ added: 4 - had, short: 0 });
+        carried += 1;
+      }
+    }
+    // The fixture holds both kinds, or the test proves nothing.
+    expect(carried).toBeGreaterThan(0);
+    expect(untouched).toBeGreaterThan(0);
+  });
+
+  it("a floor already at the target by another road takes nothing: land denial alone shows Bracket 4", () => {
+    // The fixture's own pools put land denial on top, so every target-4 shell already shows 4.
+    for (const seed of SEEDS) {
+      const shell = buildShell(shellInput({ seed, goals: goalsFor(4) }));
+      expect(count(cardsOf(shell.picks), isMld)).toBeGreaterThan(0);
+      expect(shell).toEqual(buildShell(shellInput({ seed, goals: ceilingOnly(4) })));
+      expect(shell.reach).toBeUndefined();
+    }
+  });
+
+  it("a swap, not an addition: the size, each group's count and the filler need hold, and every other pick keeps its place", () => {
+    let swaps = 0;
+    for (const seed of SEEDS) {
+      for (const input of [rich({ seed }), bare({ seed })]) {
+        const before = buildShell({ ...input, goals: ceilingOnly(4) });
+        const after = buildShell({ ...input, goals: goalsFor(4) });
+        if (!after.reach) continue;
+        expect(after.picks).toHaveLength(before.picks.length);
+        expect(groupCounts(after.picks)).toEqual(groupCounts(before.picks));
+        expect(after.fillerNeed).toBe(before.fillerNeed);
+        expect(after.shortLabels).toEqual(before.shortLabels);
+
+        const was = new Set(before.picks.map((p) => p.cardId));
+        const is = new Set(after.picks.map((p) => p.cardId));
+        const came = after.picks.filter((p) => !was.has(p.cardId));
+        const left = before.picks.filter((p) => !is.has(p.cardId));
+        expect(came).toHaveLength(after.reach.added);
+        expect(left).toHaveLength(after.reach.added);
+        after.picks.forEach((p, k) => {
+          if (was.has(p.cardId)) expect(p).toEqual(before.picks[k]);
+        });
+
+        // What came in counts, is marked, keeps its evidence, and is the best-ranked of what the plan left out.
+        for (const p of came) {
+          expect(p.tier).toBe("reach");
+          expect(isGc(byId.get(p.cardId)!)).toBe(true);
+          expect(p.evidence.length).toBeGreaterThan(0);
+        }
+        const leftOut = input.pool.filter((r) => isGc(byId.get(r.cardId)!) && !was.has(r.cardId));
+        expect(came.map((p) => p.cardId).sort()).toEqual(
+          leftOut
+            .slice(0, came.length)
+            .map((r) => r.cardId)
+            .sort(),
+        );
+
+        // What left was sampled, counts for nothing, and was the weakest of its group.
+        for (const p of left) {
+          expect(p.tier).toBe("sampled");
+          expect(isGc(byId.get(p.cardId)!)).toBe(false);
+        }
+        for (const group of new Set(left.map((p) => p.group))) {
+          const gone = left.filter((p) => p.group === group).map((p) => p.score);
+          const weakest = before.picks
+            .filter((p) => p.group === group && p.tier === "sampled" && !isGc(byId.get(p.cardId)!))
+            .map((p) => p.score)
+            .sort((a, b) => a - b)
+            .slice(0, gone.length);
+          expect(gone.sort((a, b) => a - b)).toEqual(weakest);
+        }
+        swaps += after.reach.added;
+      }
+    }
+    expect(swaps).toBeGreaterThan(4 * SEEDS.length); // the bare pool alone takes four a seed
+  });
+
+  it("the ceiling still holds while it builds up: a target of 3 takes one where the plan held none, never a fourth; 5 takes the four", () => {
+    for (const seed of SEEDS.slice(0, 12)) {
+      const none = buildShell(bare({ seed, goals: ceilingOnly(3) }));
+      expect(count(cardsOf(none.picks), isGc)).toBe(0);
+
+      const three = buildShell(bare({ seed, goals: goalsFor(3) }));
+      expect(count(cardsOf(three.picks), isGc)).toBe(1);
+      expect(three.reach).toEqual({ added: 1, short: 0 });
+
+      const four = buildShell(bare({ seed, goals: goalsFor(4) }));
+      expect(count(cardsOf(four.picks), isGc)).toBe(4);
+      expect(four.reach).toEqual({ added: 4, short: 0 });
+
+      // No list of cards shows Bracket 5: the four that show 4 come in, and no more.
+      const five = buildShell(bare({ seed, goals: goalsFor(5) }));
+      expect(count(cardsOf(five.picks), isGc)).toBe(4);
+      expect(five.reach).toEqual({ added: 4, short: 0 });
+    }
+    // Where the plan already holds its Game Changers a target-3 shell is untouched: three at most.
+    for (const seed of SEEDS) {
+      const shell = buildShell(rich({ seed, goals: goalsFor(3) }));
+      expect(shell).toEqual(buildShell(rich({ seed, goals: ceilingOnly(3) })));
+      const held = count(cardsOf(shell.picks), isGc);
+      expect(held).toBeGreaterThanOrEqual(1);
+      expect(held).toBeLessThanOrEqual(3);
+    }
+  });
+
+  it("targets 1 and 2, and no target, are never built up", () => {
+    for (const seed of SEEDS.slice(0, 12)) {
+      for (const t of [1, 2]) {
+        const shell = buildShell(bare({ seed, goals: goalsFor(t) }));
+        expect(shell).toEqual(buildShell(bare({ seed, goals: ceilingOnly(t) })));
+        expect(shell.reach).toBeUndefined();
+        expect(count(cardsOf(shell.picks), isGc)).toBe(0);
+      }
+      const free = buildShell(bare({ seed }));
+      expect(free.reach).toBeUndefined();
+      expect(free.picks.every((p) => p.tier !== "reach")).toBe(true);
+    }
+  });
+
+  it("it draws only from the candidates: with too few that count, the shell says how many it is short", () => {
+    const noChangers = lowChangers.filter((r) => !isGc(byId.get(r.cardId)!));
+    const twoChangers = [
+      ...noChangers,
+      ...lowChangers.filter((r) => isGc(byId.get(r.cardId)!)).slice(0, 2),
+    ];
+    for (const seed of SEEDS.slice(0, 12)) {
+      const empty = buildShell(bare({ seed, pool: noChangers, goals: goalsFor(4) }));
+      expect(empty.picks).toEqual(
+        buildShell(bare({ seed, pool: noChangers, goals: ceilingOnly(4) })).picks,
+      );
+      expect(empty.reach).toEqual({ added: 0, short: 4 });
+
+      const some = buildShell(bare({ seed, pool: twoChangers, goals: goalsFor(4) }));
+      expect(count(cardsOf(some.picks), isGc)).toBe(2);
+      expect(some.reach).toEqual({ added: 2, short: 2 });
+      expect(some.picks).toHaveLength(SMALL);
+    }
+  });
+
+  it("kept cards count toward it: three kept takes one more, four kept takes none", () => {
+    const changers = pool.filter(isGc);
+    for (const n of [3, 4]) {
+      const kept = changers.slice(0, n);
+      const input = bare({
+        keep: kept.map((c) => ({ qty: 1, card: c })),
+        pool: lowChangers.filter((r) => !kept.some((k) => k.id === r.cardId)),
+      });
+      const shell = buildShell({ ...input, goals: goalsFor(4, kept) });
+      expect(count(cardsOf(shell.picks), isGc)).toBe(4 - n);
+      expect(shell.reach).toEqual(n === 3 ? { added: 1, short: 0 } : undefined);
+    }
+  });
+
+  it("locked staples and combo completions never leave, however low they rank", () => {
+    const staple = lowChangers.find((r) => r.name === "Plain 1-9")!;
+    const comboCard = lowChangers.find((r) => r.name === "Plain 2-8")!;
+    const input = bare({
+      pool: [
+        ...lowChangers.filter((r) => r.cardId !== staple.cardId && r.cardId !== comboCard.cardId),
+        { ...staple, score: 0.001 },
+        { ...comboCard, score: 0.002 },
+      ],
+      tournamentContext: { commanderNames: ["Test Commander"], lists: 10, since: null },
+      tournamentsByCandidate: new Map<string, TournamentSignal>([
+        [staple.cardId, { lists: 9, top4: 4 }],
+      ]),
+      comboCandidateIds: new Set([comboCard.cardId]),
+    });
+    for (const seed of SEEDS.slice(0, 12)) {
+      const shell = buildShell({ ...input, seed, goals: goalsFor(4) });
+      expect(shell.reach).toEqual({ added: 4, short: 0 });
+      const tierOf = (id: string) => shell.picks.find((p) => p.cardId === id)?.tier;
+      expect(tierOf(staple.cardId)).toBe("locked");
+      expect(tierOf(comboCard.cardId)).toBe("combo");
+    }
+  });
+
+  it("with no sampled pick in its own bucket, a card takes the nearest bucket's place", () => {
+    // Bucket 2 is all locked staples (its need is 3), and the only Game Changers cost 2.
+    const staples = lowChangers.filter((r) => /^Plain 2-[0-2]$/.test(r.name));
+    const twos = lowChangers.filter((r) => r.costValue === 2 && isGc(byId.get(r.cardId)!));
+    const input = bare({
+      pool: lowChangers.filter((r) => !isGc(byId.get(r.cardId)!) || r.costValue === 2),
+      tournamentContext: { commanderNames: ["Test Commander"], lists: 10, since: null },
+      tournamentsByCandidate: new Map<string, TournamentSignal>(
+        staples.map((r) => [r.cardId, { lists: 9, top4: 4 }]),
+      ),
+    });
+    const before = buildShell({ ...input, goals: ceilingOnly(3) });
+    expect(before.picks.filter((p) => p.group === "curve-2").map((p) => p.tier)).toEqual([
+      "locked",
+      "locked",
+      "locked",
+    ]);
+    const after = buildShell({ ...input, goals: goalsFor(3) });
+    expect(after.reach).toEqual({ added: 1, short: 0 });
+    const came = after.picks.find((p) => p.tier === "reach")!;
+    expect(came.cardId).toBe(twos[0].cardId);
+    expect(came.group).toBe("curve-2"); // its own cost, said as it is
+    expect(after.picks).toHaveLength(before.picks.length);
+    // The card that left: the weakest sampled pick one bucket down (b − 1 first, the borrowing order).
+    const is = new Set(after.picks.map((p) => p.cardId));
+    const left = before.picks.filter((p) => !is.has(p.cardId));
+    expect(left).toHaveLength(1);
+    expect(left[0].group).toBe("curve-1");
+    expect(left[0].score).toBe(
+      Math.min(...before.picks.filter((p) => p.group === "curve-1").map((p) => p.score)),
+    );
+    // The three staples are still there.
+    for (const r of staples) expect(is.has(r.cardId)).toBe(true);
+  });
+
+  it("the colorless-identity cap on the base holds: at the cap a colorless land comes in only for a colorless one", () => {
+    const capped: AutofillMeta = {
+      ...AUTOFILL,
+      base: { ...AUTOFILL.base, maxColorlessIdentity: 1 },
+    };
+    const fields = plainLands.filter((r) => r.name.startsWith("Field"));
+    const cradle = landRecs.find((r) => r.name === "Cradle")!;
+    // One colorless land on top, three colored under it, and a colorless Game Changer no rank reaches.
+    const base = [
+      { ...fields[0], ciMask: 0, score: 0.9 },
+      ...fields.slice(1, 4).map((r, k) => ({ ...r, score: 0.8 - k * 0.05 })),
+      { ...cradle, ciMask: 0, score: 0.01 },
+    ];
+    const noChangers = lowChangers.filter((r) => !isGc(byId.get(r.cardId)!));
+    const input = bare({ autofill: capped, pool: noChangers, basePool: base });
+    const landsOf = (picks: readonly ShellPick[]) =>
+      picks.filter((p) => p.group === "base").map((p) => p.name);
+    const before = buildShell({ ...input, goals: ceilingOnly(3) });
+    expect(landsOf(before.picks)).toEqual(["Field 0", "Field 1", "Field 2", "Field 3"]);
+
+    const after = buildShell({ ...input, goals: goalsFor(3) });
+    expect(after.reach).toEqual({ added: 1, short: 0 });
+    // Cradle takes the colorless land's place, not the weakest land's: still one colorless land.
+    expect(landsOf(after.picks)).toEqual(["Cradle", "Field 1", "Field 2", "Field 3"]);
+    // Below the cap it takes the weakest land's place, as any card does.
+    const roomy = buildShell({ ...input, autofill: AUTOFILL, goals: goalsFor(3) });
+    expect(landsOf(roomy.picks)).toEqual(["Field 0", "Field 1", "Field 2", "Cradle"]);
+  });
+
+  it("nothing is sampled: the same windows as the ceiling alone, a seed still means one list, and Math.random never runs", () => {
+    const random = vi.spyOn(Math, "random");
+    for (const seed of SEEDS.slice(0, 10)) {
+      windows.length = 0;
+      buildShell(bare({ seed, goals: ceilingOnly(4) }));
+      const ceilingWindows = windows.map((w) => [...w]);
+      windows.length = 0;
+      const once = buildShell(bare({ seed, goals: goalsFor(4) }));
+      expect(windows).toEqual(ceilingWindows);
+      expect(buildShell(bare({ seed, goals: goalsFor(4) }))).toEqual(once);
+    }
+    expect(random).not.toHaveBeenCalled();
   });
 });

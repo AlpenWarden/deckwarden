@@ -217,3 +217,70 @@ describe("skippedByGoals — what a target kept out, by rule", () => {
     expect(skippedByGoals(gate(3), picks([pieceA, pieceB]))).toEqual({});
   });
 });
+
+describe("shellGoals.missing — what the list still needs to show its target (AUTOFILL-REACH)", () => {
+  const ids = (cards: MtgCard[]) => cards.map((c) => c.id);
+
+  it("a target of 4 takes four Game Changers: the kept ones count, the picks so far count", () => {
+    const g = gate(4);
+    expect(g.missing!([])?.more).toBe(4);
+    expect(g.missing!(ids(gcs.slice(0, 1)))?.more).toBe(3);
+    expect(g.missing!(ids(gcs.slice(0, 3)))?.more).toBe(1);
+    expect(g.missing!(ids(gcs.slice(0, 4)))).toBeNull();
+    // Cards that don't count change nothing.
+    expect(g.missing!(ids([plain, pieceA, turns[0]]))?.more).toBe(4);
+    // Three kept: one more, whatever the picks' order.
+    const kept = gate(4, gcs.slice(0, 3));
+    expect(kept.missing!([])?.more).toBe(1);
+    expect(kept.missing!(ids([plain, gcs[3]]))).toBeNull();
+  });
+
+  it("which candidates count is the adapter's answer, by their declared flags", () => {
+    const missing = gate(4).missing!([])!;
+    for (const gc of gcs) expect(missing.counts(gc.id)).toBe(true);
+    for (const other of [armageddon, liliana, ...turns, pieceA, plain]) {
+      expect(missing.counts(other.id)).toBe(false);
+    }
+    // Not a candidate: never counted.
+    expect(missing.counts("00000000-0000-4000-8000-000000000000")).toBe(false);
+    expect(missing.counts(commander.id)).toBe(false);
+  });
+
+  it("a target of 3 takes one; 5 takes the four that show Bracket 4, the most a list of cards shows", () => {
+    expect(gate(3).missing!([])?.more).toBe(1);
+    expect(gate(3).missing!(ids(gcs.slice(0, 1)))).toBeNull();
+    expect(gate(5).missing!([])?.more).toBe(4);
+    expect(gate(5).missing!(ids(gcs.slice(0, 4)))).toBeNull();
+  });
+
+  it("targets 1 and 2 are never built up to: no count of cards shows them", () => {
+    for (const t of [1, 2]) {
+      expect(gate(t).missing!([])).toBeNull();
+      expect(gate(t).missing!(ids([plain, pieceA]))).toBeNull();
+    }
+  });
+
+  it("a floor already at the target by another road takes nothing: a kept two-card combo shows Bracket 3", () => {
+    // The combo's pieces are kept, so the read's floor is 3 with no Game Changer.
+    const g = gate(3, [pieceA, pieceB]);
+    expect(g.missing!([])).toBeNull();
+    // At 4 the same list still takes its four.
+    expect(gate(4, [pieceA, pieceB]).missing!([])?.more).toBe(4);
+  });
+
+  it("an adapter with no measure names nothing missing, and the ceiling works as before", () => {
+    const { assess, impact } = brackets;
+    const bare = shellGoals({
+      meta: { assess, impact },
+      deck: { gameId: "mtg", formatCode: "commander", zones: { commander: [entry(commander)] } },
+      cards: cardMap([commander]) as ReadonlyMap<string, CardData>,
+      candidates: cardMap(all) as ReadonlyMap<string, CardData>,
+      combos: [],
+      zone: "main",
+      targetLevel: 4,
+      answers: null,
+    });
+    expect(bare.missing!([])).toBeNull();
+    expect(bare.conflicts(gcs[0].id, [])).toEqual([]);
+  });
+});

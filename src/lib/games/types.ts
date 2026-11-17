@@ -931,6 +931,19 @@ export interface BracketsMeta<A = Record<string, unknown>> {
    */
   shellNotes(skipped: Readonly<Record<string, number>>, targetLevel: number): string[];
   /**
+   * Pure (AUTOFILL-REACH): Autofill's notes on building a starter shell up
+   * to the deck's target, in the adapter's words: how many of the cards
+   * `toward` counts it brought in, and how many the shell is still short
+   * where it had no more to bring (`budgetUsd`: the sheet's per-card budget,
+   * when one narrowed the candidates). Each line names its source; a zero
+   * says nothing. Optional, with `toward`: without it the shell says
+   * nothing about reaching.
+   */
+  reachNotes?(
+    reach: Readonly<{ added: number; short: number; budgetUsd?: number }>,
+    targetLevel: number,
+  ): string[];
+  /**
    * Pure (BRACKET-FIT): what each conflict of `read` needs out of the list
    * to fit the target `read` was assessed at — one fix per `read.conflicts`
    * id, in that order; empty with no target or nothing above it. `input` is
@@ -945,6 +958,9 @@ export interface BracketsMeta<A = Record<string, unknown>> {
    * list needs (`input` is the input `read` came from). Null when that
    * measure can't show the target, or the read's floor already does.
    * Optional: without it the upgrade keeps Suggestions' own order.
+   * Autofill builds a starter shell up to a target by the same measure
+   * (AUTOFILL-REACH, the owner's call of 2026-11-17): without it a target
+   * is only a ceiling for the shell.
    */
   toward?(read: BracketRead, input: BracketInput<A>, target: number): BracketToward<A> | null;
   /**

@@ -31,7 +31,13 @@
  * real adapter, never passes 2; a target of 3 holds three Game Changers at
  * most; goals that don't fit the game answer 400.
  *
- * Budget: 15 autofill POSTs — under the 20/min deckAutofill bucket. Never
+ * AUTOFILL-REACH adds a target that is built up to: Etali, Primal Storm at
+ * seed 424242 plans three Game Changers with no target (step 0's case); at
+ * a target of 4 the fourth comes in for a sampled pick, card for card and
+ * group for group, the note counts it, and the shell's own read has its
+ * floor at 4; a target of 5 takes the same four and never names Bracket 5.
+ *
+ * Budget: 18 autofill POSTs — under the 20/min deckAutofill bucket. Never
  * retry into a 429; `pnpm counters:reset` if a manual battery preceded this.
  */
 import { BASE } from "./smoke/guard"; // first import: a non-local BASE_URL exits 1 here
@@ -316,6 +322,107 @@ async function main() {
     "goals that don't fit the game → 400 Invalid goals",
     gBad.status === 400 && gBad.json.error === "Invalid goals",
     gBad.status,
+  );
+
+  // -------------------------------------------------------- AUTOFILL-REACH
+  // A target that is set is built up to (the owner's call of 2026-11-17).
+  // The case is step 0's (AUTOFILL-TARGET, 2026-11-16): Etali, Primal Storm
+  // at seed 424242 plans three Game Changers with no target, and planned the
+  // same shell at a target of 4 ("the cards say at least 3", twelve more in
+  // its pools). Counted by the flags the read itself takes and by the read's
+  // floor, which stale feeds on the dev branch cannot move.
+  console.log("\nEtali — a target that is set is built up to (AUTOFILL-REACH) — 3 POSTs:");
+  const etali = await findCard("Etali, Primal Storm");
+  const etaliBody = { game: "mtg", format: "commander", leaderIds: [etali.id], seed: 424_242 };
+  const e0 = await autofill(etaliBody);
+  const e4 = await autofill({ ...etaliBody, goals: { v: 1, targetLevel: 4 } });
+  const e5 = await autofill({ ...etaliBody, goals: { v: 1, targetLevel: 5 } });
+  const changers = (r: ShellResponse) => flagged(r, "game_changer").length;
+  const had = changers(e0.json);
+  check(
+    `no target: 99 picks and fewer than four Game Changers (${had}), so the case is still a case`,
+    e0.status === 200 && qty(e0.json) === 99 && had < 4,
+    had,
+  );
+  check(
+    `target 4: 99 picks, four Game Changers (${changers(e4.json)})`,
+    e4.status === 200 && qty(e4.json) === 99 && changers(e4.json) === 4,
+    e4.json.error ?? changers(e4.json),
+  );
+  const cameIn = e4.json.picks.filter((pk) => pk.tier === "reach");
+  const cameInIds = new Set(cameIn.map((pk) => pk.cardId));
+  check(
+    `target 4: ${4 - had} came in, each marked and each a Game Changer`,
+    cameIn.length === 4 - had &&
+      flagged(e4.json, "game_changer").filter((pk) => cameInIds.has(pk.cardId)).length ===
+        cameIn.length,
+    cameIn.map((pk) => nameOf(e4.json, pk.cardId)),
+  );
+  const e0Ids = new Set(e0.json.picks.map((pk) => pk.cardId));
+  const e4Ids = new Set(e4.json.picks.map((pk) => pk.cardId));
+  const wentOut = e0.json.picks.filter((pk) => !e4Ids.has(pk.cardId));
+  check(
+    "target 4: a swap, card for card: every other pick is the no-target shell's, and what left was sampled",
+    e4.json.picks.filter((pk) => !e0Ids.has(pk.cardId)).length === cameIn.length &&
+      wentOut.length === cameIn.length &&
+      wentOut.every((pk) => pk.tier === "sampled"),
+    wentOut.map((pk) => `${nameOf(e0.json, pk.cardId)} (${pk.tier})`),
+  );
+  check(
+    "target 4: every group holds what it held",
+    JSON.stringify(e4.json.groups) === JSON.stringify(e0.json.groups),
+    e4.json.groups,
+  );
+  const reachNote = `Added ${cameIn.length} Game Changer${cameIn.length === 1 ? "" : "s"} to show your Bracket 4 target (Wizards' list)`;
+  check(`target 4: "${reachNote}"`, e4.json.notes.includes(reachNote), e4.json.notes);
+  // The shell's own read, its facts from the facts route: the floor is the target.
+  const etaliIds = [...new Set([etali.id, ...e4.json.picks.map((pk) => pk.cardId)])].sort();
+  const etaliFactsRes = await fetch(
+    `${BASE}/api/combos/complete?game=mtg&ids=${etaliIds.join(",")}`,
+  );
+  const etaliFacts = (await etaliFactsRes.json()) as {
+    combos: CompleteCombo[];
+    freshness: BracketFreshness;
+  };
+  const etaliCards = new Map<string, CardData>(
+    e4.json.cards.map((c) => [c.id, c as unknown as CardData]),
+  );
+  const etaliDeck = {
+    gameId: "mtg" as const,
+    formatCode: "commander",
+    zones: {
+      commander: [{ cardId: etali.id, qty: 1, tags: [] }],
+      main: e4.json.picks.map((pk) => ({ cardId: pk.cardId, qty: pk.qty, tags: [] })),
+    },
+  };
+  const etaliRead = brackets.assess({
+    deck: etaliDeck,
+    cards: etaliCards,
+    combos: etaliFacts.combos,
+    freshness: etaliFacts.freshness,
+    targetLevel: 4,
+  });
+  const etaliLine = brackets.line(etaliRead, {
+    deck: etaliDeck,
+    cards: etaliCards,
+    progress: null,
+    targetLevel: 4,
+  });
+  check(
+    `target 4: the shell's read has its floor at the target, nothing above it — "${etaliLine}"`,
+    etaliFactsRes.status === 200 && etaliRead.minimum === 4 && etaliRead.conflicts.length === 0,
+    { minimum: etaliRead.minimum, conflicts: etaliRead.conflicts, status: etaliRead.status },
+  );
+  check(
+    "target 5: the same four come in, and the note names Bracket 4, never 5",
+    e5.status === 200 &&
+      changers(e5.json) === 4 &&
+      picksKey(e5.json) === picksKey(e4.json) &&
+      e5.json.notes.includes(
+        `Added ${cameIn.length} Game Changer${cameIn.length === 1 ? "" : "s"} to show Bracket 4, the most a list of cards can show (Wizards' list)`,
+      ) &&
+      e5.json.notes.every((n) => !/Bracket 5/.test(n)),
+    e5.json.notes,
   );
 
   // ------------------------------------------------------------------- W9c

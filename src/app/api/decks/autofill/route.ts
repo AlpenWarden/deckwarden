@@ -29,6 +29,15 @@
  * goals absent, or a budget alone — nothing changes: fixed-seed shells are
  * byte-identical (the planner's golden; the live seed-1,234,567 shell).
  *
+ * Reach (AUTOFILL-REACH, the owner's call of 2026-11-17): a target that is
+ * set is also built up to. Where the planned shell is short of it by the
+ * adapter's own measure (`brackets.toward`: for Magic a count of Game
+ * Changers), the planner swaps the best-ranked candidates that count in for
+ * its weakest sampled picks, from the pools already gathered here, so the
+ * per-card budget still holds and nothing more is read. The notes say what
+ * came in, or what the shell is still short (`brackets.reachNotes`). A
+ * shell that already shows its target is unchanged, pick for pick.
+ *
  * Caching intent: force-dynamic + no-store — output depends on the body
  * and (for omitted seeds) a server roll. Rate-limited per IP as the app's
  * costliest read; W9b's reroll button spends this budget.
@@ -276,9 +285,19 @@ export async function POST(request: NextRequest) {
   const draft = buildShell({ ...shellInput, goals: goalsCheck, lockStaples });
   // What the target kept out: the shell the same seed plans with no goals,
   // walked against the check — one note per rule, in the adapter's words.
+  // Then what building up to the target brought in, or is still short
+  // (AUTOFILL-REACH): the planner's counts, worded by the adapter.
   const goalNotes =
     brackets && goalsCheck && targetLevel !== null
-      ? brackets.shellNotes(skippedByGoals(goalsCheck, buildShell(shellInput).picks), targetLevel)
+      ? [
+          ...brackets.shellNotes(
+            skippedByGoals(goalsCheck, buildShell(shellInput).picks),
+            targetLevel,
+          ),
+          ...(draft.reach && brackets.reachNotes
+            ? brackets.reachNotes({ ...draft.reach, budgetUsd }, targetLevel)
+            : []),
+        ]
       : [];
 
   // Fillers (adapter basics) + the wire read the response needs anyway.

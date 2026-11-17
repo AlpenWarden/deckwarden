@@ -1230,6 +1230,41 @@ export function mtgShellNotes(skipped: Readonly<Record<string, number>>, target:
 }
 
 /**
+ * Autofill's notes on building up to the target (AUTOFILL-REACH, the
+ * owner's call of 2026-11-17): how many Game Changers it brought in so the
+ * cards show the target (`mtgBracketToward`'s count: one shows Bracket 3,
+ * four show Bracket 4, and a target of 5 takes those four, the most a list
+ * of cards can show), and how many the shell is still short where it had no
+ * more to bring in: the candidates held none, a per-card budget left none,
+ * or the kept cards left no pick to replace. Counts, never card names (the
+ * notes' rule), and every line names its source (D0).
+ */
+export function mtgReachNotes(
+  reach: Readonly<{ added: number; short: number; budgetUsd?: number }>,
+  target: number,
+): string[] {
+  const shows = Math.min(target, gameChangerLevel(Number.POSITIVE_INFINITY));
+  const notes: string[] = [];
+  if (reach.added > 0) {
+    const cards = `${reach.added} ${plural(reach.added, "Game Changer", "Game Changers")}`;
+    notes.push(
+      shows === target
+        ? `Added ${cards} to show your Bracket ${target} target (${SOURCE_SHORT.gameChangers})`
+        : `Added ${cards} to show Bracket ${shows}, the most a list of cards can show (${SOURCE_SHORT.gameChangers})`,
+    );
+  }
+  if (reach.short > 0) {
+    const cards = `${reach.short} ${plural(reach.short, "Game Changer", "Game Changers")}`;
+    notes.push(
+      `Still ${cards} short of Bracket ${shows}. Autofill had no more to bring in${
+        reach.budgetUsd === undefined ? "" : ` under the $${reach.budgetUsd}-a-card budget`
+      } (${SOURCE_SHORT.gameChangers})`,
+    );
+  }
+  return notes;
+}
+
+/**
  * The Combo Radar's badge (Y6b): one combo read on its own, exactly as
  * `readCombo` reads it inside a list. The pieces stand in for the cards —
  * a combo's reading takes their ids alone, never their flags — and the
@@ -1362,6 +1397,8 @@ export const mtgBrackets: BracketsMeta<MtgAttrs> = {
   flagPaths: MTG_BRACKET_FLAG_PATHS,
   impact: mtgBracketImpact,
   shellNotes: mtgShellNotes,
+  // AUTOFILL-REACH: what Autofill brought in to show the target, and what it is still short.
+  reachNotes: mtgReachNotes,
   // BRACKET-FIT: what each conflict needs out of the list (the "Swap to fit" sheet's planner).
   fixes: mtgBracketFixes,
   // BRACKET-UP: what carries the read up to a target (the "Upgrade toward" sheet's lead).
