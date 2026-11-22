@@ -1,5 +1,10 @@
 "use client";
 
+// TRIM-T1 (2026-11-22): cut to what the site renders, on purpose. The one
+// caller is the Segmented control: a horizontal group with no gap between its
+// items. The vertical option and the item rules that needed it or the
+// toggle's second variant are gone; the rules for a group with no gap are
+// live and stay. A registry re-sync would bring the rest back.
 import * as React from "react";
 import { Toggle as TogglePrimitive } from "@base-ui/react/toggle";
 import { ToggleGroup as ToggleGroupPrimitive } from "@base-ui/react/toggle-group";
@@ -11,13 +16,11 @@ import { toggleVariants } from "@/components/ui/toggle";
 const ToggleGroupContext = React.createContext<
   VariantProps<typeof toggleVariants> & {
     spacing?: number;
-    orientation?: "horizontal" | "vertical";
   }
 >({
-  size: "default",
+  size: "sm",
   variant: "default",
   spacing: 2,
-  orientation: "horizontal",
 });
 
 function ToggleGroup({
@@ -25,13 +28,11 @@ function ToggleGroup({
   variant,
   size,
   spacing = 2,
-  orientation = "horizontal",
   children,
   ...props
-}: ToggleGroupPrimitive.Props &
+}: Omit<ToggleGroupPrimitive.Props, "orientation"> &
   VariantProps<typeof toggleVariants> & {
     spacing?: number;
-    orientation?: "horizontal" | "vertical";
   }) {
   return (
     <ToggleGroupPrimitive
@@ -39,15 +40,15 @@ function ToggleGroup({
       data-variant={variant}
       data-size={size}
       data-spacing={spacing}
-      data-orientation={orientation}
+      data-orientation="horizontal"
       style={{ "--gap": spacing } as React.CSSProperties}
       className={cn(
-        "group/toggle-group flex w-fit flex-row items-center gap-[--spacing(var(--gap))] rounded-lg data-[size=sm]:rounded-[min(var(--radius-md),10px)] data-vertical:flex-col data-vertical:items-stretch",
+        "group/toggle-group flex w-fit flex-row items-center gap-[--spacing(var(--gap))] rounded-lg data-[size=sm]:rounded-[min(var(--radius-md),10px)]",
         className,
       )}
       {...props}
     >
-      <ToggleGroupContext.Provider value={{ variant, size, spacing, orientation }}>
+      <ToggleGroupContext.Provider value={{ variant, size, spacing }}>
         {children}
       </ToggleGroupContext.Provider>
     </ToggleGroupPrimitive>
@@ -58,7 +59,7 @@ function ToggleGroupItem({
   className,
   children,
   variant = "default",
-  size = "default",
+  size = "sm",
   ...props
 }: TogglePrimitive.Props & VariantProps<typeof toggleVariants>) {
   const context = React.useContext(ToggleGroupContext);
@@ -70,7 +71,7 @@ function ToggleGroupItem({
       data-size={context.size || size}
       data-spacing={context.spacing}
       className={cn(
-        "shrink-0 group-data-[spacing=0]/toggle-group:rounded-none group-data-[spacing=0]/toggle-group:px-2 focus:z-10 focus-visible:z-10 group-data-[spacing=0]/toggle-group:has-data-[icon=inline-end]:pr-1.5 group-data-[spacing=0]/toggle-group:has-data-[icon=inline-start]:pl-1.5 group-data-horizontal/toggle-group:data-[spacing=0]:first:rounded-l-lg group-data-vertical/toggle-group:data-[spacing=0]:first:rounded-t-lg group-data-horizontal/toggle-group:data-[spacing=0]:last:rounded-r-lg group-data-vertical/toggle-group:data-[spacing=0]:last:rounded-b-lg group-data-horizontal/toggle-group:data-[spacing=0]:data-[variant=outline]:border-l-0 group-data-vertical/toggle-group:data-[spacing=0]:data-[variant=outline]:border-t-0 group-data-horizontal/toggle-group:data-[spacing=0]:data-[variant=outline]:first:border-l group-data-vertical/toggle-group:data-[spacing=0]:data-[variant=outline]:first:border-t",
+        "shrink-0 group-data-[spacing=0]/toggle-group:rounded-none group-data-[spacing=0]/toggle-group:px-2 focus:z-10 focus-visible:z-10 group-data-[spacing=0]/toggle-group:has-data-[icon=inline-end]:pr-1.5 group-data-[spacing=0]/toggle-group:has-data-[icon=inline-start]:pl-1.5 group-data-horizontal/toggle-group:data-[spacing=0]:first:rounded-l-lg group-data-horizontal/toggle-group:data-[spacing=0]:last:rounded-r-lg",
         toggleVariants({
           variant: context.variant || variant,
           size: context.size || size,

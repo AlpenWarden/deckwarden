@@ -27,7 +27,6 @@ describe("Button touch targets", () => {
     ["icon", "size-8"],
     ["icon-xs", "size-6"],
     ["icon-sm", "size-7"],
-    ["icon-lg", "size-9"],
   ] as const)("icon size %s keeps %s and grows to 44 × 44 on a coarse pointer", (size, mouse) => {
     const cls = buttonVariants({ size });
     expect(cls).toContain(mouse);
@@ -56,7 +55,7 @@ describe("Primary button hairline", () => {
     expect(cls).not.toContain("border-transparent");
   });
 
-  it.each(["outline", "secondary", "ghost", "destructive", "link"] as const)(
+  it.each(["outline", "secondary", "ghost", "destructive"] as const)(
     "the %s variant has no hairline",
     (variant) => {
       expect(cn(buttonVariants({ variant }))).not.toContain("border-gold/70");
@@ -170,11 +169,10 @@ describe("Button recipe (U1)", () => {
     has({ variant: "outline" }, "aria-expanded:bg-muted");
     has({ variant: "ghost" }, "aria-expanded:text-foreground");
     has({ variant: "destructive" }, "aria-expanded:bg-destructive/15");
-    has({ variant: "link" }, "aria-expanded:underline");
   });
 
   it("the small sizes and every icon size share one 9.6 px radius; sm labels are 13 px", () => {
-    for (const size of ["xs", "sm", "icon", "icon-xs", "icon-sm", "icon-lg"] as const) {
+    for (const size of ["xs", "sm", "icon", "icon-xs", "icon-sm"] as const) {
       const cls = tokensOf(cn(buttonVariants({ size })));
       expect(cls, size).toContain("rounded-md");
       expect(
@@ -222,7 +220,7 @@ describe("Button press (U2)", () => {
       expect(cls, size).toContain("motion-safe:active:scale-[0.96]");
       expect(cls, size).not.toContain("motion-safe:active:scale-[0.98]");
     }
-    for (const size of ["default", "sm", "lg", "icon", "icon-sm", "icon-lg"] as const) {
+    for (const size of ["default", "sm", "lg", "icon", "icon-sm"] as const) {
       const cls = tokensOf(cn(buttonVariants({ size })));
       expect(cls, size).toContain("motion-safe:active:scale-[0.98]");
       expect(cls, size).not.toContain("motion-safe:active:scale-[0.96]");
@@ -248,7 +246,6 @@ describe("Button press (U2)", () => {
         ["active:bg-muted", "active:text-foreground", "dark:active:bg-muted/50"],
       ],
       [{ variant: "destructive" }, ["active:bg-destructive/15", "dark:active:bg-destructive/20"]],
-      [{ variant: "link" }, ["active:underline"]],
     ];
     for (const [variant, held] of cases) {
       const cls = tokensOf(cn(buttonVariants(variant)));

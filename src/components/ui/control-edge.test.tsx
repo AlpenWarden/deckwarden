@@ -1,16 +1,16 @@
 /**
  * The control edge (U1, WAVE5.md D1): every control that draws its own
  * boundary reads `--border-control` — the outline Button (button.test.tsx),
- * the Segmented's container (segmented.test.tsx), and here the Input and the
- * Toggle's outline flavour. Panels and dividers keep `--border`; the dark
- * fills keep `--input`. (The Select trigger's case left with select.tsx in
- * S8 — this test was its only importer.)
+ * the Segmented's container (segmented.test.tsx), and here the Input. Panels
+ * and dividers keep `--border`; the dark fills keep `--input`. (The Select
+ * trigger's case left with select.tsx in S8 — this test was its only
+ * importer; the Toggle's outline flavour left with the variant in TRIM-T1,
+ * 2026-11-22, which no production file used.)
  */
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { Input } from "./input";
-import { toggleVariants } from "./toggle";
 
 const tokensOf = (cls: string) => cls.split(/\s+/);
 
@@ -21,11 +21,5 @@ describe("the control edge", () => {
     expect(cls).toContain("border-(--border-control)");
     expect(cls).not.toContain("border-input");
     expect(cls).toContain("dark:bg-input/30");
-  });
-
-  it("the Toggle's outline flavour draws its line on the token", () => {
-    const cls = tokensOf(toggleVariants({ variant: "outline" }));
-    expect(cls).toContain("border-(--border-control)");
-    expect(cls).not.toContain("border-input");
   });
 });

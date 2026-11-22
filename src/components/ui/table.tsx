@@ -1,7 +1,7 @@
 /**
  * Table (U10a, WAVE5.md D10; the owner's F18): a hand copy of the v4
  * registry's `apps/v4/registry/bases/base/ui/table.tsx` at `c257f68`
- * (2026-09-04) — the eight parts and their slots — with the class strings
+ * (2026-09-04) — its parts and their slots — with the class strings
  * of `new-york-v4/ui/table.tsx` at the same commit, never `shadcn add`.
  *
  * On arrival, the house density the hub's staples and the analytics tables
@@ -13,6 +13,13 @@
  * force `whitespace-nowrap`: a type line wraps inside the `min-w` a caller
  * sets. `<tr hidden>` passes through untouched — U7b's fold keeps every
  * staple in the markup.
+ *
+ * TRIM-T1 (2026-11-22): cut to what the site renders, on purpose. Six of
+ * the registry's eight parts are here (no footer, no caption), and the row
+ * and the cells no longer carry the registry's rules for a checkbox in a
+ * cell, a selected row and an expanded row: no table on the site has any of
+ * the three, and the rules were repeated on every row and cell of the hub's
+ * staples. A later re-sync from the registry would bring all of it back.
  */
 import * as React from "react";
 
@@ -44,27 +51,8 @@ function TableBody({ className, ...props }: React.ComponentProps<"tbody">) {
   );
 }
 
-function TableFooter({ className, ...props }: React.ComponentProps<"tfoot">) {
-  return (
-    <tfoot
-      data-slot="table-footer"
-      className={cn("bg-muted/50 border-t font-medium [&>tr]:last:border-b-0", className)}
-      {...props}
-    />
-  );
-}
-
 function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
-  return (
-    <tr
-      data-slot="table-row"
-      className={cn(
-        "border-b has-aria-expanded:bg-muted/50 data-[state=selected]:bg-muted",
-        className,
-      )}
-      {...props}
-    />
-  );
+  return <tr data-slot="table-row" className={cn("border-b", className)} {...props} />;
 }
 
 function TableHead({ className, ...props }: React.ComponentProps<"th">) {
@@ -72,7 +60,7 @@ function TableHead({ className, ...props }: React.ComponentProps<"th">) {
     <th
       data-slot="table-head"
       className={cn(
-        "text-muted-foreground py-1.5 pr-3 text-left align-middle font-medium last:pr-0 [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
+        "text-muted-foreground py-1.5 pr-3 text-left align-middle font-medium last:pr-0",
         className,
       )}
       {...props}
@@ -84,23 +72,10 @@ function TableCell({ className, ...props }: React.ComponentProps<"td">) {
   return (
     <td
       data-slot="table-cell"
-      className={cn(
-        "py-1.5 pr-3 align-middle last:pr-0 [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
-        className,
-      )}
+      className={cn("py-1.5 pr-3 align-middle last:pr-0", className)}
       {...props}
     />
   );
 }
 
-function TableCaption({ className, ...props }: React.ComponentProps<"caption">) {
-  return (
-    <caption
-      data-slot="table-caption"
-      className={cn("text-muted-foreground mt-4 text-sm", className)}
-      {...props}
-    />
-  );
-}
-
-export { Table, TableHeader, TableBody, TableFooter, TableHead, TableRow, TableCell, TableCaption };
+export { Table, TableHeader, TableBody, TableHead, TableRow, TableCell };

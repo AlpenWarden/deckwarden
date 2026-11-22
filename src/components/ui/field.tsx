@@ -27,6 +27,10 @@
  * line D1 named for a disabled control's reason on touch and D10 for the
  * 429 sentence under a field; `FieldError` is the destructive 12 px line,
  * `role="alert"` as in the registry, rendered only with content.
+ *
+ * TRIM-T1 (2026-11-22): cut to what the site renders, on purpose. The
+ * registry's FieldContent part, and the horizontal Field's rule that looked
+ * for it, are gone; a later re-sync from the registry would bring them back.
  */
 import { Field as FieldPrimitive } from "@base-ui/react/field";
 import { cva, type VariantProps } from "class-variance-authority";
@@ -37,8 +41,7 @@ const fieldVariants = cva("group/field flex w-full data-invalid:text-destructive
   variants: {
     orientation: {
       vertical: "flex-col gap-1 [&>.sr-only]:w-auto",
-      horizontal:
-        "flex-row items-center gap-2 text-sm *:data-[slot=field-label]:flex-auto has-[>[data-slot=field-content]]:items-start",
+      horizontal: "flex-row items-center gap-2 text-sm *:data-[slot=field-label]:flex-auto",
     },
   },
   defaultVariants: {
@@ -56,16 +59,6 @@ function Field({
       data-slot="field"
       data-orientation={orientation}
       className={cn(fieldVariants({ orientation }), className)}
-      {...props}
-    />
-  );
-}
-
-function FieldContent({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="field-content"
-      className={cn("group/field-content flex flex-1 flex-col gap-1 leading-snug", className)}
       {...props}
     />
   );
@@ -126,4 +119,4 @@ function FieldError({ className, children, ...props }: FieldPrimitive.Error.Prop
   );
 }
 
-export { Field, FieldContent, FieldLabel, FieldDescription, FieldError };
+export { Field, FieldLabel, FieldDescription, FieldError };

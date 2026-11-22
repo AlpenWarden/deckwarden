@@ -1,3 +1,6 @@
+// TRIM-T1 (2026-11-22): cut to what the site renders, on purpose. The text-only
+// variant and the largest icon size had no caller and are gone; a registry
+// re-sync would bring them back.
 import { Button as ButtonPrimitive } from "@base-ui/react/button";
 import { cva, type VariantProps } from "class-variance-authority";
 
@@ -48,7 +51,6 @@ const buttonVariants = cva(
         // heavier state.
         destructive:
           "bg-destructive/10 text-destructive hover:bg-destructive/15 aria-expanded:bg-destructive/15 active:bg-destructive/15 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/15 dark:hover:bg-destructive/20 dark:aria-expanded:bg-destructive/20 dark:active:bg-destructive/20 dark:focus-visible:ring-destructive/40",
-        link: "text-brand underline-offset-4 hover:underline aria-expanded:underline active:underline",
       },
       // Touch targets (R6, REDESIGN.md §7): ONE base rule — every text size
       // grows to at least 44 × 44 px and every icon size to 44 × 44 on a
@@ -72,7 +74,6 @@ const buttonVariants = cva(
           "size-6 rounded-md motion-safe:active:scale-[0.96] [&_svg:not([class*='size-'])]:size-3 pointer-coarse:size-11",
         "icon-sm":
           "size-7 rounded-md [&_svg:not([class*='size-'])]:size-3.5 pointer-coarse:size-11",
-        "icon-lg": "size-9 rounded-md pointer-coarse:size-11",
       },
     },
     defaultVariants: {

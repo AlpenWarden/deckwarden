@@ -1,18 +1,15 @@
 "use client";
 
+// TRIM-T1 (2026-11-22): cut to what the site renders, on purpose. Toasts here
+// are a success or an error, so the icons of the three other kinds are gone,
+// and so are the two re-exports of Base UI's own manager functions; a
+// registry re-sync would bring them back.
 import * as React from "react";
 import { Toast as ToastPrimitive } from "@base-ui/react/toast";
 import { cn } from "@/lib/utils";
 
 import { Button } from "@/components/ui/button";
-import {
-  XIcon,
-  CircleCheckIcon,
-  InfoIcon,
-  TriangleAlertIcon,
-  OctagonXIcon,
-  Loader2Icon,
-} from "lucide-react";
+import { XIcon, CircleCheckIcon, OctagonXIcon } from "lucide-react";
 
 const toast = ToastPrimitive.createToastManager();
 
@@ -143,20 +140,8 @@ function ToastIcon({ type }: { type: string | undefined }) {
     icon = <CircleCheckIcon aria-hidden="true" />;
   }
 
-  if (type === "info") {
-    icon = <InfoIcon aria-hidden="true" />;
-  }
-
-  if (type === "warning") {
-    icon = <TriangleAlertIcon aria-hidden="true" />;
-  }
-
   if (type === "error") {
     icon = <OctagonXIcon className="text-destructive" aria-hidden="true" />;
-  }
-
-  if (type === "loading") {
-    icon = <Loader2Icon className="animate-spin" aria-hidden="true" />;
   }
 
   if (!icon) {
@@ -217,9 +202,6 @@ function Toaster({
   );
 }
 
-const createToastManager = ToastPrimitive.createToastManager;
-const useToastManager = ToastPrimitive.useToastManager;
-
 export {
   Toaster,
   Toast,
@@ -231,7 +213,5 @@ export {
   ToastProvider,
   ToastTitle,
   ToastViewport,
-  createToastManager,
   toast,
-  useToastManager,
 };
