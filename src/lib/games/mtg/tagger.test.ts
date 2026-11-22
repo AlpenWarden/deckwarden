@@ -10,7 +10,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { MTG_ROLE_KEYS, MTG_ROLES, mtgRole, type MtgRoleKey } from "./roles";
+import { MTG_ROLE_KEYS, MTG_ROLES, type MtgRole, type MtgRoleKey } from "./roles";
 import {
   indexTagLine,
   isUnreviewedMld,
@@ -369,9 +369,11 @@ describe("taggerCounts", () => {
 
 // --- Y7a: Swap Lab's roles -------------------------------------------------------
 
-const RAMP = mtgRole("ramp");
-const ROCK = mtgRole("mana-rock");
-const TUTOR = mtgRole("tutor");
+/** A role by its key, on the declared shape (`except` is optional there). */
+const role = (key: MtgRoleKey): MtgRole => MTG_ROLES.find((r) => r.key === key)!;
+const RAMP = role("ramp");
+const ROCK = role("mana-rock");
+const TUTOR = role("tutor");
 const TUTOR_LAND = TUTOR.except![0].id;
 const SOL_RING = id(20);
 const DEMONIC = id(21);

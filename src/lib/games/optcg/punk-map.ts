@@ -112,15 +112,11 @@ export function decodeHtmlEntities(text: string): string {
 }
 
 // --- Colors ------------------------------------------------------------------
-
-/**
- * The six OP colors' mask bits live in colors.ts (the bit story is there):
- * this module imports `node:crypto` for the printing uuid, and the browser
- * must never reach it for a constant (LATER.md row 287,
- * src/lib/client-graph.test.ts). Re-exported so the ingest and the tests
- * keep their import path.
- */
-export { OPTCG_COLOR_BIT };
+//
+// The six OP colors' mask bits live in colors.ts (the bit story is there):
+// this module imports `node:crypto` for the printing uuid, and the browser
+// must never reach it for a constant (LATER.md row 287,
+// src/lib/client-graph.test.ts).
 
 export function optcgColorsToMask(colors: string[] | null | undefined): number {
   let mask = 0;

@@ -1,19 +1,16 @@
 /**
  * The appearance store (R2): validation field by field (a corrupt or
- * foreign value is On), the load / save round trip under
- * `deckwarden:appearance`, and the hook — a client snapshot that follows
+ * foreign value is On), what a save stores under `deckwarden:appearance`
+ * and how it reads back, and the hook — a client snapshot that follows
  * same-tab saves and the cross-tab `storage` event.
  */
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
-import {
-  APPEARANCE_KEY,
-  loadAppearance,
-  parseAppearance,
-  saveAppearance,
-  useAppearance,
-} from "./appearance";
+import { APPEARANCE_KEY, parseAppearance, saveAppearance, useAppearance } from "./appearance";
+
+/** The stored value as the store reads it. */
+const stored = () => parseAppearance(window.localStorage.getItem(APPEARANCE_KEY));
 
 afterEach(() => {
   window.localStorage.clear();
@@ -34,12 +31,12 @@ describe("parseAppearance", () => {
   });
 });
 
-describe("loadAppearance / saveAppearance", () => {
+describe("saveAppearance", () => {
   it("round-trips under the key", () => {
-    expect(loadAppearance()).toEqual({ backgroundArt: true });
+    expect(stored()).toEqual({ backgroundArt: true });
     saveAppearance({ backgroundArt: false });
     expect(window.localStorage.getItem(APPEARANCE_KEY)).toBe('{"backgroundArt":false}');
-    expect(loadAppearance()).toEqual({ backgroundArt: false });
+    expect(stored()).toEqual({ backgroundArt: false });
   });
 });
 

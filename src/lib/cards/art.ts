@@ -146,16 +146,6 @@ export async function lookupScryfallArtMeta(printingId: string): Promise<ArtLook
   }
 }
 
-/**
- * The same lookup as a nullable — what the OG images, the hub banners, the
- * art endpoint and the editor's ambient layer read: any reason is null, and
- * callers degrade to their artless rendering, never to a 500.
- */
-export async function fetchScryfallArtMeta(printingId: string): Promise<ScryfallArtMeta | null> {
-  const lookup = await lookupScryfallArtMeta(printingId);
-  return "meta" in lookup ? lookup.meta : null;
-}
-
 /** The descriptor for a resolved crop — the credit built once, here. */
 export function artCropCardArt(meta: ScryfallArtMeta): CardArt {
   return {

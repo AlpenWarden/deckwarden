@@ -55,8 +55,6 @@ export type TargetChange =
   | (TargetChangeBase & { kind: "changed"; from: number; to: number })
   | (TargetChangeBase & { kind: "cleared"; from: number; to: null });
 
-export type TargetChangeKind = TargetChange["kind"];
-
 /** The tools a game declares that follow its target; empty for a game with none. */
 export function targetTools(
   adapter: Pick<GameAdapter, "recommend" | "capabilities">,

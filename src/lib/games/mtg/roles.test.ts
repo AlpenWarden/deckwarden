@@ -8,9 +8,19 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { isMtgRoleKey, MTG_ROLE_KEYS, MTG_ROLES, mtgRole, taggerTagUrl } from "./roles";
+import {
+  isMtgRoleKey,
+  MTG_ROLE_KEYS,
+  MTG_ROLES,
+  taggerTagUrl,
+  type MtgRole,
+  type MtgRoleKey,
+} from "./roles";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** A role by its key, on the declared shape (`except` is optional there). */
+const role = (key: MtgRoleKey): MtgRole => MTG_ROLES.find((r) => r.key === key)!;
 
 describe("MTG_ROLES", () => {
   it("is the measured whitelist of 17, in display order", () => {
@@ -48,8 +58,8 @@ describe("MTG_ROLES", () => {
       expect(role.tag.slug).toMatch(/^[a-z0-9-]+$/);
     }
     // The two parts of Tagger's tree that do a different job.
-    expect(mtgRole("tutor").except?.map((e) => e.slug)).toEqual(["tutor-land"]);
-    expect(mtgRole("recursion").except?.map((e) => e.slug)).toEqual([
+    expect(role("tutor").except?.map((e) => e.slug)).toEqual(["tutor-land"]);
+    expect(role("recursion").except?.map((e) => e.slug)).toEqual([
       "recursion-self",
       "recursion-land",
     ]);

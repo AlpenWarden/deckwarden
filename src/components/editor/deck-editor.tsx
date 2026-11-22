@@ -1833,26 +1833,18 @@ export function DeckEditor({
     [applyListSwap],
   );
 
-  // DECK-TOKENS: the Tokens section's adds, into the format's token zone —
-  // one through handleAdd (its "Added X" toast and Undo, the Card tab showing
-  // it), Add all as one whole-list swap with one Undo, like Import. Tokens
-  // never count toward the size, so a full 100 never turns these into Swap in….
+  // DECK-TOKENS: the Tokens section's add, into the format's token zone,
+  // through handleAdd (its "Added X" toast and Undo, the Card tab showing
+  // it). Tokens never count toward the size, so a full 100 never turns this
+  // into Swap in….
   const handleAddTokens = useCallback(
-    (tokens: EditorCard[]): string | undefined => {
+    (token: EditorCard): string | undefined => {
       if (!format) return "Deck not loaded yet";
       const zone = tokenZoneOf(format);
       if (!zone) return "This deck has no token list";
-      if (tokens.length === 1) return handleAdd(tokens[0], zone.id, 1);
-      let next: EditorEntry[] = entriesRef.current;
-      for (const card of tokens) {
-        const result = addCard(next, format, zone.id, card.id, 1);
-        if (result.error) return result.error;
-        next = result.entries;
-      }
-      applyListSwap(next, tokens, `Added ${tokens.length} tokens`);
-      return undefined;
+      return handleAdd(token, zone.id, 1);
     },
-    [format, handleAdd, applyListSwap],
+    [format, handleAdd],
   );
 
   // The empty deck state's autofill door (W9b): never from the More menu,

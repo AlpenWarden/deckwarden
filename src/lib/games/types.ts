@@ -170,7 +170,6 @@ export type AnalyticsBlock =
       title: string;
       value: string;
       hint?: string;
-      tone?: "ok" | "warn" | "bad";
     }
   | {
       kind: "table";
@@ -655,8 +654,6 @@ export interface FeedFreshness {
   state: "ok" | "stale" | "missing" | "off";
   /** When the feed last refreshed (ISO date-time); null when missing or off. */
   asOf: string | null;
-  /** A source detail worth showing ("53 cards", "bulk 7.1.3"). */
-  detail?: string;
 }
 
 export interface BracketFreshness {
@@ -852,8 +849,6 @@ export interface BracketFix {
  * the upgrade with cards that count and says why in these words.
  */
 export interface BracketToward<A = Record<string, unknown>> {
-  /** The read's factor id the cards count toward. */
-  factor: string;
   /** How many more cards that count must come in for the cards to show the target. */
   more: number;
   /** Whether a card counts, by its declared attrs. */

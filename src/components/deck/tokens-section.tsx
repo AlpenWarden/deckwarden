@@ -78,8 +78,8 @@ interface TokensSectionProps {
   /** Editor: steppers and remove on the text rows. Absent = read-only (share page). */
   onSetQty?: (zoneId: string, cardId: string, qty: number) => void;
   onRemove?: (zoneId: string, cardId: string) => void;
-  /** Editor: adds into the zone (one card, or several); an error line, or nothing. */
-  onAdd?: (cards: EditorCard[]) => string | undefined;
+  /** Editor: adds one card into the zone; an error line, or nothing. */
+  onAdd?: (card: EditorCard) => string | undefined;
   /** "From your cards" (TOKEN-FILL); absent = nothing derived (a format without links). */
   fill?: TokenFillProps;
   /** Share page: hover and focus previews on the names. */
@@ -117,7 +117,7 @@ export function TokensSection({
         (caption?.(a.card) ?? "").localeCompare(caption?.(b.card) ?? ""),
     ),
   };
-  const add = (cards: EditorCard[]) => setError(onAdd?.(cards) ?? null);
+  const add = (card: EditorCard) => setError(onAdd?.(card) ?? null);
   const derived = fill?.count ?? 0;
   const hiddenCount = fill?.hidden.length ?? 0;
   const empty = items.length === 0 && derived === 0 && hiddenCount === 0;
@@ -144,7 +144,7 @@ export function TokensSection({
         </CollapsibleTrigger>
       </h3>
       <CollapsibleContent className="space-y-3">
-        {onAdd && <TokenSearch adapter={adapter} onAdd={(card) => add([card])} />}
+        {onAdd && <TokenSearch adapter={adapter} onAdd={add} />}
         {error && (
           <p aria-live="polite" className="text-destructive text-xs">
             {error}

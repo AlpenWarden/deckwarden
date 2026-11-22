@@ -28,7 +28,7 @@ const fresh = (gameChangers: FeedFreshness): BracketFreshness => ({
     combos: { state: "ok", asOf: AT },
   },
 });
-const FRESH = fresh({ state: "ok", asOf: AT, detail: "53 cards" });
+const FRESH = fresh({ state: "ok", asOf: AT });
 
 const leader = (name: string) =>
   card({

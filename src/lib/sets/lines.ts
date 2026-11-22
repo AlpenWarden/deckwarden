@@ -218,16 +218,9 @@ export function setPlaceShort(set: Placed): string {
  * ("blb"), 2 the name starts with the text ("blo"), 3 a word of the name
  * starts with it ("moon" → Eldritch Moon), 4 the code starts with it, 5 the
  * name contains it. null = no match. Names go through THE shared normalizer,
- * so "Lorwyn" finds "Lórwyn" and case never matters.
+ * so "Lorwyn" finds "Lórwyn" and case never matters; `q` is the typed text,
+ * already through it.
  */
-export function setMatchClass(
-  set: Pick<ReleasedSet, "code" | "name">,
-  query: string,
-): number | null {
-  return matchClass(set, normalizeCardName(query));
-}
-
-/** `setMatchClass` over an already-normalized query. */
 function matchClass(set: Pick<ReleasedSet, "code" | "name">, q: string): number | null {
   if (!q) return null;
   const name = normalizeCardName(set.name);

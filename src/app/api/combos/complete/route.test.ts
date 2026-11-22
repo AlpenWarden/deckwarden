@@ -129,10 +129,10 @@ describe("GET /api/combos/complete", () => {
     ]);
     // The adapter's judgement of those runs, as of the request.
     expect(body.freshness.feeds).toEqual({
-      gameChangers: { state: "ok", asOf: SCRYFALL_AT, detail: "53 cards" },
+      gameChangers: { state: "ok", asOf: SCRYFALL_AT },
       landDenial: { state: "ok", asOf: SCRYFALL_AT },
       extraTurns: { state: "ok", asOf: SCRYFALL_AT },
-      combos: { state: "ok", asOf: SPELLBOOK_AT, detail: "bulk 7.1.4" },
+      combos: { state: "ok", asOf: SPELLBOOK_AT },
     });
     expect(typeof body.freshness.readAt).toBe("string");
   });

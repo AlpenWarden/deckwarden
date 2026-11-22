@@ -81,10 +81,10 @@ const spellbookRun = (
 const FRESH: BracketFreshness = {
   readAt: READ_AT,
   feeds: {
-    gameChangers: { state: "ok", asOf: SCRYFALL_AT, detail: "53 cards" },
+    gameChangers: { state: "ok", asOf: SCRYFALL_AT },
     landDenial: { state: "ok", asOf: SCRYFALL_AT },
     extraTurns: { state: "ok", asOf: SCRYFALL_AT },
-    combos: { state: "ok", asOf: SPELLBOOK_AT, detail: "bulk 7.1.3" },
+    combos: { state: "ok", asOf: SPELLBOOK_AT },
   },
 };
 
@@ -791,7 +791,7 @@ describe("D4: nothing flagged, legality, drafts, freshness, tutors", () => {
       readAt: READ_AT,
       feeds: {
         ...FRESH.feeds,
-        gameChangers: { state: "stale", asOf: "2026-09-20T16:30:00.000Z", detail: "53 cards" },
+        gameChangers: { state: "stale", asOf: "2026-09-20T16:30:00.000Z" },
         landDenial: { state: "off", asOf: null },
         extraTurns: { state: "missing", asOf: null },
       },

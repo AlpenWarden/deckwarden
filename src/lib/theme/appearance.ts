@@ -53,10 +53,6 @@ function readRaw(): string | null {
   }
 }
 
-export function loadAppearance(): Appearance {
-  return parseAppearance(readRaw());
-}
-
 const listeners = new Set<() => void>();
 
 export function saveAppearance(next: Appearance): void {

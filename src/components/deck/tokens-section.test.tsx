@@ -135,7 +135,7 @@ afterEach(() => {
 });
 
 function pane(over: Partial<React.ComponentProps<typeof DeckListPane>> = {}) {
-  const onAddTokens = vi.fn<(c: EditorCard[]) => string | undefined>(() => undefined);
+  const onAddTokens = vi.fn<(c: EditorCard) => string | undefined>(() => undefined);
   const onHideToken = vi.fn<(key: string) => void>();
   const onShowTokens = vi.fn<(keys: string[]) => void>();
   const onSetQty = vi.fn<(zone: string, id: string, qty: number) => string | undefined>(
@@ -325,7 +325,7 @@ describe("the Tokens section in the editor (DECK-TOKENS)", () => {
       limit: "12",
     });
     fireEvent.click(pick);
-    expect(onAddTokens).toHaveBeenLastCalledWith([soldier]);
+    expect(onAddTokens).toHaveBeenLastCalledWith(soldier);
   });
 
   it("the box reads a token's words: 'Elemental 4/4 blue red' asks by name, P/T and colors", async () => {

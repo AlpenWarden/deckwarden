@@ -443,10 +443,10 @@ describe("the read never takes roles — assess is the same object with and with
   const FRESH: BracketFreshness = {
     readAt: "2026-10-05T07:00:00.000Z",
     feeds: {
-      gameChangers: { state: "ok", asOf: AT, detail: "53 cards" },
+      gameChangers: { state: "ok", asOf: AT },
       landDenial: { state: "ok", asOf: AT },
       extraTurns: { state: "ok", asOf: AT },
-      combos: { state: "ok", asOf: AT, detail: "bulk 7.1.4" },
+      combos: { state: "ok", asOf: AT },
     },
   };
   const rhystic = named("Rhystic Study", {

@@ -1242,12 +1242,9 @@
 /* Card entrance: static by default. The root script sets this before the
    hero is parsed and installs WAAPI from-states only after all three images
    decode. This CSS deadline also fails open if script execution is interrupted.
-   Neither rule changes the existing card boxes, origins, shadows or perspective. */
+   The rule changes none of the existing card boxes, origins, shadows or perspective. */
 @layer components {
   @media (prefers-reduced-motion: no-preference) {
-    :root[data-card-entrance] .home-fan > * {
-      transition: none;
-    }
     :root[data-card-entrance="pending"] .home-fan > * {
       animation: home-card-ready 0s 1500ms both;
     }

@@ -12,7 +12,6 @@ import {
   ambientArtKind,
   artCredit,
   artCropCardArt,
-  fetchScryfallArtMeta,
   lookupCardArt,
   lookupScryfallArtMeta,
   resolveCardArt,
@@ -48,12 +47,11 @@ function respond(body: unknown, ok = true, status = ok ? 200 : 500, headers?: He
   });
 }
 
-describe("fetchScryfallArtMeta", () => {
+describe("lookupScryfallArtMeta (X5): the lookup, with the reason", () => {
   it("a single-faced card → its crop and artist, with the real headers and a daily revalidate", async () => {
     respond({ artist: "Anna Podedworna", image_uris: { art_crop: CROP } });
-    await expect(fetchScryfallArtMeta(PRINTING)).resolves.toEqual({
-      artCropUrl: CROP,
-      artist: "Anna Podedworna",
+    await expect(lookupScryfallArtMeta(PRINTING)).resolves.toEqual({
+      meta: { artCropUrl: CROP, artist: "Anna Podedworna" },
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit & { next: unknown }];
@@ -74,28 +72,11 @@ describe("fetchScryfallArtMeta", () => {
         { artist: "Back Artist", image_uris: { art_crop: "https://cards.scryfall.io/back.jpg" } },
       ],
     });
-    await expect(fetchScryfallArtMeta(PRINTING)).resolves.toEqual({
-      artCropUrl: "https://cards.scryfall.io/front.jpg",
-      artist: "Front Artist",
+    await expect(lookupScryfallArtMeta(PRINTING)).resolves.toEqual({
+      meta: { artCropUrl: "https://cards.scryfall.io/front.jpg", artist: "Front Artist" },
     });
   });
 
-  it("art without an artist is null (never unattributed art), and so is an artist without art", async () => {
-    respond({ image_uris: { art_crop: CROP } });
-    await expect(fetchScryfallArtMeta(PRINTING)).resolves.toBeNull();
-    respond({ artist: "Someone", image_uris: {} });
-    await expect(fetchScryfallArtMeta(PRINTING)).resolves.toBeNull();
-  });
-
-  it("a non-OK response and a thrown fetch are both null", async () => {
-    respond({ object: "error" }, false);
-    await expect(fetchScryfallArtMeta(PRINTING)).resolves.toBeNull();
-    fetchMock.mockRejectedValueOnce(new Error("network down"));
-    await expect(fetchScryfallArtMeta(PRINTING)).resolves.toBeNull();
-  });
-});
-
-describe("lookupScryfallArtMeta (X5): the same lookup, with the reason", () => {
   it("art and artist → the meta", async () => {
     respond({ artist: "Anna Podedworna", image_uris: { art_crop: CROP } });
     await expect(lookupScryfallArtMeta(PRINTING)).resolves.toEqual({

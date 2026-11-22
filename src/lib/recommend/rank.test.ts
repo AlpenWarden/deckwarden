@@ -99,9 +99,8 @@ function rank(
   candidates: CandidateCard[],
   combosByCandidate = new Map<string, CandidateCombo[]>(),
   deckCards = FULLISH_DECK,
-  limit = 25,
 ) {
-  return rankCandidates({ meta: META, deckCards, candidates, combosByCandidate, limit });
+  return rankCandidates({ meta: META, deckCards, candidates, combosByCandidate });
 }
 
 function rankWithTournaments(
@@ -116,7 +115,6 @@ function rankWithTournaments(
     combosByCandidate: new Map(),
     tournamentsByCandidate,
     tournamentContext,
-    limit: 25,
   });
 }
 
@@ -353,13 +351,13 @@ describe("determinism & ordering", () => {
     expect(recs.map((r) => r.name)).toEqual(["Abe", "Zed"]);
   });
 
-  it("honors the limit after ranking", () => {
+  it("ranks every candidate, the best first (the callers cut)", () => {
     const cands = Array.from({ length: 10 }, (_, i) =>
       candidate({ popularity: (i + 1) * 100, costValue: 1 }),
     );
-    const recs = rank(cands, new Map(), FULLISH_DECK, 3);
-    expect(recs).toHaveLength(3);
-    expect(recs[0].popularity).toBe(100); // best rank survived the cut
+    const recs = rank(cands);
+    expect(recs).toHaveLength(10);
+    expect(recs[0].popularity).toBe(100);
   });
 });
 
@@ -507,7 +505,6 @@ describe("meta without signals (a game with no data yet)", () => {
       deckCards: FULLISH_DECK,
       candidates: [candidate({ popularity: 5 })],
       combosByCandidate: new Map(),
-      limit: 10,
     });
     expect(recs).toEqual([]);
   });

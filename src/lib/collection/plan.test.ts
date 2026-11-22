@@ -33,7 +33,7 @@ describe("rowKey / foldRows", () => {
     );
   });
 
-  it("sums duplicates per key + finish, keeps first-seen order, counts merges and clamps", () => {
+  it("sums duplicates per key + finish up to the quantity cap, keeps first-seen order, counts merges", () => {
     const rows: CollectionRow[] = [
       { scryfallId: P1, name: "A", finish: "nonfoil", quantity: 2 },
       { scryfallId: P1, name: "A", finish: "foil", quantity: 1 },
@@ -48,7 +48,6 @@ describe("rowKey / foldRows", () => {
       ["sn:s#9", "nonfoil", COLLECTION_LIMITS.maxQuantity],
     ]);
     expect(out.merged).toBe(2);
-    expect(out.quantityClamped).toBe(1);
     // Input untouched.
     expect(rows[0].quantity).toBe(2);
   });

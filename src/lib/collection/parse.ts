@@ -213,7 +213,7 @@ function columnsFor(format: CollectionCsvFormat, header: readonly string[]): Col
     name,
     quantity,
     finish: col("foil", "finish"),
-    scryfallId: format === "manabox" ? col("scryfall id") : col("scryfall id"),
+    scryfallId: col("scryfall id"),
     setCode: format === "manabox" ? col("set code", "edition") : col("edition", "set code"),
     collectorNumber: col("collector number", "collector no", "number"),
     language: col("language"),

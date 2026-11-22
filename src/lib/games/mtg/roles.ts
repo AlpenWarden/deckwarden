@@ -144,10 +144,6 @@ export function isMtgRoleKey(key: unknown): key is MtgRoleKey {
   return typeof key === "string" && BY_KEY.has(key);
 }
 
-export function mtgRole(key: MtgRoleKey): MtgRole {
-  return BY_KEY.get(key)!;
-}
-
 /** A Tagger tag's public page (D0: the credit links to the tag). */
 export function taggerTagUrl(slug: string): string {
   return `https://tagger.scryfall.com/tags/card/${encodeURIComponent(slug)}`;

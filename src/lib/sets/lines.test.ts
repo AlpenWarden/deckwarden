@@ -17,7 +17,6 @@ import {
   placeSets,
   setFieldKey,
   setGroup,
-  setMatchClass,
   setPlace,
   setPlaceShort,
   type ReleasedSet,
@@ -225,13 +224,23 @@ describe("the picker's match", () => {
   ];
 
   it("classes: code exactly, name start, word start, code start, name contains", () => {
-    expect(setMatchClass(SETS[1], "BLB")).toBe(1);
-    expect(setMatchClass(SETS[1], "blo")).toBe(2);
-    expect(setMatchClass(SETS[2], "moon")).toBe(3);
-    expect(setMatchClass(SETS[6], "mh")).toBe(4); // the code starts with it; no word does
-    expect(setMatchClass(SETS[4], "hron")).toBe(5);
-    expect(setMatchClass(SETS[1], "zzz")).toBeNull();
-    expect(setMatchClass(SETS[5], "lorwyn")).toBe(2); // the shared normalizer strips the accent
+    // One text, one set per class, listed worst class first: the order that
+    // comes back is the classes', not the list's.
+    const ladder = [
+      set({ code: "zz5", name: "Crabs" }), // 5: the name contains it
+      set({ code: "abx", name: "Other" }), // 4: the code starts with it; no word does
+      set({ code: "zz3", name: "The Abyss" }), // 3: a word of the name starts with it
+      set({ code: "zz2", name: "Abzan" }), // 2: the name starts with it
+      set({ code: "ab", name: "Other Two" }), // 1: the code exactly
+      set({ code: "zz0", name: "Nothing" }), // no match
+    ];
+    expect(matchSets(ladder, "AB").map((s) => s.code)).toEqual(["ab", "zz2", "zz3", "abx", "zz5"]);
+    // Each class on the real names.
+    expect(matchSets(SETS, "BLB").map((s) => s.code)).toEqual(["blb"]);
+    expect(matchSets(SETS, "moon").map((s) => s.code)).toEqual(["emn"]);
+    expect(matchSets(SETS, "mh").map((s) => s.code)).toEqual(["mh3"]); // the code starts with it; no word does
+    expect(matchSets(SETS, "hron").map((s) => s.code)).toEqual(["eld"]);
+    expect(matchSets(SETS, "lorwyn").map((s) => s.code)).toEqual(["lrw"]); // the shared normalizer strips the accent
   });
 
   it("best class first, the list's own order inside a class; nothing typed keeps the list", () => {

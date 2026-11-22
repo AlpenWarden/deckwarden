@@ -28,7 +28,10 @@ export interface Autosave {
   isDirty: () => boolean;
 }
 
-export function useAutosave(save: () => Promise<void>, delayMs = 1000): Autosave {
+/** The trailing debounce: a save starts this long after the last edit. */
+const AUTOSAVE_DELAY_MS = 1000;
+
+export function useAutosave(save: () => Promise<void>): Autosave {
   const [status, setStatus] = useState<SaveStatus>("saved");
   const dirtyRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -62,8 +65,8 @@ export function useAutosave(save: () => Promise<void>, delayMs = 1000): Autosave
     dirtyRef.current = true;
     setStatus("dirty");
     if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => void flush(), delayMs);
-  }, [flush, delayMs]);
+    timerRef.current = setTimeout(() => void flush(), AUTOSAVE_DELAY_MS);
+  }, [flush]);
 
   const isDirty = useCallback(() => dirtyRef.current, []);
 

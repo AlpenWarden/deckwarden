@@ -1,22 +1,16 @@
 /**
- * AnalyticsBlocks (R6 — G6 / G9 / status never color-only): every histogram
- * bar keeps its rounded top and value label and carries the motion-safe
- * grow-in from a `starting:` state; a block with a `target` draws one
- * aria-hidden outline per nonzero target bucket, scaled on the same max as
- * the bars, and one visible legend naming the target; a block without one
- * draws nothing extra; a stat's tone gains a visible word. U6: the share
+ * AnalyticsBlocks (R6 — G6 / G9): every histogram bar keeps its rounded top
+ * and value label and carries the motion-safe grow-in from a `starting:`
+ * state; a block with a `target` draws one aria-hidden outline per nonzero
+ * target bucket, scaled on the same max as the bars, and one visible legend
+ * naming the target; a block without one draws nothing extra. U6: the share
  * variant's thin curve and stacked breakdowns, no tracks.
  */
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { AnalyticsBlock } from "@/lib/games/types";
-import {
-  AnalyticsBlocks,
-  HISTOGRAM_BAR_MOTION_CLASS,
-  STACK_REST_COLOR,
-  STAT_TONE_WORD,
-} from "./analytics-blocks";
+import { AnalyticsBlocks, HISTOGRAM_BAR_MOTION_CLASS, STACK_REST_COLOR } from "./analytics-blocks";
 
 const curve: Extract<AnalyticsBlock, { kind: "histogram" }> = {
   kind: "histogram",
@@ -79,29 +73,6 @@ describe("AnalyticsBlocks — histogram", () => {
       />,
     );
     expect(ghosts()).toHaveLength(1);
-  });
-});
-
-describe("AnalyticsBlocks — stat tone", () => {
-  it("a toned stat carries a visible word beside the number, an untoned one nothing", () => {
-    render(
-      <AnalyticsBlocks
-        blocks={[
-          { kind: "stat", id: "a", title: "Lands", value: "37" },
-          { kind: "stat", id: "b", title: "Counters", value: "3", tone: "warn" },
-          { kind: "stat", id: "c", title: "Blockers", value: "0", tone: "bad" },
-          { kind: "stat", id: "d", title: "Curve", value: "ok", tone: "ok" },
-        ]}
-      />,
-    );
-    const words = [...document.querySelectorAll<HTMLElement>("[data-slot=stat-tone]")];
-    expect(words.map((w) => w.textContent)).toEqual([
-      STAT_TONE_WORD.warn,
-      STAT_TONE_WORD.bad,
-      STAT_TONE_WORD.ok,
-    ]);
-    for (const w of words) expect(w.className).not.toContain("sr-only");
-    expect(screen.getByText("Problem")).toBeTruthy();
   });
 });
 

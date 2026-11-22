@@ -22,10 +22,9 @@ export function rowKey(row: CollectionRow): string {
  */
 export function foldRows<R extends CollectionRow>(
   rows: readonly R[],
-): { rows: R[]; merged: number; quantityClamped: number } {
+): { rows: R[]; merged: number } {
   const byKey = new Map<string, R>();
   let merged = 0;
-  let quantityClamped = 0;
   for (const row of rows) {
     const key = `${rowKey(row)}|${row.finish}`;
     const prev = byKey.get(key);
@@ -35,10 +34,9 @@ export function foldRows<R extends CollectionRow>(
     }
     merged++;
     const sum = prev.quantity + row.quantity;
-    if (sum > COLLECTION_LIMITS.maxQuantity) quantityClamped++;
     prev.quantity = Math.min(sum, COLLECTION_LIMITS.maxQuantity);
   }
-  return { rows: [...byKey.values()], merged, quantityClamped };
+  return { rows: [...byKey.values()], merged };
 }
 
 const FINISH_PREFERENCE: readonly Finish[] = ["nonfoil", "foil", "etched"];
@@ -72,7 +70,6 @@ export interface ImportPlan {
   writes: PlannedWrite[];
   /** Resolved rows folded into an earlier row with the same printing + finish. */
   merged: number;
-  quantityClamped: number;
   capped: { limit: number; dropped: number } | null;
 }
 
@@ -91,7 +88,6 @@ export function planImport(
 ): ImportPlan {
   const byKey = new Map<string, PlannedWrite>();
   let merged = 0;
-  let quantityClamped = 0;
   for (const row of resolved) {
     const key = writeKey(row);
     const prev = byKey.get(key);
@@ -101,7 +97,6 @@ export function planImport(
     }
     merged++;
     const sum = prev.quantity + row.quantity;
-    if (sum > COLLECTION_LIMITS.maxQuantity) quantityClamped++;
     prev.quantity = Math.min(sum, COLLECTION_LIMITS.maxQuantity);
   }
   const held = mode === "replace" ? 0 : existingKeys.size;
@@ -120,7 +115,7 @@ export function planImport(
       dropped++;
     }
   }
-  return { writes, merged, quantityClamped, capped: dropped > 0 ? { limit, dropped } : null };
+  return { writes, merged, capped: dropped > 0 ? { limit, dropped } : null };
 }
 
 /** The (printing, finish) identity of a stored row. */

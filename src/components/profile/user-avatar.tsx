@@ -19,9 +19,9 @@
  * underneath (house image rules — no optimizer quota on external images).
  * Decorative by design: the name beside it carries the meaning.
  *
- * `size` is the rendered pixel size. It is never forwarded to the wrapper's
- * own `size` variant, whose data-[size=…] classes would outrank the class
- * set here.
+ * `size` is the rendered pixel size, set by the classes below. The wrapper
+ * has had no size option of its own since TRIM-T1 (2026-11-22): its 32 px
+ * default gives way to the class set here.
  */
 import { useState } from "react";
 

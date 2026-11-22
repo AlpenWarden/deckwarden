@@ -101,10 +101,8 @@ export function AppearanceItems() {
 }
 
 export function AppearanceMenu({
-  side = "bottom",
   className,
 }: {
-  side?: "top" | "bottom";
   /** The trigger's classes (the site header hides it below `md`). */
   className?: string;
 }) {
@@ -114,7 +112,7 @@ export function AppearanceMenu({
         <SunMoonIcon aria-hidden />
         <span className="max-lg:sr-only">Appearance</span>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" side={side} aria-label="Appearance">
+      <DropdownMenuContent align="end" aria-label="Appearance">
         <AppearanceItems />
       </DropdownMenuContent>
     </DropdownMenu>

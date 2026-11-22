@@ -37,7 +37,6 @@ vi.mock("@/db", async (importOriginal) => ({
 const {
   deleteVersion,
   frozenCount,
-  frozenToInputs,
   insertVersion,
   MAX_PLAYED_SNAPSHOTS_PER_DECK,
   MAX_VERSIONS_PER_DECK,
@@ -157,17 +156,13 @@ describe("deleteVersion — never a version a logged game was played with (Y9a)"
 });
 
 describe("frozen shape", () => {
-  it("round-trips deck_cards rows into the schema's frozen shape and back to inputs", () => {
+  it("maps deck_cards rows into the schema's frozen shape", () => {
     const frozen = toFrozenCards([
       { cardIdentityId: U(1), zone: "commander", quantity: 1, tags: [], printingId: null },
       { cardIdentityId: U(2), zone: "main", quantity: 3, tags: ["Ramp"], printingId: U(9) },
     ]);
     expect(frozen).toEqual([
       { cardId: U(1), zone: "commander", qty: 1, tags: [], printingId: null },
-      { cardId: U(2), zone: "main", qty: 3, tags: ["Ramp"], printingId: U(9) },
-    ]);
-    expect(frozenToInputs(frozen)).toEqual([
-      { cardId: U(1), zone: "commander", qty: 1, tags: [] },
       { cardId: U(2), zone: "main", qty: 3, tags: ["Ramp"], printingId: U(9) },
     ]);
   });
@@ -199,7 +194,13 @@ describe("resolveFrozenCards (restore guard)", () => {
     const out = resolveFrozenCards(frozen, known, owner);
     expect(out.printingsReset).toBe(0);
     expect(out.cardsDropped).toBe(0);
-    expect(out.entries).toEqual(frozenToInputs(frozen));
+    // An entry carries its printing only when the frozen card had one.
+    expect(out.entries).toEqual([
+      { cardId: U(1), zone: "commander", qty: 1, tags: [], printingId: U(11) },
+      { cardId: U(2), zone: "main", qty: 1, tags: ["Draw"], printingId: U(12) },
+      { cardId: U(3), zone: "main", qty: 2, tags: [] },
+      { cardId: U(4), zone: "main", qty: 1, tags: [], printingId: U(14) },
+    ]);
   });
 
   it("falls back to the default printing when the chosen one is gone or belongs to another card", () => {

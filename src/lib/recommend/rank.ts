@@ -181,15 +181,10 @@ export interface RankInput {
    * list read for none, or a caller that doesn't read them.
    */
   themes?: readonly DeckTheme[];
-  /**
-   * The cut; absent = every candidate, ranked (Y6a: the engine ranks all,
-   * applies the deck's goals, and only then slices — recommend/goals.ts).
-   */
-  limit?: number;
 }
 
 export function rankCandidates(input: RankInput): Recommendation[] {
-  const { meta, candidates, combosByCandidate, limit } = input;
+  const { meta, candidates, combosByCandidate } = input;
   const curveState = meta.curve ? deckCurve(input.deckCards, meta.curve) : null;
 
   const ranked: Recommendation[] = [];
@@ -317,5 +312,5 @@ export function rankCandidates(input: RankInput): Recommendation[] {
     if (a.name !== b.name) return a.name < b.name ? -1 : 1;
     return a.cardId < b.cardId ? -1 : a.cardId > b.cardId ? 1 : 0;
   });
-  return limit === undefined ? ranked : ranked.slice(0, limit);
+  return ranked;
 }

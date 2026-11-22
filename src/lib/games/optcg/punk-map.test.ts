@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { OPTCG_COLOR_BIT as COLORS_OPTCG_COLOR_BIT } from "./colors";
+import { OPTCG_COLOR_BIT } from "./colors";
 import {
   baseCardId,
   decodeHtmlEntities,
@@ -12,7 +12,6 @@ import {
   optcgPrintingId,
   packSetCode,
   packSetName,
-  OPTCG_COLOR_BIT,
   type PunkCard,
   type PunkIndexEntry,
   type PunkPack,
@@ -100,8 +99,7 @@ describe("colors", () => {
     expect(optcgColorsToMask(null)).toBe(0);
   });
 
-  it("re-exports colors.ts's object, not a copy (the bits moved there, LATER.md row 287)", () => {
-    expect(OPTCG_COLOR_BIT).toBe(COLORS_OPTCG_COLOR_BIT);
+  it("keeps the bits' insertion order (they live in colors.ts, LATER.md row 287)", () => {
     // The insertion order feeds analyze.ts's color tally; the move kept it.
     expect(Object.keys(OPTCG_COLOR_BIT)).toEqual([
       "Red",

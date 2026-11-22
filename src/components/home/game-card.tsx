@@ -1,23 +1,23 @@
 /**
- * GameCard (R5a, REDESIGN.md §2 "Site shell and homepage", item 2; an open
- * region since U5, WAVE5 D6; the gallery form since FRESH-UI-HOME,
- * 2026-10-30): one of home's two game regions — a labelled section carrying
- * `data-game` (so its buttons, links and shelf cards ring in the game
- * accent), a serif heading and one-line pitch, the Build / Browse / Search
- * (and Magic's Surprise me) row, and the shelf of real leaders the page
- * hands it. Three shapes:
- * - the open region (U5): the `.type-section` title, the blurb, the button
- *   row, then the shelf, on the page under home's gold hairline;
+ * GameCard (R5a, REDESIGN.md §2 "Site shell and homepage", item 2; no box
+ * since U5, WAVE5 D6; the gallery form since FRESH-UI-HOME, 2026-10-30):
+ * one of home's two game regions — a labelled section carrying `data-game`
+ * (so its buttons, links and shelf cards ring in the game accent), a serif
+ * heading and one-line pitch, the Build / Browse / Search (and Magic's
+ * Surprise me) row, and the shelf of real leaders the page hands it. Two
+ * shapes:
  * - the gallery (`headline`; the owner's reference, where "Find your next
  *   commander." leads the six commanders): the headline on
  *   `.type-headline`, the blurb, the shelf, then the button row under it,
  *   so the cards come right after the words that invite the visitor to them;
- * - the field (`field`, One Piece): the accent at 8 % with the words and
- *   the buttons in a left quarter from `xl` and the shelf in the rest (D6
- *   said thirds: there the six cards were 118 px and a leader's name
+ * - the field (no `headline`, One Piece): the accent at 8 % with the words
+ *   and the buttons in a left quarter from `xl` and the shelf in the rest
+ *   (D6 said thirds: there the six cards were 118 px and a leader's name
  *   clipped; a quarter gives 134 px and keeps the blurb on two lines).
- * The bordered `bg-card` box is gone since U5. Server-renderable; the shelf
- * components are too.
+ * U5's third shape, the open region (title, blurb, button row, then the
+ * shelf on the page), left with TRIM-T2: no page had rendered it since
+ * FRESH-UI-HOME. The bordered `bg-card` box is gone since U5.
+ * Server-renderable; the shelf components are too.
  */
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -75,7 +75,6 @@ export function GameCard({
   actions,
   children,
   footer,
-  field = false,
   className,
 }: {
   game: TileGame;
@@ -85,15 +84,14 @@ export function GameCard({
   /**
    * The gallery form (FRESH-UI-HOME): this text leads the region on
    * `.type-headline` and the shelf comes before the button row; `title`
-   * stays the region's name for the open region and the field.
+   * stays the region's name for the field. Absent = the color field (D6
+   * section 3).
    */
   headline?: string;
   blurb: string;
   actions: GameCardActions;
   children?: ReactNode;
   footer?: ReactNode;
-  /** One Piece's color field (D6 section 3) instead of the open region. */
-  field?: boolean;
   /** Home's rhythm (the hairline and the 96 px between sections). */
   className?: string;
 }) {
@@ -121,28 +119,19 @@ export function GameCard({
   );
   return (
     <section aria-label={label} data-game={game} className={cn("min-w-0", className)}>
-      {field ? (
-        <div
-          data-slot="game-field"
-          className="rounded-2xl bg-[color-mix(in_oklab,var(--accent-game)_8%,var(--background))] p-6 md:p-8 xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(0,3fr)] xl:gap-8"
-        >
-          <div>
-            {intro}
-            <GameActions actions={actions} className="mt-5 xl:flex-col xl:items-start" />
-          </div>
-          <div className="mt-10 min-w-0 xl:mt-0">
-            {children}
-            {footer}
-          </div>
-        </div>
-      ) : (
-        <>
+      <div
+        data-slot="game-field"
+        className="rounded-2xl bg-[color-mix(in_oklab,var(--accent-game)_8%,var(--background))] p-6 md:p-8 xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(0,3fr)] xl:gap-8"
+      >
+        <div>
           {intro}
-          <GameActions actions={actions} className="mt-5" />
-          {children && <div className="mt-10">{children}</div>}
+          <GameActions actions={actions} className="mt-5 xl:flex-col xl:items-start" />
+        </div>
+        <div className="mt-10 min-w-0 xl:mt-0">
+          {children}
           {footer}
-        </>
-      )}
+        </div>
+      </div>
     </section>
   );
 }

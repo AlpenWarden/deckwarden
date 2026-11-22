@@ -237,7 +237,6 @@ export default async function Home() {
         </GameCard>
         <GameCard
           className={SECTION_CLASS}
-          field
           game="optcg"
           label="One Piece Card Game"
           title="One Piece Card Game"

@@ -88,11 +88,6 @@ export function preconChanges(
   return { out: out.sort(byId), in: added.sort(byId), outQty, inQty };
 }
 
-/** Whether the list differs from the precon's at all. */
-export function hasPreconChanges(changes: Pick<PreconChanges, "outQty" | "inQty">): boolean {
-  return changes.outQty > 0 || changes.inQty > 0;
-}
-
 /**
  * The row marks' input: identity → the copies the list holds beyond the
  * precon's. Null when the list holds nothing the precon didn't.

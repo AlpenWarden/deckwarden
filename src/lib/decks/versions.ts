@@ -113,16 +113,6 @@ export function toFrozenCards(
   }));
 }
 
-export function frozenToInputs(frozen: readonly FrozenCard[]): DeckCardInput[] {
-  return frozen.map((c) => ({
-    cardId: c.cardId,
-    zone: c.zone,
-    qty: c.qty,
-    tags: c.tags,
-    ...(c.printingId ? { printingId: c.printingId } : {}),
-  }));
-}
-
 export interface VersionSummary {
   version: number;
   note: string | null;

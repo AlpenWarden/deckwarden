@@ -255,11 +255,6 @@ export function mainboardEntries(s: TopdeckStanding): { name: string; oracleId?:
   });
 }
 
-/** Whether a standing embeds a readable full card list (see standingsWithLists). */
-export function hasCardList(s: TopdeckStanding): boolean {
-  return mainboardEntries(s) !== null;
-}
-
 // --- Leader resolution map ------------------------------------------------------
 
 /** One leader candidate's map inputs (norms pre-normalized, popularity order). */

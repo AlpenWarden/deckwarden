@@ -202,16 +202,16 @@ export function mtgBracketFreshness(
   const scryfall = runs.find((r) => r.source === "scryfall") ?? null;
   const spellbook = runs.find((r) => r.source === "spellbook") ?? null;
   const missing: FeedFreshness = { state: "missing", asOf: null };
-  const timed = (asOf: string, detail?: string): FeedFreshness => {
+  const timed = (asOf: string): FeedFreshness => {
     const age = Date.parse(readAt) - Date.parse(asOf);
     const stale = !(age <= STALE_AFTER_DAYS * 86_400_000); // NaN reads stale
-    return { state: stale ? "stale" : "ok", asOf, ...(detail ? { detail } : {}) };
+    return { state: stale ? "stale" : "ok", asOf };
   };
 
   const gc = field(scryfall?.stats, "game_changers");
   const gameChangers =
     scryfall && gc && typeof gc.count === "number" && typeof gc.md5 === "string"
-      ? timed(scryfall.startedAt, `${gc.count} cards`)
+      ? timed(scryfall.startedAt)
       : missing;
 
   const tagger = field(scryfall?.stats, "tagger");
@@ -228,11 +228,7 @@ export function mtgBracketFreshness(
   };
 
   const tags = field(spellbook?.stats, "bracket_tags");
-  const version = spellbook && isObject(spellbook.stats) ? spellbook.stats.source_version : null;
-  const combos =
-    spellbook && tags
-      ? timed(spellbook.startedAt, typeof version === "string" ? `bulk ${version}` : undefined)
-      : missing;
+  const combos = spellbook && tags ? timed(spellbook.startedAt) : missing;
 
   return {
     readAt,
@@ -921,7 +917,6 @@ export function mtgBracketToward(
   }
   return need > held
     ? {
-        factor: "game-changers",
         more: need - held,
         counts: (card) => card.attrs.game_changer === true,
         one: "a Game Changer",

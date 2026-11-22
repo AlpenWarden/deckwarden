@@ -213,7 +213,6 @@ export async function POST(request: NextRequest) {
     combosByCandidate: curveGather.combosByCandidate,
     tournamentsByCandidate: tournaments.byCandidate,
     tournamentContext: tournaments.context,
-    limit: curveGather.candidates.length,
   });
   const basePool = rankCandidates({
     meta,
@@ -222,7 +221,6 @@ export async function POST(request: NextRequest) {
     combosByCandidate: new Map(),
     tournamentsByCandidate: tournaments.byCandidate,
     tournamentContext: tournaments.context,
-    limit: baseGather.candidates.length,
   });
 
   // Planner inputs: slots over countsTowardSize zones; curve/base state

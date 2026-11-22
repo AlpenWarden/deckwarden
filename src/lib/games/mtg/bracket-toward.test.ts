@@ -106,7 +106,6 @@ describe("mtgBrackets.toward — Game Changers carry the read up to the target",
     ] as const) {
       const t = towardOf(plain, target)!;
       expect(t).toMatchObject({
-        factor: "game-changers",
         more,
         one: "a Game Changer",
         many: "Game Changers",

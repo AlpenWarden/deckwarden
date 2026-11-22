@@ -209,33 +209,11 @@ function StackedBreakdown({ block }: { block: Extract<AnalyticsBlock, { kind: "b
   );
 }
 
-const STAT_TONE = {
-  ok: "text-emerald-700 dark:text-emerald-400",
-  warn: "text-amber-700 dark:text-amber-400",
-  bad: "text-destructive",
-} as const;
-
-/**
- * The tone's word (R6, status never color-only): a stat's tone used to be a
- * hue on its number alone; now a small visible word rides beside it — the
- * validation vocabulary, so "Problem" here means what it means there.
- */
-export const STAT_TONE_WORD = { ok: "OK", warn: "Warning", bad: "Problem" } as const;
-
 function Stat({ block }: { block: Extract<AnalyticsBlock, { kind: "stat" }> }) {
   return (
     <div>
       <h3 className="text-muted-foreground text-xs font-medium">{block.title}</h3>
-      <p
-        className={`text-sm font-semibold tabular-nums ${block.tone ? STAT_TONE[block.tone] : ""}`}
-      >
-        {block.value}
-        {block.tone && (
-          <span data-slot="stat-tone" className="type-micro ml-1.5">
-            {STAT_TONE_WORD[block.tone]}
-          </span>
-        )}
-      </p>
+      <p className="text-sm font-semibold tabular-nums">{block.value}</p>
       {block.hint && <p className="type-micro text-muted-foreground">{block.hint}</p>}
     </div>
   );

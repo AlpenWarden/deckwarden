@@ -16,9 +16,9 @@
  * C's bit 32. Query-side, the colorset grammar (translate.ts) speaks MTG
  * letters, so OP color filters spell Yellow as W and Purple as C — disclosed
  * here and in the adapter until an OP search UI needs friendlier letters.
- * Written by the ingest (punk-map.optcgColorsToMask, which re-exports this
- * object) into card_identities.colors_mask; the insertion order feeds
- * analyze.ts's color tally. Defined here, not in punk-map, since 2026-10-24:
+ * Written by the ingest (punk-map.optcgColorsToMask) into
+ * card_identities.colors_mask; the insertion order feeds analyze.ts's color
+ * tally. Defined here, not in punk-map, since 2026-10-24:
  * punk-map imports `node:crypto`, and reaching it from the browser for this
  * constant shipped a ~510 KB polyfill chunk (LATER.md row 287).
  */

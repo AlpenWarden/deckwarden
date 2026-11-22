@@ -5,7 +5,6 @@ import {
   commanderNamesFrom,
   DECKLIST_URL_HOSTS,
   decklistUrlOrNull,
-  hasCardList,
   mainboardEntries,
   mapTournament,
   MIN_EVENT_PLAYERS,
@@ -346,13 +345,13 @@ describe("mapTournament", () => {
   });
 
   it("measures embedded-list coverage without storing lists (LATER rows' gate)", () => {
-    expect(hasCardList(standing({ deckObj: { Commanders: {}, Mainboard: mainboard(95) } }))).toBe(
-      true,
-    );
+    expect(
+      mainboardEntries(standing({ deckObj: { Commanders: {}, Mainboard: mainboard(95) } })),
+    ).not.toBeNull();
     // A stub section or no deckObj is not a list.
-    expect(hasCardList(standing())).toBe(false);
-    expect(hasCardList(standing({ deckObj: { Mainboard: mainboard(5) } }))).toBe(false);
-    expect(hasCardList(standing({ deckObj: undefined }))).toBe(false);
+    expect(mainboardEntries(standing())).toBeNull();
+    expect(mainboardEntries(standing({ deckObj: { Mainboard: mainboard(5) } }))).toBeNull();
+    expect(mainboardEntries(standing({ deckObj: undefined }))).toBeNull();
 
     const withList = standing({
       standing: 1,

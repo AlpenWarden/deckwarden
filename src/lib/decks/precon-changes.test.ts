@@ -13,7 +13,6 @@ import { COMMANDER } from "@/lib/games/mtg/formats";
 
 import {
   beyondPrecon,
-  hasPreconChanges,
   preconAddCost,
   preconChanges,
   preconChangesText,
@@ -43,7 +42,6 @@ describe("preconChanges — the difference from the box, per identity", () => {
   it("the precon's own list shows no changes, whatever order its rows are in", () => {
     expect(preconChanges(PRECON, BOX, COMMANDER)).toEqual(NONE);
     expect(preconChanges(PRECON, [...BOX].reverse(), COMMANDER)).toEqual(NONE);
-    expect(hasPreconChanges(preconChanges(PRECON, BOX, COMMANDER))).toBe(false);
   });
 
   it("12 Forests to 14 is Forest × 2 in; to 10 is Forest × 2 out", () => {
@@ -71,7 +69,6 @@ describe("preconChanges — the difference from the box, per identity", () => {
       outQty: 1,
       inQty: 1,
     });
-    expect(hasPreconChanges(changes)).toBe(true);
   });
 
   it("a card cut and added back is no change; the Undo of a swap is no change", () => {

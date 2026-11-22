@@ -14,12 +14,12 @@ export function DeckDiffView({
   diff,
   names,
   format,
-  emptyLabel = "No card changes.",
+  emptyLabel,
 }: {
   diff: DeckDiff;
   names: Readonly<Record<string, string>>;
   format: FormatDef;
-  emptyLabel?: string;
+  emptyLabel: string;
 }) {
   if (isEmptyDiff(diff)) {
     return <p className="text-muted-foreground text-xs">{emptyLabel}</p>;

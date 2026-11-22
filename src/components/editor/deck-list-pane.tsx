@@ -212,8 +212,8 @@ interface DeckListPaneProps {
   seeding?: boolean;
   /** The phone tier (U4a): Group and Sort fold into the "Group · Sort" popover beside View. */
   phone?: boolean;
-  /** DECK-TOKENS: adds into the token zone; absent = the section is read-only. */
-  onAddTokens?: (cards: EditorCard[]) => string | undefined;
+  /** DECK-TOKENS: adds one token into the token zone; absent = the section is read-only. */
+  onAddTokens?: (card: EditorCard) => string | undefined;
   /** TOKEN-FILL: the deck's hidden token keys (decks.hidden_tokens); null = none. */
   hiddenTokens?: readonly string[] | null;
   /** TOKEN-FILL: hide a derived token / show hidden ones again — the editor's own PATCH. */

@@ -43,7 +43,7 @@ describe("useAutosave", () => {
 
   it("two marks inside the delay are one save, a full delay after the last", async () => {
     const save = vi.fn(async () => {});
-    const { result } = renderHook(() => useAutosave(save, 1000));
+    const { result } = renderHook(() => useAutosave(save));
     act(() => result.current.markDirty());
     await act(async () => {
       await vi.advanceTimersByTimeAsync(500);
