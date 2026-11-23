@@ -8,9 +8,15 @@
  * snippet, as Cloudflare issued it, from a host the enforcing CSP allows
  * (in a served page only Next's own scripts follow it). next/font only
  * works under Next's compiler; the three faces are stand-ins here.
+ *
+ * The layout renders the theme provider with `window` present (jsdom), so
+ * next-themes takes its client path, and since its patch (LATER.md row 493,
+ * patches/next-themes@0.4.6.patch) that path reads the device's setting in
+ * the first render, not only in an effect. jsdom has no matchMedia, so each
+ * test stubs it, as the provider's own test does.
  */
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { cardEntranceScript } from "@/lib/home/card-entrance";
 import { introScript } from "@/lib/home/intro-gate";
@@ -23,6 +29,17 @@ vi.mock("next/font/google", () => {
 });
 
 const { default: RootLayout } = await import("./layout");
+
+beforeEach(() => {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn(() => ({ matches: false, addListener() {}, removeListener() {} })),
+  );
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("RootLayout", () => {
   it("renders Skip to content as the first focusable in body, before any page's header", () => {

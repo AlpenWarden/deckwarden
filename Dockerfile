@@ -29,8 +29,11 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
 # pnpm at the version package.json pins (`packageManager`).
 RUN corepack enable
 
-# Dependencies first, so a source-only change reuses this layer.
+# Dependencies first, so a source-only change reuses this layer. The patch
+# files pnpm-workspace.yaml names (patchedDependencies) come with them: a
+# frozen install stops when one is missing.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches ./patches
 RUN --mount=type=cache,id=deckwarden-pnpm-store,target=/pnpm/store \
     pnpm install --frozen-lockfile --store-dir /pnpm/store
 
