@@ -1,0 +1,135 @@
+# TRIM-T4 session prompt: LeaderZone's one shape (LATER row 252)
+
+*Status: **done 2026-11-23: one commit on `main`, the one after `b1ba09b` (it adds this file), NOT pushed.** The ship note follows this paragraph; the prompt as the audit wrote it follows the note, unchanged. Written 2026-11-22 by the TRIM audit (`TRIM-AUDIT-report.md`) from a read of `01af50d` (main). Every anchor below was checked against it by an auditor, by a verifier on a second model that re-ran the proof, and by the lead. Re-grep lines, trust the shapes. Add a dated ship note at the top of this file when the package ships.*
+
+## Ship note (2026-11-23)
+
+One commit on `main` after `b1ba09b`, **not pushed** (a push deploys; it waits for the owner's word): `src/components/deck/leader-zone.tsx`, `src/components/deck/leader-zone.test.tsx`, two lines of `src/components/editor/deck-list-pane.tsx`, `LATER.md` (rows 252, 259 and 453 annotated, row 494 new) and this file. No route, no migration, no dependency, no sentence a visitor reads, no caching change. F14's proof command was re-run before the edit and holds: one production caller (`deck-list-pane.tsx:469`), which passes `onRemove`, `priority` and `raised`; no other file renders the zone. `main` moved once under this session: the T3 session's documents commit `b1ba09b` (its ship note and LATER row 492) landed while the reads ran. So the two builds compared below are `2185442` and `2185442` plus this package, and the commit's own tree, on `b1ba09b`, was built once more at the end (Checks).
+
+**What went (F14).**
+
+- **One shape, the editor's.** `onRemove` is required. `raised` and `priority` are no longer props: their true branches stay, so the card is always the raised row (the card at 160 px on a phone, 180 px from `md`, its facts beside it) and its image is always eager with high fetch priority, as the deck pane passed them. The deck pane no longer passes the two attributes (its lines 478 and 480).
+- **The read-only branches.** The accent ring on a card without `onRemove`; the mono caption under an unraised card, with its class constant and the `caption` it read; the unraised Skeleton; the unraised row's own width constant and the unraised values of the name row, the name and the image; the `onRemove ?` guards on the empty state's hint and on Remove; the `readOnly` flag. `adapter` and `onChooseLeader` stay optional, as the verifier advised, so "editor without an adapter" runs unchanged.
+- **The header comment** says what is true. P1.3's and R3's sentences on the share page and R5b's paragraph (the ring) are gone; U3b and U4a lost their clauses on the share page; U6's paragraph now says the shape was folded and what went with it. The props' notes lost "Editor only" and the read-only note.
+
+**Tests.** 3,941 tests in 327 files before, 3,936 in 327 after: `leader-zone.test.tsx` went from 18 cases to 13 (487 lines to 377). No test elsewhere changed.
+
+- Deleted, each a test of deleted code: "share page: no action, no hint, no remove"; "the One Piece caption reads the printed id and the stat line with Life" (it pinned the mono caption; the audit's span list left this one out, point 2); the accent ring's two cases, the read-only one and "editor (onRemove present): no persistent ring", the false side of the deleted branch, which the auditor counted with the read-only cases; and "without `raised` (the share page's shape until U6) …".
+- Changed: "the editor's image is priority …" lost its read-only half (the lazy image) and that clause of its title; "while a seed is on its way …" lost the one assertion that pinned the unraised Skeleton's row (the raised Skeleton's case pins the row); the tilt case "the unraised shape gets no tilt, and nothing attaches without a fine pointer" lost its unraised half and is "nothing attaches without a fine pointer" now. The two severity cases and the heading case rendered the read-only shape and now pass `onRemove`, with the same assertions. Every case that passed `priority` or `raised` no longer does (eight attribute lines). Two comments changed: the file's header and the raised case's note on the mono caption.
+- Apart from the seed case's one assertion, no editor case lost an assertion. The raised case still checks that no mono caption sits beside the facts, which no code can produce now.
+
+**Decided, and disclosed.**
+
+1. **Tokens the raised classes always overrode.** In the editor's shape, tailwind-merge dropped three tokens the unraised shape needed, because the raised classes come after them: the Skeleton's full width, the image's medium shadow and the card button's full width. The first two are gone from the source. The third stays: it is part of the base string the three near-copies of the card button share word for word (the deck grid's, the share header's and this one; T17's finding), and the scope fence puts the copies outside this package. The class attributes the browser gets are the same strings either way: every class expression of the editor's shape, old and new, goes through the repository's own `clsx` and `tailwind-merge` to the same string (ten of them, the three severities of the card included).
+2. **The audit's test count.** It said about 92 test lines; 110 went (135 out, 25 in). Its span list left out the One Piece mono-caption case, 16 of the 135 lines with its blank line. The 25 that came in are `onRemove` where the cases need it now and the one-line renders Prettier splits once they carry it.
+3. **`leaderCaption` lost its last reader outside its own file**, the mono caption. `leaderFacts` calls it and its test imports it, so it stays; its export and the file header's sentence on LeaderZone are LATER row 494 (`leader-caption.ts` is outside the package's files).
+4. **The deck pane's header still names `priority` and `raised`** in its U3a and U3b paragraphs. They are dated records of what those packages did, and what they say the zone does is still true, so they stay.
+5. **Rows 259 and 453 fired with this package and are re-armed.** Both name this file or this zone for other reasons (the facts line's dots, a mark for a commander the precon did not hold); a deletion package changes neither. Row 252's trigger had fired on 2026-11-02 (CARD-TILT changed the file without the fold); it is closed.
+6. **The scratch folder.** `scripts/.tmp/` names none of the deleted items; its only hits for the names are two `isLeaderZone` reads, unrelated. No file there imports LeaderZone or the caption helper.
+7. **The near-copies' row.** The report's section 8.4 proposes a LATER row for the three card buttons (they differ in a ring and a shadow) and leaves adding it to the owner; this package did not add it. The leader zone's copy still differs from the other two in its raised classes and its tilt; the ring it no longer has is the read-only accent ring, which the other two never had.
+
+**Numbers** (two clean worktrees outside the repository, tracked files only, which is what a deploy builds):
+
+| | Before (`2185442`) | After | Change |
+|---|---|---|---|
+| Main stylesheet | 170,840 B | 170,840 B | the same file (SHA-256 `d5ddd8e6…2f5544`) |
+| Second stylesheet | 5,721 B | 5,721 B | the same file |
+| Client JavaScript, the editor (`/decks/[id]/edit`) | 1,712,263 B | 1,711,564 B | -699 B (-193 B compressed) |
+| Client JavaScript, the new-deck page (`/decks/new`) | 1,716,149 B | 1,715,450 B | -699 B (-193 B compressed) |
+| Client JavaScript, the other 19 routes | | | none |
+| The script chunk that holds the zone | 244,950 B | 244,251 B | -699 B |
+| `leader-zone.tsx` | 319 lines | 258 lines | -61 |
+| `deck-list-pane.tsx` | 694 lines | 692 lines | -2 |
+| Source lines, non-test (the audit's count) | 77,857 | 77,794 | -63 |
+| `leader-zone.test.tsx` | 487 lines, 18 cases | 377 lines, 13 cases | -110 lines |
+| Test lines | 78,915 | 78,805 | -110 |
+| Tests | 3,941 in 327 files | 3,936 in 327 files | -5 |
+| Route table | 84 lines | 84 lines | identical |
+
+**Checks.**
+
+- `pnpm check` in the shared checkout, run last, after the last file was written: exit 0, typecheck clean, 0 lint errors and the baseline's 6 warnings, format clean, 3,936 tests in 327 files. Before any edit, at `2185442`, the same command: exit 0, 0 errors and 6 warnings, 3,941 tests in 327 files. In a clean worktree holding the commit's exact tree: exit 0 with 5 warnings (no `scripts/.tmp/` there) and 3,936 tests.
+- `pnpm build` in both clean worktrees: green, the route table identical to `.claude/trim-audit-evidence/build-route-table.txt` (84 lines). The commit's exact tree, this file and `LATER.md` included, was built once more on its own, on `b1ba09b`: both stylesheets are the after build's files to the byte, every script file is the after build's (the build-id manifests aside), and the route table is the audit's.
+- **The proof**, re-run before the edit: one `<LeaderZone` outside the tests (`deck-list-pane.tsx:469`), the pane's `adapter` and `onRemove` required (lines 148 and 155), the file last changed by CARD-TILT (`952af16`, 2026-11-02) after U6 (`58cc253`), row 252 as quoted. Beyond it: nothing else in `src`, `scripts` or the tests reads the caption slot, the class constants or the read-only shape (the editor's integration test reads the Skeleton's slot, which stays); `scripts/.tmp/` is point 6; no field of `src/lib/games/types.ts` is touched, so the build plan and REDESIGN.md were read for the zone only: REDESIGN.md's U6 record leaves the read-only shape to row 252, and nothing there keeps it on purpose.
+- **Class strings, through the code that makes them.** Ten class expressions of the editor's shape, old and new, put through the repository's `clsx` and `tailwind-merge`: the same ten strings (the Skeleton's box and its merge with the Skeleton's own classes, the name row, the name, the card button at rest, with a problem and with a warning, the image's prop and its merge with the card image's own classes, the raised card's constant).
+- **Before and after, on two clean builds**, each served locally and read at the same moment, each with its own browser cache, in headless Chrome for Testing at 1440 and at 390 with touch: three reads in the dark theme (the audit's ten baseline pages and the T4 states) and two in the light theme (the T4 states). The T4 states: the fixture deck's editor (one commander) at rest, the card and Remove hovered with a real mouse, the card and Remove focused after a Tab keystroke; a Magic and a One Piece draft with no leader (the empty state, Browse hovered, Search by name focused); the same drafts seeded by the hubs' link, first with the card-resolve request held (the Skeleton) and then landed (at rest and hovered); and a Magic draft started from a precon whose list holds two commanders (The Tenth Doctor and Rose Tyler: at rest, the second card hovered and focused).
+  - **Between the builds nothing differs beyond what the edit is expected to change**, in each theme across all its reads. Per dark read: 60 captures, 27,234 elements (the same tags in the same order, the same attributes, the same text, the same boxes, the same computed style on each element and its two pseudo-elements, the same class tokens and the class attribute spelled the same), 18,209 roles and accessible names, 194 pictures, 40 T4 probe files (boxes, the tilt's style on the image, loading and fetch priority, focus and hover flags, the facts), the same writes (the seed's card-resolve lookup, and nothing that edits), the same failed and blocked requests. Per light read: 40 captures, 678 elements, 124 roles and names, 80 pictures, 40 probe files. The one expected difference: the editor requests the chunk that holds the zone under each build's own name.
+  - **What the reads show of the zone.** At 1440 the card is 180 by 250.81 px with its facts beside it; hovered, it lifts 2 px and tilts toward the pointer (the image's style carries the tilt variables); at 390 with touch it is 160 by 222.94 px and a hover changes nothing. Keyboard focus shows the ring on the card and on Remove at both widths. The seeded drafts show the raised Skeleton while the lookup is held, then the card, eager with high fetch priority. The partners stack, one leader to a line. The empty states read "No commander yet" and "No leader yet" with the hint, Browse and Search by name.
+  - **Pictures.** Dark: of the 194 compared pictures per read, 179 are the same pixels in all six reads and 15 come out in more than one variant with an after read equal to a before read; none is apart. Light: of 80, 74 are the same in all four reads and 6 come out in more than one variant shared by the builds; none is apart.
+  - **The zone with its art.** The compared pictures hide every image, so the pictures kept for the eye were read too: the zone's box cut out of each read's picture with the art. Dark: 35 of the 40 T4 states are the same pixels in all six reads, and the other 5 come out in more than one variant with an after read equal to a before read (the partners' row and the seeded cards hovered, where a scaled image decodes two ways). Light: 37 of 40 the same in all four reads, 3 in variants shared by the builds.
+  - **Values that move between two reads of the SAME build, so they are not the edit**: 15 pictures in the dark reads and 6 in the light ones (one or a few color levels on a few pixels at a focus ring's or an icon's edge, or a one-level dither, T1's raster trap); the editor's background lookups once the browser cache is warm (0, 1 or 2 per read on both builds: 46 to 48 requests at 1440, 46 or 47 at 390; the trial below says why); the Atraxa hub's main element at 1440 (T2's note); `/cards`' link prefetches; and the hub's and the leader page's cache header on a build's first request after a start (a miss, then hits).
+- **The comparison can see a change**: the after build read once more with one rule forced onto the leader zone's card (a 1 px top margin) comes out different in every state that shows a card: 186 boxes and 108 computed styles in 24 captures, the pictures and the probes.
+- **A first set of reads, kept as a trial** (`captures/trial/` in the evidence): an after build one source token apart from the commit (the card button's width token, point 1; the class attributes are the same strings), read twice in each theme beside the before build. Every element, name and probe matched there too. It also showed a trap of the harness: the two browsers of a round shared one cache folder, the before browser (started first) had a warm cache in every read and the after browser none, and the editor's art and combo-facts lookups answer with stale-while-revalidate, so the warm browser sent each lookup a second time in the background (48 requests on the editor against 46, every read). With a cache folder per build, as in the reads above, both builds send the same requests.
+- **Server HTML, row by row.** The ten pages and the draft page were fetched twice from each build and compared after a build's own names are set aside. Ten pages: no row differs. The share page: one row, the time of its bracket read, which also differs between two requests to one build. Every document is the same size from both builds.
+- **Editor runtime** (the scoreboard's 3.5, the audit's own script: the fixture's editor at 1440 with a 4x CPU, three letters typed, Sol Ring removed and added back, a land's stepper up and down, a row opened, fifty stepper edits; once per build, one at a time, the fixture read back as the precon list after each): every action runs and mounts exactly as many components on both builds (2,805 and 1,505 for the load, 90,598 and 421 for the fifty edits), with the same requests, the same layout-shift counts and the same DOM (1,916 nodes after the load). The commit counts while typing and the milliseconds move between runs as timing does.
+- **Smokes** against the after build on the development branch: `pnpm smoke:decks` 58 checks and `pnpm smoke:optcg-deck` 14, all passed; each deleted the decks it made (the deck-create counters were read first: none used in the hour, 2 of 30 that day).
+- The fixture deck reads back as the precon list (83 rows, 100 cards) after every round and after each editor-runtime run. Those two runs are the only ones here that edit it (the audit's script removes and re-adds a card and steps a land up and down, and ends as it began); the reads only hover and focus it.
+
+**Not covered.**
+
+- **Production.** No page of deckwarden.gg and nothing of the production database was read, nothing was sent to either, and the commit is not pushed. One exception to "nothing from a deckwarden.gg host", outside the harness: the app's preview pane opens home when a local server starts (three starts in this session), and that page load, like any local preview of home, fetches home's One Piece card art from the site's image host and loads the analytics beacon. The pane was sent to `/robots.txt` right after each start. The measuring browser blocks both hosts, and Sentry, in every run. A few reads of the development branch went through the Neon MCP, always naming that branch: which precons hold two commanders (for the partners' draft), and the deck-create counters before the smokes.
+- **Other browsers and widths.** Headless Chrome for Testing at 1440 and at 390 with touch. No Safari, no Firefox, no 820 px (the tablet drawer shows the same deck pane).
+- **The editor's other states.** T1's thirteen scripted editor states and T2's nine were not read again; the T4 states edit no deck. A saved deck with two commanders was not read: the fixture has one, and the partners were read in a draft, which renders the same zone with the same props.
+- **Routes outside the ten and the drafts**, the signed-in pages among them. No other route renders the zone.
+- **Pixels with the art, beyond the zone.** The art check covers the zone's box only. Everywhere else the compared pictures hide every image (T1's rule: a scaled image decodes in more than one variant on one build), and the images' sources, boxes and computed styles are compared instead.
+- **The editor's runtime under other conditions.** One run per build at 1440 with a 4x CPU; the milliseconds are not a measurement of a difference, the component counts are.
+
+**What it is.** LeaderZone still carries a read-only shape for the share pages, which stopped using it at U6. One production caller is left, the editor's deck pane. Remove the branches, props and test cases only the read-only shape reaches. Class: **Delete**. Findings F14 of the audit.
+
+**Found (2026-11-22).**
+
+- **F14** (dead). LeaderZone's read-only shape, without a caller since U6 (LATER row 252). About 42 lines of the component, 18 of its header comment and 92 of its test.
+
+For each finding, where it is (file and lines), the excerpt read, **the proof command to re-run first** and its output, what could break and the verifier's note are in `TRIM-AUDIT-report.md`, section 4, under the same id. The auditors' full records and the scripts the proofs call are in `.claude/trim-audit-evidence/` (gitignored; on this machine: `harness/README.md` there says how to run each).
+
+**Size S. One component, one caller, one test file: about 42 lines of code, 18 of comment, 92 of test.**
+
+Pre-flight, in order.
+
+1. **Main is green.** `pnpm check` = 3,941 tests / 327 files / 0 errors / 6 warnings at `2185442` (main after T1, T2 and T3) in the shared checkout; a clean worktree shows 5 warnings, because it has no `scripts/.tmp/`. The audit read `01af50d` (3,948 tests): re-run the check and record what it is today. `pnpm build`'s route table is `.claude/trim-audit-evidence/build-route-table.txt`; the diff at the end must be empty.
+2. **Order.** This package depends on no other. Other sessions share this checkout: stage explicit paths, and re-read `LATER.md` and `MEMORY.md` immediately before editing them.
+3. **Re-run each item's proof command (report, section 4) before touching the item.** If a proof no longer holds (another session started using the thing), skip that item and report it; do not force it. Before deleting or narrowing a field of the adapter contract (`src/lib/games/types.ts`), grep `deckwarden-build-plan.md` and `REDESIGN.md` for it: a field either document spells is the owner's call, whatever section 8 says. T2 met one the audit had missed (the stat block's `tone`; the status block at the head of the report has it). And grep `scripts/.tmp/` for each name a deletion removes: the proofs leave that folder out, so report what imports it and edit nothing there. And before committing, build the commit's exact tree, the saved prompt and the ship note included, in a clean worktree, and compare its stylesheet with the after build's: Tailwind reads the tracked Markdown files, and a theme key or a class string one of them spells is put into the built stylesheet, used or not. T3's saved prompt spelled three theme keys and its first build came out 98 B larger.
+4. **Baseline before any edit**, with the audit's own scripts (`.claude/trim-audit-evidence/harness/`; each header says how to run it): the scoreboard lines named under Tests, and a capture of each page named there at 1440 and 390 (a screenshot, the accessible names, the status code and cache headers). T1, T2 and T3 left a harness that compares two local builds element by element (tag, attributes, text, box, computed style), with roles and names, pictures, writes, status codes and cache headers. The newest copy is in `.claude/trim-t3-evidence/harness/`: it reads each build twice, which tells a value the edit changed from one that moves between two reads of the same build; it can read in the light theme and in the dark one; and it compares the root's custom properties, each page's requests and the server HTML row by row. The `README.md` beside it and the ones in `.claude/trim-t2-evidence/` and `.claude/trim-t1-evidence/` say how to run it and name the traps the three sessions met. Two to know first: after any run that edits the fixture deck, wait for the save the edit owes and read the deck back; and a server started through the preview tools opens the browser pane on home, which loads art from the site's image host and the analytics beacon, so send the pane to `/robots.txt` right after the start. Build "before" and "after" in two clean detached worktrees (tracked files only, which is what a deploy builds): the shared checkout's main stylesheet is 505 B larger (602 B before T3), because Tailwind reads the untracked audit report.
+5. **Local only.** Servers and smokes run against `localhost` and the Neon development branch (`scripts/smoke/guard.ts`). Nothing is read from or sent to deckwarden.gg or the production database without the owner's OK in the chat, each time. Say at the start what will be measured.
+
+## What this package is NOT (scope fence)
+
+- NOT the three near-copies of the card button (deck grid, share header, leader zone): the verifier showed they differ in a ring and a shadow (proposed LATER row).
+- NOT the deck rows or the list pane's other props (T10).
+- NOT a migration (`drizzle/` is history), NOT a new dependency, NOT a change to a sentence a visitor reads, NOT a change to any route's caching.
+- Anything else → `LATER.md` with a trigger. No "while I'm here".
+
+## The package (decide and disclose the details)
+
+1. **F14: LeaderZone's read-only shape, without a caller since U6 (LATER row 252).**
+
+   The change: One editor shape: onRemove required; raised and priority gone from the props (their true branches stay); the `!raised`, `readOnly` and `onRemove ?` branches, CAPTION_CLASS and the unused `caption` removed; the header comment's share-page paragraphs trimmed to what is true; the two attributes dropped at deck-list-pane.tsx:478 and :480; the read-only cases removed from leader-zone.test.tsx; LATER row 252 closed.
+
+   The test that it behaves the same: leader-zone.test.tsx's editor cases unchanged and green; pnpm check green. In the editor on the fixture deck at 1440 and 390: the leader row (card, name, Remove, facts line) pixel-identical, the same accessible names ('Show <name>', 'Remove <name>', the severity text), the empty state with Browse and 'Search by name' and the seeded Skeleton identical; /d/<fixture> unchanged (it does not render this zone).
+
+   Watch for (the verifier): leader-zone.test.tsx line 71 ('editor without an adapter') and the cases with no onChooseLeader also need rewriting if adapter or onChooseLeader become required. The change as written keeps both optional, so that test is safe. …
+
+Files this package touches (from the findings; re-derive at the start): `src/components/deck/leader-zone.tsx`, `src/components/deck/leader-zone.test.tsx`, `src/components/editor/deck-list-pane.tsx`, `LATER.md`.
+
+## Tests and checks
+
+- `pnpm check` green, with no test deleted or loosened except the tests of deleted code; name each deleted or changed test in the ship note.
+- `pnpm build`: the route table identical to the baseline (the same routes with the same static, ISR and dynamic marks).
+- Against a local server on the development branch: `pnpm smoke:decks`, `pnpm smoke:optcg-deck`.
+- Before and after, the editor and `/decks/new` (Magic and One Piece, with and without a leader), at 1440 and 390: the same pixels, the same accessible names, the same URLs, status codes and cache headers, the same database writes. A JSON field may go only if every reader is in this repository and none reads it.
+- The scoreboard lines this package should move (section 3 of the report; measure with the same scripts and record before and after):
+  - Source lines (3.1): down by about 60; `leader-zone.test.tsx` down by about 92.
+  - Client JavaScript on the editor routes (3.3): down by the dead branches (not measured; a few hundred bytes).
+  - Editor runtime (3.5): unchanged.
+- Deploy: every push to `main` deploys. Push only on the owner's word, then read the result as the deploy-verification note in `MEMORY.md` says.
+
+## LATER rows this package touches or opens
+
+- Rows the findings cite: 252, 259, 453. Annotate each with what this package changed for it; every changed row keeps exactly two cells.
+- Closes LATER row 252 (its trigger fired on 2026-11-02).
+
+## Session notes
+
+- The editor always passes `onRemove`, `raised` and `priority`; their true branches stay and the props go.
+- Never `cd`; `pnpm` needs `export PATH="$HOME/.local/node22/bin:$PATH"`; the shell's `grep` is ugrep (use `/usr/bin/grep`); scratch scripts under `scripts/.tmp/` are linted; evidence goes under `.claude/trim-t4-evidence/` (gitignored). ESLint reads that folder too (every folder under `.claude/` except `worktrees/`, LATER row 487): keep scripts there as `.txt` and put no built JavaScript in it.
+- Tailwind reads the tracked Markdown files until T6 ships (LATER row 217): quote no class string and spell no theme key in the ship note, and check the saved prompt for both before committing it (pre-flight 3).

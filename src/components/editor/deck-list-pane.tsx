@@ -475,9 +475,7 @@ export function DeckListPane({
           onChooseLeader={onChooseLeader}
           onBrowseLeader={onBrowseLeader}
           adapter={adapter}
-          priority
           pending={seeding}
-          raised
         />
       )}
 

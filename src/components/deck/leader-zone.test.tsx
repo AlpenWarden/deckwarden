@@ -1,9 +1,9 @@
 /**
  * LeaderZone (R3, W4): the editor's empty-state actions — the primary
  * Browse link off `display.leaderBrowse` (D3; the demotion of search focus
- * to a ghost "Search by name" is deliberate) — the read-only share shape
- * (no action, no hint, no remove), and the One Piece caption — printed id
- * and Life (C13 / C15).
+ * to a ghost "Search by name" is deliberate) — and the One Piece facts —
+ * printed id and Life (C13 / C15). The read-only share shape's cases left
+ * with the shape (TRIM-T4, LATER row 252).
  */
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -82,76 +82,6 @@ describe("LeaderZone", () => {
     expect(screen.queryByRole("link")).toBeNull();
     expect(screen.getByRole("button", { name: "Search by name" })).toBeTruthy();
   });
-
-  it("share page: no action, no hint, no remove", () => {
-    render(
-      <LeaderZone
-        zone={leaderZone}
-        items={[]}
-        severity={new Map()}
-        onPreview={() => {}}
-        adapter={optcg}
-      />,
-    );
-    expect(screen.getByText("No leader yet")).toBeTruthy();
-    expect(screen.queryByRole("button")).toBeNull();
-    expect(screen.queryByRole("link")).toBeNull();
-    expect(screen.queryByText(/Ctrl\+Enter/)).toBeNull();
-  });
-
-  it("the One Piece caption reads the printed id and the stat line with Life", () => {
-    render(
-      <LeaderZone
-        zone={leaderZone}
-        items={[{ entry: { cardId: enel.id, zone: "leader", qty: 1, tags: [] }, card: enel }]}
-        severity={new Map()}
-        onPreview={() => {}}
-        adapter={optcg}
-      />,
-    );
-    expect(screen.getByText("OP15-058 · 5000 Power · 5 Life").getAttribute("class")).toContain(
-      "font-mono",
-    );
-    expect(screen.queryByRole("button", { name: /Remove/ })).toBeNull();
-  });
-});
-
-describe("LeaderZone — the accent ring (R5b, F12)", () => {
-  const item = { entry: { cardId: enel.id, zone: "leader", qty: 1, tags: [] }, card: enel };
-
-  it("share page (read-only): the card carries the persistent accent ring; a validation ring wins", () => {
-    const { rerender } = render(
-      <LeaderZone zone={leaderZone} items={[item]} severity={new Map()} onPreview={() => {}} />,
-    );
-    const button = screen.getByRole("button", { name: "Show Enel" });
-    expect(button.className).toContain("ring-accent-game");
-    expect(button.className).toContain("ring-2");
-    rerender(
-      <LeaderZone
-        zone={leaderZone}
-        items={[item]}
-        severity={new Map([[enel.id, "error" as const]])}
-        onPreview={() => {}}
-      />,
-    );
-    expect(button.className).toContain("ring-destructive");
-    expect(button.className).not.toContain("ring-accent-game");
-  });
-
-  it("editor (onRemove present): no persistent ring", () => {
-    render(
-      <LeaderZone
-        zone={leaderZone}
-        items={[item]}
-        severity={new Map()}
-        onRemove={() => {}}
-        onPreview={() => {}}
-      />,
-    );
-    expect(screen.getByRole("button", { name: "Show Enel" }).className).not.toContain(
-      "ring-accent-game",
-    );
-  });
 });
 
 describe("LeaderZone — severity as text (R6)", () => {
@@ -166,6 +96,7 @@ describe("LeaderZone — severity as text (R6)", () => {
         zone={leaderZone}
         items={[item]}
         severity={new Map([[enel.id, "error" as const]])}
+        onRemove={() => {}}
         onPreview={() => {}}
       />,
     );
@@ -182,6 +113,7 @@ describe("LeaderZone — severity as text (R6)", () => {
         zone={leaderZone}
         items={[item]}
         severity={new Map([[enel.id, "warning" as const]])}
+        onRemove={() => {}}
         onPreview={() => {}}
       />,
     );
@@ -190,7 +122,13 @@ describe("LeaderZone — severity as text (R6)", () => {
       "Warning",
     );
     rerender(
-      <LeaderZone zone={leaderZone} items={[item]} severity={new Map()} onPreview={() => {}} />,
+      <LeaderZone
+        zone={leaderZone}
+        items={[item]}
+        severity={new Map()}
+        onRemove={() => {}}
+        onPreview={() => {}}
+      />,
     );
     expect(screen.getByRole("button", { name: "Show Enel" }).hasAttribute("aria-describedby")).toBe(
       false,
@@ -203,8 +141,8 @@ describe("LeaderZone — the bones (U3a, WAVE5 D4)", () => {
   const pictured: EditorCard = { ...enel, image: "https://img.deckwarden.gg/optcg/OP15-058.webp" };
   const item = { entry: { cardId: enel.id, zone: "leader", qty: 1, tags: [] }, card: pictured };
 
-  it("the editor's image is priority: eager, high fetch priority, no fade; the read-only shape's stays lazy", () => {
-    const { unmount } = render(
+  it("the editor's image is priority: eager, high fetch priority, no fade", () => {
+    render(
       <LeaderZone
         zone={leaderZone}
         items={[item]}
@@ -212,24 +150,12 @@ describe("LeaderZone — the bones (U3a, WAVE5 D4)", () => {
         onRemove={() => {}}
         onPreview={() => {}}
         adapter={optcg}
-        priority
       />,
     );
     const img = screen.getByRole("img", { name: "Enel" });
     expect(img.getAttribute("loading")).toBe("eager");
     expect(img.getAttribute("fetchpriority")).toBe("high");
     expect(img.className).not.toContain("opacity-0");
-    unmount();
-    render(
-      <LeaderZone
-        zone={leaderZone}
-        items={[item]}
-        severity={new Map()}
-        onPreview={() => {}}
-        adapter={optcg}
-      />,
-    );
-    expect(screen.getByRole("img", { name: "Enel" }).getAttribute("loading")).toBe("lazy");
   });
 
   it("while a seed is on its way the zone holds the card's box as a Skeleton — no empty state, no actions", () => {
@@ -247,8 +173,7 @@ describe("LeaderZone — the bones (U3a, WAVE5 D4)", () => {
     );
     const pending = document.querySelector<HTMLElement>("[data-slot=leader-pending]")!;
     expect(pending.getAttribute("aria-hidden")).toBe("true");
-    // The card's aspect at the leader's width, then the name row at the Remove button's height.
-    expect(pending.querySelector("li")?.className).toBe("w-40 max-w-[45%]");
+    // The card's aspect, then the name row at the Remove button's height.
     expect(pending.querySelector("[data-slot=skeleton]")?.className).toContain("aspect-[488/680]");
     expect(pending.querySelector(".size-6.pointer-coarse\\:size-11")).not.toBeNull();
     expect(screen.queryByText("No commander yet")).toBeNull();
@@ -274,7 +199,13 @@ describe("LeaderZone — the bones (U3a, WAVE5 D4)", () => {
 
   it("the heading is the groups' label and count on space", () => {
     const { container } = render(
-      <LeaderZone zone={commanderZone} items={[]} severity={new Map()} onPreview={() => {}} />,
+      <LeaderZone
+        zone={commanderZone}
+        items={[]}
+        severity={new Map()}
+        onRemove={() => {}}
+        onPreview={() => {}}
+      />,
     );
     const heading = screen.getByRole("heading", { level: 3 });
     expect(heading.className).toContain("pt-5 pb-1.5");
@@ -314,8 +245,6 @@ describe("LeaderZone — the raised card (U3b, WAVE5 D4; U4a at every tier, WAVE
         onRemove={() => {}}
         onPreview={() => {}}
         adapter={getAdapter("mtg")}
-        priority
-        raised
       />,
     );
     const button = screen.getByRole("button", { name: "Show Giada, Font of Hope" });
@@ -335,7 +264,8 @@ describe("LeaderZone — the raised card (U3b, WAVE5 D4; U4a at every tier, WAVE
     expect(img.className).toContain("transform_120ms_var(--ease-settle-120)");
     expect(img.className).not.toContain("150ms");
     // The facts: the type line and the caption as the adapter gives them (data,
-    // em dash kept), shown at every tier; the mono caption is the share page's alone.
+    // em dash kept), shown at every tier; no mono caption beside them (the
+    // read-only shape's, gone with TRIM-T4).
     const facts = row.querySelector<HTMLElement>("[data-slot=leader-facts]")!;
     expect(facts.textContent).toBe("Legendary Creature — Angel · 2/2");
     // On a phone the line wraps pretty, so the type line stays whole above "· 2/2".
@@ -357,7 +287,6 @@ describe("LeaderZone — the raised card (U3b, WAVE5 D4; U4a at every tier, WAVE
         onRemove={() => {}}
         onPreview={() => {}}
         adapter={optcg}
-        raised
       />,
     );
     expect(document.querySelector("[data-slot=leader-facts]")?.textContent).toBe(
@@ -375,7 +304,6 @@ describe("LeaderZone — the raised card (U3b, WAVE5 D4; U4a at every tier, WAVE
         onPreview={() => {}}
         adapter={getAdapter("mtg")}
         pending
-        raised
       />,
     );
     const row = document.querySelector<HTMLElement>("[data-slot=leader-pending] li")!;
@@ -398,29 +326,6 @@ describe("LeaderZone — the raised card (U3b, WAVE5 D4; U4a at every tier, WAVE
     expect(meta.textContent).toBe(" ");
   });
 
-  it("without `raised` (the share page's shape until U6) the card keeps its box above the name and no facts line", () => {
-    render(
-      <LeaderZone
-        zone={commanderZone}
-        items={[giadaItem]}
-        severity={new Map()}
-        onPreview={() => {}}
-        adapter={getAdapter("mtg")}
-      />,
-    );
-    const row = screen.getByRole("button", { name: "Show Giada, Font of Hope" }).closest("li")!;
-    expect(row.className).toBe("w-40 max-w-[45%]");
-    expect(row.querySelector("[data-slot=leader-facts]")).toBeNull();
-    expect(row.querySelector("[data-slot=leader-caption]")?.className).not.toContain("md:hidden");
-    const img = screen.getByRole("img", { name: "Giada, Font of Hope" });
-    expect(img.className).toContain("shadow-md");
-    // CardImage's list (U5, LATER row 230): this shape's lift animates too.
-    expect(img.className).toContain("translate_120ms_var(--ease-settle-120)");
-    expect(screen.getByText("Giada, Font of Hope").className).toBe(
-      "min-w-0 truncate flex-1 text-xs",
-    );
-  });
-
   describe("CARD-TILT: the raised card turns toward a fine pointer over its button", () => {
     afterEach(() => {
       vi.unstubAllGlobals();
@@ -440,8 +345,6 @@ describe("LeaderZone — the raised card (U3b, WAVE5 D4; U4a at every tier, WAVE
           onRemove={() => {}}
           onPreview={() => {}}
           adapter={getAdapter("mtg")}
-          priority
-          raised
         />,
       );
       const button = screen.getByRole("button", { name: "Show Giada, Font of Hope" });
@@ -456,19 +359,7 @@ describe("LeaderZone — the raised card (U3b, WAVE5 D4; U4a at every tier, WAVE
       expect(img.style.getPropertyValue("--tilt-y")).toBe("");
     });
 
-    it("the unraised shape gets no tilt, and nothing attaches without a fine pointer", () => {
-      finePointer();
-      const { unmount } = render(
-        <LeaderZone
-          zone={commanderZone}
-          items={[giadaItem]}
-          severity={new Map()}
-          onPreview={() => {}}
-          adapter={getAdapter("mtg")}
-        />,
-      );
-      expect(screen.getByRole("img").hasAttribute("data-tilt")).toBe(false);
-      unmount();
+    it("nothing attaches without a fine pointer", () => {
       vi.stubGlobal("matchMedia", () => Object.assign(new EventTarget(), { matches: false }));
       render(
         <LeaderZone
@@ -478,7 +369,6 @@ describe("LeaderZone — the raised card (U3b, WAVE5 D4; U4a at every tier, WAVE
           onRemove={() => {}}
           onPreview={() => {}}
           adapter={getAdapter("mtg")}
-          raised
         />,
       );
       expect(screen.getByRole("img").hasAttribute("data-tilt")).toBe(false);
