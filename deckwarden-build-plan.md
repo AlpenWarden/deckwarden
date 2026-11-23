@@ -584,7 +584,7 @@ export interface ValidationIssue {
 export type AnalyticsBlock =
   | { kind: 'histogram'; id: string; title: string; buckets: { label: string; value: number; colorVar?: string }[] }
   | { kind: 'breakdown'; id: string; title: string; slices: { label: string; value: number; colorVar?: string }[] }
-  | { kind: 'stat';      id: string; title: string; value: string; hint?: string; tone?: 'ok'|'warn'|'bad' }
+  | { kind: 'stat';      id: string; title: string; value: string; hint?: string }   // no tone since 2026-11-23: see the notes below
   | { kind: 'table';     id: string; title: string; columns: string[]; rows: (string | number)[][] };
 
 export type FieldTarget =
@@ -628,7 +628,7 @@ export interface GameAdapter<A = Record<string, unknown>> {
 }
 ```
 
-Notes: banned pairs are interpreted entirely inside `validate` (core stays game-ignorant); Commander-zone specialness (Partner, Background, "can be your commander") is MTG-adapter logic with a small hand-maintained exceptions list — don't schema-tize it.
+Notes: banned pairs are interpreted entirely inside `validate` (core stays game-ignorant); Commander-zone specialness (Partner, Background, "can be your commander") is MTG-adapter logic with a small hand-maintained exceptions list — don't schema-tize it. (2026-11-23: the stat block of `AnalyticsBlock` no longer carries the optional `tone?: 'ok'|'warn'|'bad'` this sketch gave it. No adapter ever set one. TRIM-T2 (`2b907b4`, 2026-11-22) deleted the field and the renderer's branch for it as unused; because this contract named the field, the owner was asked the next day and kept the deletion: "Keep it deleted".)
 
 ---
 
