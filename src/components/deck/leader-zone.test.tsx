@@ -82,6 +82,22 @@ describe("LeaderZone", () => {
     expect(screen.queryByRole("link")).toBeNull();
     expect(screen.getByRole("button", { name: "Search by name" })).toBeTruthy();
   });
+
+  // The title is the zone's own noun: the read-only case that held this check left with TRIM-T4.
+  it("One Piece's empty state names its leader: No leader yet", () => {
+    render(
+      <LeaderZone
+        zone={leaderZone}
+        items={[]}
+        severity={new Map()}
+        onRemove={() => {}}
+        onPreview={() => {}}
+        onChooseLeader={() => {}}
+        adapter={optcg}
+      />,
+    );
+    expect(screen.getByText("No leader yet")).toBeTruthy();
+  });
 });
 
 describe("LeaderZone — severity as text (R6)", () => {
