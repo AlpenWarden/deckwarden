@@ -24,8 +24,11 @@
  *   A caller's `data-slot` wins over the text's own (Base UI's state
  *   attributes give way to props), so the stepper's count stays `qty`.
  * - No `ButtonGroupSeparator` (no group here divides its parts) and no
- *   Radix hidden-select rule (the house Select is Base UI's, which renders
+ *   Radix hidden-select rule (the house Select was Base UI's, which rendered
  *   an `<input>`, not a `<select>`).
+ * - TRIM-T3 (2026-11-23): the registry's rule that sized a Select trigger
+ *   placed in a group is gone. The house Select left in S8, so no element
+ *   carries that slot; a registry re-sync would bring the rule back.
  */
 import { mergeProps } from "@base-ui/react/merge-props";
 import { useRender } from "@base-ui/react/use-render";
@@ -34,7 +37,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const buttonGroupVariants = cva(
-  "flex w-fit items-stretch has-[>[data-slot=button-group]]:gap-2 [&>*]:focus-visible:relative [&>*]:focus-visible:z-10 [&>[data-slot=select-trigger]:not([class*='w-'])]:w-fit [&>input]:flex-1",
+  "flex w-fit items-stretch has-[>[data-slot=button-group]]:gap-2 [&>*]:focus-visible:relative [&>*]:focus-visible:z-10 [&>input]:flex-1",
   {
     variants: {
       orientation: {

@@ -16,11 +16,6 @@
      builder opens, and the builder stays Geist (serif modal titles are W2's
      recorded decision). */
   --font-display: var(--font-literata);
-  --color-chart-5: var(--chart-5);
-  --color-chart-4: var(--chart-4);
-  --color-chart-3: var(--chart-3);
-  --color-chart-2: var(--chart-2);
-  --color-chart-1: var(--chart-1);
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
@@ -35,7 +30,6 @@
   --color-primary: var(--primary);
   --color-popover-foreground: var(--popover-foreground);
   --color-popover: var(--popover);
-  --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
   /* Brand + per-game accents (R1a): bg-brand, text-accent-mtg, ring-accent-game, … */
   --color-brand: var(--brand);
@@ -61,7 +55,6 @@
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) * 1.4);
   --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
   /* Completion ring glow (R3, F2; U2): one soft pulse in the game accent when
      the count reaches the maximum — a halo ring of its own whose opacity and
@@ -251,7 +244,6 @@
   --background: #f7f4ee;
   --foreground: #242c2f;
   --card: #fffdf8;
-  --card-foreground: #242c2f;
   --popover: #ffffff;
   --popover-foreground: #242c2f;
   --primary: #23483c;
@@ -282,7 +274,6 @@
   --background: #0f1314;
   --foreground: #f3f1ea;
   --card: #171c1e;
-  --card-foreground: #f3f1ea;
   --popover: #20272a;
   --popover-foreground: #f3f1ea;
   --primary: #23483c;
