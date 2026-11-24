@@ -12,7 +12,9 @@
  *
  * Resolution (resolve.ts) runs before the transaction — reads only — and
  * the pure planner (plan.ts) decides finishes, folds duplicates and applies
- * the cap; every adjustment comes back as a count in the report.
+ * the cap; every adjustment but one comes back as a count in the report
+ * (plan.ts's header names the one: merged copies clamped to the per-row
+ * maximum).
  *
  * MTG only for now: the two supported exports are MTG apps. A One Piece
  * importer (M4) would pass its game id through the same functions.

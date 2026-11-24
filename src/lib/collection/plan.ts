@@ -1,8 +1,12 @@
 /**
  * Import planning (P3.7) — the pure half of the write path. Given rows (from
  * the parser client-side, or resolved to printings server-side) these
- * decide what gets written, and every decision is a returned COUNT the UI
- * can disclose: merged duplicates, adjusted finishes, cap truncation.
+ * decide what gets written, and every decision but one is a returned COUNT
+ * the UI can disclose: merged duplicates, adjusted finishes, cap truncation.
+ * The one: when merged duplicates' quantities sum past the per-row maximum,
+ * the sum is clamped to it and nothing counts the clamp (TRIM-T2 deleted the
+ * counts foldRows and planImport kept, which nothing read; the import page
+ * shows the parser's count, of single values above the maximum).
  * No IO here; store.ts runs the transaction.
  */
 import { COLLECTION_LIMITS, type CollectionRow, type Finish, type ImportMode } from "./types";

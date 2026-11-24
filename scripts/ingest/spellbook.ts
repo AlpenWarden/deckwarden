@@ -61,7 +61,12 @@ interface Stats {
   combos: { inserted: number; updated: number; deleted: number };
   pieces: { staged: number; inserted: number; stale_deleted: number; count_mismatches: number };
   source_last_modified: string | null;
-  /** The bulk's own root `version` and `timestamp` (Y3a) — the bracket read's Spellbook freshness. */
+  /**
+   * The bulk's own root `version` and `timestamp` (Y3a), printed in the log line and kept on
+   * purpose: they tell a person reading `ingest_runs` which export a run read. Nothing in the app
+   * reads them (the version's one reader went with TRIM-T2): the bracket read's Spellbook
+   * freshness is the run's start (LATER row 490).
+   */
   source_version: string | null;
   source_timestamp: string | null;
   /** Kept combos by bracket tag; `bracket_tags_unknown` = raw value → count, stored as NULL. */

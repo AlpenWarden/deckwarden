@@ -12,8 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
-    // Claude Code task worktrees are sibling checkouts, not part of this tree.
-    ".claude/worktrees/**",
+    // Claude Code's folder is not part of this tree: task worktrees are
+    // sibling checkouts, and session evidence holds built and scratch files
+    // that are not lint targets (LATER row 487).
+    ".claude/**",
   ]),
 ]);
 
