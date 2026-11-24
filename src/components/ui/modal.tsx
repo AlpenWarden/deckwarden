@@ -62,7 +62,7 @@ export function Modal({
       >
         {/* The close control is 44 px on a coarse pointer (R6): keep the title clear of it. */}
         <DialogHeader className="pointer-coarse:pr-10">
-          <DialogTitle className="text-sm font-semibold">{label}</DialogTitle>
+          <DialogTitle className="text-sm leading-5 font-semibold">{label}</DialogTitle>
         </DialogHeader>
         {children}
       </DialogContent>
