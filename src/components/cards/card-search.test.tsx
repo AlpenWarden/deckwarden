@@ -26,7 +26,7 @@ import { CONDITIONAL_BAN, LEADER_BUILD_CASES } from "@/lib/decks/leader-build-fi
 import { writePickIntent } from "@/lib/decks/leader-pick-intent";
 import type { ReleasedSet } from "@/lib/sets/lines";
 
-import { CardSearch, MOST_PLAYED, SKELETON_CARDS, TileBuildLink } from "./card-search";
+import { CardSearch, MOST_PLAYED, SKELETON_CARDS } from "./card-search";
 
 type Deferred = { resolve: (body: unknown) => void };
 let requests: { url: string; deferred: Deferred }[] = [];
@@ -527,13 +527,6 @@ describe("CardSearch — build links under commander tiles (COMMANDER-DOOR)", ()
     screen
       .queryAllByRole("link", { name: /^Build with / })
       .map((a) => [a.textContent, a.getAttribute("href")]);
-  /** The words a link shows: its text without what is kept for screen readers. */
-  function visibleWords(link: HTMLElement): string {
-    const copy = link.cloneNode(true) as HTMLElement;
-    for (const hidden of copy.querySelectorAll(".sr-only")) hidden.remove();
-    return copy.textContent ?? "";
-  }
-
   async function grid(rows: unknown[], game: "mtg" | "optcg" = "mtg", name = "") {
     render(<CardSearch game={game} initialName={name} />);
     debounce();
@@ -571,8 +564,9 @@ describe("CardSearch — build links under commander tiles (COMMANDER-DOOR)", ()
     expect(image.textContent).toBe("Atraxa, Praetors' Voice"); // the tile, here its no-image stand-in
     expect(build).toBe(buildLinks()[0]);
     expect(image.contains(build)).toBe(false);
-    // The grid draws the plan's form: every word shows.
-    expect(visibleWords(build)).toBe("Build with Atraxa, Praetors' Voice");
+    // Every word shows: nothing of the name is kept for screen readers alone.
+    expect(build.textContent).toBe("Build with Atraxa, Praetors' Voice");
+    expect(build.querySelector(".sr-only")).toBeNull();
   });
 
   it.each(LEADER_BUILD_CASES)("the rule, $label: link = $builds", async (c) => {
@@ -710,35 +704,5 @@ describe("CardSearch — build links under commander tiles (COMMANDER-DOOR)", ()
     expect(words.tagName).toBe("SPAN");
     expect(words.className).toBe("min-w-0 wrap-break-word");
     expect(words.textContent).toBe("Build with Asmoranomardicadaistinaculdacar");
-  });
-
-  it.each(["full", "short"] as const)(
-    "the %s form: the link's name is the whole sentence and begins with its visible words, word for word",
-    (form) => {
-      const WORDS = "Build with Esika, God of the Tree // The Prismatic Bridge";
-      render(<TileBuildLink href="/decks/new?game=mtg&leader=k" words={WORDS} form={form} />);
-      const link = screen.getByRole("link", { name: WORDS });
-      const visible = visibleWords(link);
-      expect(visible.trim()).toBe(form === "full" ? WORDS : "Build");
-      // Word for word: the name starts with what shows, up to a word's end.
-      expect(WORDS.startsWith(visible)).toBe(true);
-      expect(WORDS === visible || visible.endsWith(" ")).toBe(true);
-      // The rest is there for screen readers only, after the space (never with it inside).
-      const hidden = link.querySelector(".sr-only");
-      if (form === "short") expect(hidden?.textContent).toBe(WORDS.slice("Build ".length));
-      else expect(hidden).toBeNull();
-    },
-  );
-
-  it("the short form keeps a One Piece card number in the name", () => {
-    render(
-      <TileBuildLink
-        href="/decks/new?game=optcg&leader=OP01-003"
-        words="Build with Monkey.D.Luffy (OP01-003)"
-        form="short"
-      />,
-    );
-    const link = screen.getByRole("link", { name: "Build with Monkey.D.Luffy (OP01-003)" });
-    expect(visibleWords(link).trim()).toBe("Build");
   });
 });

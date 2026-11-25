@@ -142,56 +142,26 @@ const EXAMPLE_LINK_CLASS =
   "text-foreground focus-visible:ring-ring/50 rounded-sm font-medium underline underline-offset-4 outline-none hover:no-underline focus-visible:ring-2 pointer-coarse:-my-[14px] pointer-coarse:inline-flex pointer-coarse:min-h-11 pointer-coarse:items-center";
 
 /**
- * A tile's build link (COMMANDER-DOOR): which of its two forms the grid
- * draws. "full" shows every word, wrapped (the plan's form); "short" shows
- * "Build" and keeps the rest for screen readers. One of the two goes once
- * the owner has seen both.
- */
-export type TileBuildForm = "full" | "short";
-const TILE_BUILD_FORM: TileBuildForm = "full";
-
-/**
- * The link's look: the start doors' recipe (new-deck-chooser.tsx) as a
- * block. On touch it is a 44 px target with no negative margin, so it
- * never lies over the card's own link or the next row; the 2 px above it
- * there keep its focus ring, and the image's, off each other.
+ * A tile's build link (COMMANDER-DOOR): the start doors' recipe
+ * (new-deck-chooser.tsx) as a block. On touch it is a 44 px target with no
+ * negative margin, so it never lies over the card's own link or the next
+ * row; the 2 px above it there keep its focus ring, and the image's, off
+ * each other.
  */
 const TILE_BUILD_CLASS =
   "text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 mt-1.5 block rounded-sm text-sm leading-snug underline underline-offset-4 outline-none focus-visible:ring-2 pointer-coarse:mt-0.5 pointer-coarse:flex pointer-coarse:min-h-11 pointer-coarse:items-center";
 
 /**
- * "Build with <card name>" under a results tile. Its accessible name is
- * `words` in both forms: the short form's visible "Build" is the name's
- * first word, and the rest sits in a hidden span after the space. The
- * space stands before that span, not inside it: Chrome computes "Build
- * with …" either way, but an accessible-name reader with no layout (the
- * tests' own) drops a hidden span's leading space and reads "Buildwith …";
- * the space ends the line, so it adds no width and no underline. The words
- * have a span of their own so that on touch (a flex box) a long word breaks
- * instead of setting the link's width.
+ * "Build with <card name>" under a results tile: the whole sentence, shown
+ * and wrapped (the owner's choice of 2026-11-25 over a bare "Build"). The
+ * words have a span of their own so that on touch (a flex box) a long word
+ * breaks instead of setting the link's width.
  */
-export function TileBuildLink({
-  href,
-  words,
-  form,
-}: {
-  href: string;
-  words: string;
-  form: TileBuildForm;
-}) {
-  const space = words.indexOf(" ");
+function TileBuildLink({ href, words }: { href: string; words: string }) {
   return (
     // No prefetch: a page holds up to 60 of these, and one is followed.
     <Link href={href} prefetch={false} data-slot="tile-build" className={TILE_BUILD_CLASS}>
-      <span className="min-w-0 wrap-break-word">
-        {form === "full" || space === -1 ? (
-          words
-        ) : (
-          <>
-            {words.slice(0, space)} <span className="sr-only">{words.slice(space + 1)}</span>
-          </>
-        )}
-      </span>
+      <span className="min-w-0 wrap-break-word">{words}</span>
     </Link>
   );
 }
@@ -713,11 +683,7 @@ export function CardSearch({
                   <CardImage src={card.image} alt={card.name} width={488} height={680} frame />
                 </Link>
                 {words !== null && (
-                  <TileBuildLink
-                    href={leaderBuildHref(game, card.externalKey)}
-                    words={words}
-                    form={TILE_BUILD_FORM}
-                  />
+                  <TileBuildLink href={leaderBuildHref(game, card.externalKey)} words={words} />
                 )}
               </li>
             );
