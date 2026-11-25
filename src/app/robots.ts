@@ -5,8 +5,10 @@
  * sitemap chunk count (grows by a few thousand URLs a year), and a day-stale
  * chunk list at worst hides the newest cards from discovery for a day.
  *
- * Disallows are the non-content surfaces: APIs, the editor (/decks/*), and
- * the account page. Share pages (/d, /f) stay crawlable — private/unlisted
+ * Disallows are the non-content surfaces: APIs, the editor (/decks/*), the
+ * account page and the collection page (COLLECTION-PAGE: signed-in only,
+ * one player's cards; a crawler would only ever meet its sign-in buttons).
+ * Share pages (/d, /f) stay crawlable — private/unlisted
  * ones carry noindex metadata instead, so crawlers can fetch and then drop
  * them rather than indexing bare disallowed URLs.
  *
@@ -56,7 +58,7 @@ export default async function robots(): Promise<MetadataRoute.Robots> {
       {
         userAgent: "*",
         allow: "/",
-        disallow: ["/api/", "/decks/", "/account"],
+        disallow: ["/api/", "/decks/", "/account", "/collection"],
       },
       { userAgent: AI_TRAINING_CRAWLERS, disallow: "/" },
     ],

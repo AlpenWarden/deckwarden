@@ -103,6 +103,22 @@
  *   wiped in another tab, while the sheet was open. Each gets its own
  *   sentence and Retry; nothing is asked again until the player acts, and
  *   the box stays ticked so nothing unfiltered is ever asked for them.
+ *
+ * Opened already ticked (COLLECTION-PAGE, the collection page's "Build from
+ * my collection"): `startOwned` is the tick's first value, handed down by
+ * the editor from the link's one-time flag. Two rules keep the open to ONE
+ * request and never an error:
+ * - While the editor is still checking the collection, a ticked sheet asks
+ *   nothing: it shows the list's skeleton and waits, the box ticked and
+ *   not yet pressable. When the editor answers `available` the one opening
+ *   request goes out, with the flag.
+ * - When the editor answers that there is no collection to build from (a
+ *   guest, or an account without one; the link names no player, so that is
+ *   also what most people see who were sent it) or that it could not
+ *   check, the tick is dropped: the one opening request carries no flag,
+ *   and the box reads unticked with its hint. A tick lives only while
+ *   there is a collection, so nothing here can reach the route's 401 or
+ *   409 by itself, and no list reloads later on its own.
  */
 import { CheckIcon, ChevronDownIcon, RotateCcwIcon } from "lucide-react";
 import Link from "next/link";
@@ -247,6 +263,7 @@ export function AutofillSheet({
   linkPreviews = true,
   upgradeDoor = false,
   collection = "unavailable",
+  startOwned = false,
   onApply,
   onClose,
 }: {
@@ -269,6 +286,8 @@ export function AutofillSheet({
   upgradeDoor?: boolean;
   /** AUTOFILL-OWNED: what the editor knows of the player's collection; absent = none to build from. */
   collection?: CollectionState;
+  /** COLLECTION-PAGE: open with "Only cards I own" ticked (the build link's one-time flag); it holds only where `collection` turns out `available`. */
+  startOwned?: boolean;
   onApply: (apply: AutofillApply) => void;
   onClose: () => void;
 }) {
@@ -314,9 +333,20 @@ export function AutofillSheet({
   );
   const [keepChecked, setKeepChecked] = useState(true);
   // Only cards I own (AUTOFILL-OWNED): the sheet's own tick, and only ever
-  // sent while the editor says there is a collection to build from.
-  const [ownedTicked, setOwnedTicked] = useState(false);
+  // sent while the editor says there is a collection to build from. It
+  // starts from the build link's flag (COLLECTION-PAGE), unticked otherwise.
+  const [ownedTicked, setOwnedTicked] = useState(startOwned);
+  // A tick lives only while there is a collection: once the editor says
+  // there is none (or that it could not check), it is dropped, so a box
+  // that came ticked from the link reads unticked and stays so. Adjusted
+  // during render, which settles in one pass.
+  if (ownedTicked && (collection === "unavailable" || collection === "failed")) {
+    setOwnedTicked(false);
+  }
   const ownedOnly = ownedTicked && collection === "available";
+  // Ticked before the editor knows (only the link's tick can be: the box is
+  // disabled while it checks): the opening request waits for the answer.
+  const awaitingCollection = ownedTicked && collection === "checking";
   const ownedNoteId = useId();
   const [nonce, setNonce] = useState(0);
   const [sheet, setSheet] = useState<SheetState>({ state: "loading" });
@@ -339,7 +369,7 @@ export function AutofillSheet({
   // request never lands (the reroll budget IS the rate budget).
   const leaderIds = leaders.map((e) => e.cardId).join(",");
   useEffect(() => {
-    if (!leaderZone || leaderIds === "") return;
+    if (!leaderZone || leaderIds === "" || awaitingCollection) return;
     const controller = new AbortController();
     void (async () => {
       setSheet({ state: "loading" });
@@ -409,6 +439,7 @@ export function AutofillSheet({
     keepChecked,
     budget,
     ownedOnly,
+    awaitingCollection,
     sentGoals,
     nonce,
   ]);
@@ -678,7 +709,10 @@ export function AutofillSheet({
               className="w-auto gap-1.5"
             >
               <Checkbox
-                checked={ownedOnly}
+                // Ticked while the link's tick waits for the editor's answer
+                // (COLLECTION-PAGE): the box says what the sheet is about to
+                // ask for, and it cannot be pressed until the answer is in.
+                checked={ownedOnly || awaitingCollection}
                 onCheckedChange={(next) => setOwnedTicked(next)}
                 aria-describedby={ownedNote ? ownedNoteId : undefined}
               />

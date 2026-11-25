@@ -5,8 +5,11 @@
  * WAVE2.md D1): "Sign in" for guests; a real-button menu trigger (avatar +
  * name, name sr-only below `lg` since HEADER-SEARCH, so the header's card
  * search keeps its words on a tablet; it was `sm`) once the Better Auth client resolves a
- * session — My decks · Bookmarks · Collection · Profile & settings as
- * links into /account's sections, then Sign out. Client-side on purpose —
+ * session — My decks · Bookmarks · Collection · Profile & settings, three
+ * of them links into /account's sections and Collection its own page since
+ * COLLECTION-PAGE (2026-11-25, the owner's decision 11: it opened Account's
+ * import until then; the import is one link away on that page), then Sign
+ * out. Client-side on purpose —
  * reading the session on the server would mean headers() in the (site)
  * layout, which turns every ISR page dynamic (LATER row 71). The server
  * HTML and the first client render both show the guest shape (useSession
@@ -52,11 +55,14 @@ import { authClient } from "@/lib/auth-client";
 import { parseAvatarChoice } from "@/lib/profile/avatar";
 import { cn } from "@/lib/utils";
 
-/** The /account sections the menu links into (D1; #bookmarks is W3's new id). */
+/**
+ * Where the menu goes: three /account sections (D1; #bookmarks is W3's new
+ * id) and the collection's own page (COLLECTION-PAGE, decision 11).
+ */
 const ACCOUNT_MENU_LINKS = [
   { href: "/account#decks", label: "My decks" },
   { href: "/account#bookmarks", label: "Bookmarks" },
-  { href: "/account#collection", label: "Collection" },
+  { href: "/collection", label: "Collection" },
   { href: "/account#settings", label: "Profile & settings" },
 ] as const;
 

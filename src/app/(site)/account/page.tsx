@@ -16,7 +16,10 @@
  * sub-block: bookmarks are decks you keep) · Collection import · Settings
  * (public profile, the signed-in identity with Sign out, and the Danger zone
  * LAST). Every control keeps its label; "Danger zone" and "No bookmarks
- * yet" are smoke-pinned and unchanged.
+ * yet" are smoke-pinned and unchanged. COLLECTION-PAGE (2026-11-25): once a
+ * collection exists, the import section's heading carries "View your
+ * collection", the way to /collection from here (the header's account menu
+ * is the other).
  *
  * X1 (WAVE3.md D1): My decks opens this page for everyone, so the
  * signed-out page lists this browser's decks under the sign-in buttons
@@ -386,7 +389,16 @@ export default async function AccountPage({ searchParams }: PageProps<"/account"
         aria-label="Collection import"
         className="mt-10 scroll-mt-6 space-y-3"
       >
-        <h2 className={SECTION_TITLE_CLASS}>Collection import</h2>
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <h2 className={SECTION_TITLE_CLASS}>Collection import</h2>
+          {/* COLLECTION-PAGE: the page that lists it, once there is one to list. */}
+          {collection.rows > 0 && (
+            <Link href="/collection" className="text-sm underline">
+              View your collection
+              <ArrowRightIcon aria-hidden className="ml-1 inline size-3.5 align-[-0.15em]" />
+            </Link>
+          )}
+        </div>
         <CollectionImport summary={collection} />
       </section>
 

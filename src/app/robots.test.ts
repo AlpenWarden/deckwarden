@@ -54,7 +54,14 @@ function groupFor(token: string) {
   );
 }
 
-const STAR_RULES = ["Allow: /", "Disallow: /api/", "Disallow: /decks/", "Disallow: /account"];
+// /collection since COLLECTION-PAGE: a signed-in page, one player's cards.
+const STAR_RULES = [
+  "Allow: /",
+  "Disallow: /api/",
+  "Disallow: /decks/",
+  "Disallow: /account",
+  "Disallow: /collection",
+];
 
 describe("robots.txt", () => {
   it("counts the sitemap's cards, never tokens (DECK-TOKENS: a token page is noindex)", () => {

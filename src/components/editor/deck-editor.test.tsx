@@ -2151,6 +2151,219 @@ describe("DeckEditor — Autofill review sheet + doors (W9b/W9c)", () => {
     expect(ownedNote()).toBeNull();
     expect(collectionAsks()).toEqual([]);
   });
+
+  // ----------------------------------------------------------- COLLECTION-PAGE
+  // "Build from my collection" on /collection is the new-deck link with
+  // ?autofill=1 and ?owned=1 (`draftAutofill` + `draftOwned`): the latched
+  // sheet opens with "Only cards I own" ticked, and its ONE opening request
+  // waits for the editor's collection read so it already carries the flag.
+  const boxTicked = () => ownedBox().getAttribute("aria-checked") === "true";
+  const PLAIN_ASK = { game: "mtg", format: "commander", leaderIds: [commander.id], keep: [] };
+  function buildFromCollection() {
+    stubViewport(1440);
+    return render(
+      <DeckEditor
+        deckId={null}
+        draftGame="mtg"
+        draftFormat="commander"
+        draftLeaderKey="atraxa"
+        draftAutofill
+        draftOwned
+      />,
+    );
+  }
+
+  it("COLLECTION-PAGE, a collector's Build from my collection: the sheet opens ticked and asks nothing until the collection read answers, then ONE autofill POST carrying the flag; no deck is created", async () => {
+    session.current = { user: { id: "user-1" } };
+    const gate = deferred();
+    fetchMock.mockImplementation(collectorRoute(() => gate.promise.then(() => summary(2400))));
+    buildFromCollection();
+
+    // The latch opens the sheet once the commander has seeded: no door was pressed.
+    await pollFor(() => autofillDialog());
+    await settle(400);
+    expect(collectionAsks()).toEqual(["GET /api/collection"]);
+    // Still checking: ticked, not yet pressable, and not one Autofill request.
+    expect(boxTicked()).toBe(true);
+    expect(ownedBox().disabled).toBe(true);
+    expect(autofillPosts()).toBe(0);
+    expect(within(autofillDialog()!).getByLabelText("Building the shell…")).toBeTruthy();
+
+    gate.resolve();
+    await pollFor(() => screen.queryByRole("button", { name: "Add 12 cards" }));
+    expect(autofillBodies()).toEqual([{ ...PLAIN_ASK, ownedOnly: true }]);
+    expect(boxTicked()).toBe(true);
+    expect(ownedBox().disabled).toBe(false);
+    expect(within(autofillDialog()!).getByText(BASICS_NOTE)).toBeTruthy();
+    expect(
+      within(autofillDialog()!).getByText("1 of these 12 cards are from your collection."),
+    ).toBeTruthy();
+
+    await settle(400);
+    // One request for the whole open, and opening wrote nothing.
+    expect(autofillPosts()).toBe(1);
+    expect(posts()).toBe(0);
+    expect(saveStatus()).toBe("saved");
+    expect(collectionAsks().filter((ask) => ask === "GET /api/collection")).toHaveLength(1);
+  });
+
+  it("COLLECTION-PAGE, the collection already known when the sheet opens: ONE autofill POST, with the flag", async () => {
+    session.current = { user: { id: "user-1" } };
+    // The commander's seed is slower than the collection read.
+    const seed = deferred();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) =>
+      String(input) === "/api/cards/resolve"
+        ? seed.promise.then(() => collectorRoute(() => summary(2400))(input, init))
+        : collectorRoute(() => summary(2400))(input, init),
+    );
+    buildFromCollection();
+    await pollFor(() => (collectionAsks().length === 1 ? true : null));
+    await settle(300);
+    expect(autofillDialog()).toBeNull();
+    seed.resolve();
+
+    await pollFor(() => screen.queryByRole("button", { name: "Add 12 cards" }));
+    expect(autofillBodies()).toEqual([{ ...PLAIN_ASK, ownedOnly: true }]);
+    expect(boxTicked()).toBe(true);
+    await settle(400);
+    expect(autofillPosts()).toBe(1);
+  });
+
+  it("COLLECTION-PAGE, the tick belongs to the sheet the link opened: after Cancel the door opens a plain sheet, unticked, with a plain ask", async () => {
+    session.current = { user: { id: "user-1" } };
+    fetchMock.mockImplementation(collectorRoute(() => summary(2400)));
+    buildFromCollection();
+    await pollFor(() => screen.queryByRole("button", { name: "Add 12 cards" }));
+    expect(autofillBodies()).toEqual([{ ...PLAIN_ASK, ownedOnly: true }]);
+
+    fireEvent.click(within(autofillDialog()!).getByRole("button", { name: "Cancel" }));
+    await pollFor(() => (autofillDialog() ? null : true));
+    fireEvent.click(
+      await pollFor(() => screen.queryByRole("button", { name: "Autofill a starter shell" })),
+    );
+    await pollFor(() =>
+      autofillPosts() === 2 ? screen.queryByRole("button", { name: "Add 12 cards" }) : null,
+    );
+    expect(autofillBodies()[1]).toEqual(PLAIN_ASK);
+    expect(boxTicked()).toBe(false);
+    expect(ownedBox().disabled).toBe(false);
+    // Nothing reopened by itself, and nothing was saved.
+    await settle(400);
+    expect(autofillPosts()).toBe(2);
+    expect(posts()).toBe(0);
+  });
+
+  it("COLLECTION-PAGE, the same link opened by a guest: the sheet opens with the box unticked and its hint, ONE plain POST, nothing asked about a collection and nothing refused", async () => {
+    // A route that would refuse an owned ask, as the real one refuses a guest's.
+    const statuses: number[] = [];
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/decks/autofill") {
+        const body = JSON.parse(init!.body as string) as { ownedOnly?: boolean };
+        statuses.push(body.ownedOnly ? 401 : 200);
+        if (body.ownedOnly) {
+          return { ok: false, status: 401, headers: new Headers(), json: async () => ({}) };
+        }
+      }
+      return autofillRoute(input, init);
+    });
+    buildFromCollection();
+    await pollFor(() => screen.queryByRole("button", { name: "Add 12 cards" }));
+    expect(autofillBodies()).toEqual([PLAIN_ASK]);
+    expect(statuses).toEqual([200]);
+    expect(boxTicked()).toBe(false);
+    expect(ownedBox().disabled).toBe(true);
+    expect(ownedNote()?.textContent).toBe(
+      "Sign in and import a collection on your Account page to filter by cards you own",
+    );
+    // No error, no Retry: the full list, as any guest's sheet shows it.
+    expect(within(autofillDialog()!).queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(autofillDialog()!.querySelector(".text-destructive")).toBeNull();
+    await settle(400);
+    expect(autofillPosts()).toBe(1);
+    expect(collectionAsks()).toEqual([]);
+    expect(posts()).toBe(0);
+  });
+
+  it("COLLECTION-PAGE, the link followed by a signed-in player with no collection: one collection read, then ONE plain POST; unticked with the hint", async () => {
+    session.current = { user: { id: "user-2" } };
+    const gate = deferred();
+    fetchMock.mockImplementation(collectorRoute(() => gate.promise.then(() => summary(0))));
+    buildFromCollection();
+    await pollFor(() => autofillDialog());
+    await settle(400);
+    // Waiting for the answer, like a collector's.
+    expect(autofillPosts()).toBe(0);
+
+    gate.resolve();
+    await pollFor(() => screen.queryByRole("button", { name: "Add 12 cards" }));
+    expect(autofillBodies()).toEqual([PLAIN_ASK]);
+    expect(boxTicked()).toBe(false);
+    expect(ownedBox().disabled).toBe(true);
+    expect(within(ownedNote()!).getByRole("link", { name: "import a collection" })).toBeTruthy();
+    expect(autofillDialog()!.querySelector(".text-destructive")).toBeNull();
+    await settle(400);
+    expect(autofillPosts()).toBe(1);
+    expect(collectionAsks()).toEqual(["GET /api/collection"]);
+  });
+
+  it("COLLECTION-PAGE, a collection read that fails under the link: ONE plain POST, and the box says it could not check", async () => {
+    session.current = { user: { id: "user-3" } };
+    fetchMock.mockImplementation(
+      collectorRoute(() => ({ ok: false, status: 500, json: async () => ({}) })),
+    );
+    buildFromCollection();
+    await pollFor(() => screen.queryByRole("button", { name: "Add 12 cards" }));
+    expect(autofillBodies()).toEqual([PLAIN_ASK]);
+    expect(boxTicked()).toBe(false);
+    expect(ownedNote()?.textContent).toBe("Couldn't check your collection.");
+    await settle(400);
+    expect(autofillPosts()).toBe(1);
+  });
+
+  it("COLLECTION-PAGE, a collector on a plain starter-shell link (?autofill=1 alone, the hubs'): the latched sheet opens unticked, with a plain ask", async () => {
+    session.current = { user: { id: "user-1" } };
+    fetchMock.mockImplementation(collectorRoute(() => summary(2400)));
+    stubViewport(1440);
+    render(
+      <DeckEditor
+        deckId={null}
+        draftGame="mtg"
+        draftFormat="commander"
+        draftLeaderKey="atraxa"
+        draftAutofill
+      />,
+    );
+    await pollFor(() => screen.queryByRole("button", { name: "Add 12 cards" }));
+    await pollFor(() => (ownedBox().disabled ? null : ownedBox()));
+    expect(autofillBodies()).toEqual([PLAIN_ASK]);
+    expect(boxTicked()).toBe(false);
+    await settle(400);
+    expect(autofillPosts()).toBe(1);
+  });
+
+  it("COLLECTION-PAGE, ?owned=1 without ?autofill=1 opens nothing: the commander seeds, no sheet, no Autofill request", async () => {
+    session.current = { user: { id: "user-1" } };
+    fetchMock.mockImplementation(collectorRoute(() => summary(2400)));
+    stubViewport(1440);
+    render(
+      <DeckEditor
+        deckId={null}
+        draftGame="mtg"
+        draftFormat="commander"
+        draftLeaderKey="atraxa"
+        draftOwned
+      />,
+    );
+    await pollFor(() => screen.queryByRole("button", { name: "Autofill a starter shell" }));
+    await settle(400);
+    expect(autofillDialog()).toBeNull();
+    expect(autofillPosts()).toBe(0);
+    // The door still opens the plain sheet, unticked.
+    fireEvent.click(screen.getByRole("button", { name: "Autofill a starter shell" }));
+    await pollFor(() => screen.queryByRole("button", { name: "Add 12 cards" }));
+    expect(autofillBodies()).toEqual([PLAIN_ASK]);
+    expect(boxTicked()).toBe(false);
+  });
 });
 
 // ------------------------------------------------------------------- Y2a

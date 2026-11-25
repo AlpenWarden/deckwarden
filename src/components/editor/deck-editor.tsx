@@ -153,6 +153,14 @@
  * cards I own" box, and hands back the picks it built from the collection,
  * so the ownership line is right in the render the list lands in.
  *
+ * COLLECTION-PAGE (the owner's idea 1 of 2026-11-24): "Build from my
+ * collection" on /collection is the new-deck link with `?autofill=1` and
+ * `?owned=1`. `draftOwned` is that second flag: the sheet the latch opens
+ * gets it as the first value of its "Only cards I own" box
+ * (`startOwned`), and only that sheet. The flag is spent when the sheet
+ * closes, so a sheet opened later from a door or the More menu starts
+ * unticked like any other, and the tick is still never stored on the deck.
+ *
  * Game-agnostic by construction: zones, labels, and card display all come off
  * the adapter registry (FormatDef, display.*) — nothing MTG-specific here.
  */
@@ -385,6 +393,7 @@ export function DeckEditor({
   draftSurprise,
   draftComboKey,
   draftAutofill,
+  draftOwned,
   draftImport,
   applyLeaderKey,
 }: {
@@ -438,6 +447,17 @@ export function DeckEditor({
    * autofill declaration like every other door.
    */
   draftAutofill?: boolean;
+  /**
+   * Draft mode only (COLLECTION-PAGE): `?owned=1` beside `?autofill=1`, from
+   * the collection page's "Build from my collection". The sheet that latch
+   * opens starts with "Only cards I own" ticked. The sheet holds its one
+   * opening request until this editor knows whether the player has a
+   * collection, so that request already carries the flag for a collector
+   * and none for a guest or a player without one, who see the box unticked
+   * with its hint and never an error. Without `draftAutofill` it does
+   * nothing: no sheet opens.
+   */
+  draftOwned?: boolean;
   /**
    * Draft mode only (Y2b): `?import=1` from the picker's "Paste a list"
    * door. Opens the Import dialog ONCE, with the ?autofill=1 latch's
@@ -873,6 +893,10 @@ export function DeckEditor({
   // full list", cleared whenever the sheet closes (Cancel, Esc, Apply);
   // the empty-deck door and More → Autofill… open the plain sheet.
   const [autofillPin, setAutofillPin] = useState<ComboPin | null>(null);
+  // COLLECTION-PAGE: whether the sheet now open starts with "Only cards I
+  // own" ticked. Set by the `?autofill=1` latch from `draftOwned`, and
+  // cleared with the pin whenever the sheet closes or another door opens it.
+  const [autofillStartOwned, setAutofillStartOwned] = useState(false);
   useEffect(() => {
     if (draftSeed !== "leader" || !draftLeaderKey || seededLeaderRef.current) return;
     if (load.state !== "ready") return;
@@ -1340,8 +1364,12 @@ export function DeckEditor({
     setDialog("shortcuts");
   }, []);
   const openFromHeader = useCallback((next: EditorDialog) => {
-    // More → Autofill… is the plain sheet, never a combo's (X3).
-    if (next === "autofill") setAutofillPin(null);
+    // More → Autofill… is the plain sheet, never a combo's (X3) and never
+    // the collection link's ticked one (COLLECTION-PAGE).
+    if (next === "autofill") {
+      setAutofillPin(null);
+      setAutofillStartOwned(false);
+    }
     // The header's Share opens the dialog at its top (DECK-PREVIEW-BRACKET).
     if (next === "share") setShareAt(null);
     setDialogFromMenu(next !== "share");
@@ -1910,6 +1938,7 @@ export function DeckEditor({
   // door hands this straight to onClick.
   const openAutofill = useCallback(() => {
     setAutofillPin(null);
+    setAutofillStartOwned(false);
     setDialogFromMenu(false);
     setDialog("autofill");
   }, []);
@@ -1917,12 +1946,15 @@ export function DeckEditor({
   // around one combo — its pieces always kept, shown and never dropped.
   const openComboAutofill = useCallback((pin: ComboPin) => {
     setAutofillPin(pin);
+    setAutofillStartOwned(false);
     setDialogFromMenu(false);
     setDialog("autofill");
   }, []);
   const closeAutofill = useCallback(() => {
     setDialog(null);
     setAutofillPin(null);
+    // COLLECTION-PAGE: the link's tick belongs to the sheet it opened.
+    setAutofillStartOwned(false);
   }, []);
 
   // ?autofill=1 (W9c): the hub CTA's latched sheet-open — ONCE, after any
@@ -1946,6 +1978,8 @@ export function DeckEditor({
     (!seedExpected || seedSettled)
   ) {
     setAutofillOpened(true);
+    // COLLECTION-PAGE: `?owned=1` ticks this sheet's box, and no later one's.
+    setAutofillStartOwned(Boolean(draftOwned));
     setDialogFromMenu(false);
     setDialog("autofill");
   }
@@ -2848,6 +2882,8 @@ export function DeckEditor({
               upgradeDoor={swapInOn}
               // AUTOFILL-OWNED: what the "Only cards I own" box is told.
               collection={collectionState}
+              // COLLECTION-PAGE: the box's first value, for the latched open alone.
+              startOwned={autofillStartOwned}
               onApply={handleAutofillApply}
               onClose={closeAutofill}
             />

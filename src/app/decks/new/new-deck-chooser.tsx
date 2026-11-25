@@ -16,6 +16,12 @@
  * whichever the adapter declares (src/lib/decks/start-doors.ts) — and
  * `?import=1` is a one-shot latch like `?surprise=1`: the draft opens with
  * the Import dialog, and the param leaves the URL.
+ *
+ * COLLECTION-PAGE (the owner's idea 1 of 2026-11-24): `?owned=1` rides
+ * beside `?autofill=1` on the collection page's "Build from my collection"
+ * link (`buildFromCollectionHref`). It is one more one-shot latch: the sheet
+ * that `autofill` opens starts with "Only cards I own" ticked, both params
+ * leave the URL, and a reload opens nothing. Alone it does nothing.
  */
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -59,12 +65,17 @@ export function NewDeckChooser() {
   // reload must never re-open the dialog.
   const paramImport = params.get("import") !== null;
   const [pasteList, setPasteList] = useState(paramImport);
+  // ?owned=1 (COLLECTION-PAGE): "Build from my collection" — the latched
+  // sheet's first tick, a one-shot like the latch it rides with.
+  const paramOwned = params.get("owned") !== null;
+  const [owned, setOwned] = useState(paramOwned);
   // Adjust-state-during-render (the React-docs pattern): latch a present
   // param, ignore its later disappearance.
   if (paramGame && paramGame !== gameId) setGameId(paramGame);
   if (paramSurprise && !surprise) setSurprise(true);
   if (paramAutofill && !autofill) setAutofill(true);
   if (paramImport && !pasteList) setPasteList(true);
+  if (paramOwned && !owned) setOwned(true);
   const chosen = adapters.find((a) => a.id === gameId);
 
   // Strip the latched one-shot params without a history entry; ?game=,
@@ -72,7 +83,7 @@ export function NewDeckChooser() {
   // before).
   useEffect(() => {
     const url = new URL(window.location.href);
-    const oneShot = ["surprise", "autofill", "import"];
+    const oneShot = ["surprise", "autofill", "import", "owned"];
     if (!oneShot.some((name) => url.searchParams.has(name))) return;
     for (const name of oneShot) url.searchParams.delete(name);
     window.history.replaceState(window.history.state, "", url);
@@ -93,6 +104,7 @@ export function NewDeckChooser() {
         draftSurprise={surprise || undefined}
         draftComboKey={comboKey ?? undefined}
         draftAutofill={autofill || undefined}
+        draftOwned={owned || undefined}
         draftImport={pasteList || undefined}
       />
     );

@@ -10,6 +10,15 @@
 export const FINISHES = ["nonfoil", "foil", "etched"] as const;
 export type Finish = (typeof FINISHES)[number];
 
+/**
+ * The game a collection holds (COLLECTION-PAGE). One today: both supported
+ * exports come from Magic apps, and the import resolves every row against
+ * that game's printings (store.ts). The collection page reads this, takes
+ * that game's adapter, and gets every game word it prints from there. A
+ * second game's importer makes this a list and the page a view per game.
+ */
+export const COLLECTION_GAME = "mtg" as const;
+
 export const COLLECTION_LIMITS = {
   /**
    * Distinct (printing, finish) rows one account may hold. 20k printings is

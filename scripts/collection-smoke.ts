@@ -10,8 +10,14 @@
  * costs no list of ids), and Autofill's `ownedOnly` (AUTOFILL-OWNED): a
  * player whose collection is a commander and thirty cards gets exactly
  * those cards and the basic lands, with the open slots counted, and a
- * signed-out caller or a player with no collection gets no list. Runs
- * against a live server + real DB — deliberately outside `pnpm check`.
+ * signed-out caller or a player with no collection gets no list, and the
+ * collection page (COLLECTION-PAGE): /collection for a player whose
+ * collection is the plan's fixture (a five-color commander, two
+ * single-color ones, a partner, a double-faced one, a banned one and forty
+ * other cards): who sees it, the order and the counts of the commanders,
+ * the build links, the card list's order, filter and pages, and that
+ * nobody else's page ever holds one of those cards. Runs against a live
+ * server + real DB — deliberately outside `pnpm check`.
  *
  *   pnpm smoke:collection                                  # http://localhost:3000
  *   SMOKE_ALLOW_REMOTE=1 BASE_URL=https://deckwarden.gg pnpm smoke:collection   # a deploy, on purpose
@@ -23,10 +29,11 @@
  * run this smoke before the deck-heavy ones). Everything is deleted in
  * `finally`, and the user delete doubles as the cascade proof.
  *
- * Autofill budget: three POSTs to /api/decks/autofill (the owned list and
- * its two refusals; a refusal spends the per-address bucket too). That
- * bucket is 20 a minute and `pnpm smoke:autofill` spends 18, so run the two
- * a minute apart. A 429 is a failed check here, never a retry.
+ * Autofill budget: four POSTs to /api/decks/autofill (the owned list, its
+ * two refusals, and the list the collection page's build link leads to; a
+ * refusal spends the per-address bucket too). That bucket is 20 a minute
+ * and `pnpm smoke:autofill` spends 18, so run the two a minute apart. A 429
+ * is a failed check here, never a retry.
  */
 import { BASE } from "./smoke/guard"; // first import: a non-local BASE_URL exits 1 here
 import { mintSession } from "./smoke/session";
@@ -83,6 +90,37 @@ async function api(
 }
 
 const j = <T = Record<string, unknown>>(v: unknown): T => (v ?? {}) as T;
+
+/** Text as React writes it into HTML, for looking a card name up in a page. */
+const escapeHtml = (text: string) =>
+  text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;");
+
+/** Whether a page's HTML (markup and the payload beside it) spells a card name anywhere. */
+const holdsName = (html: string, name: string) =>
+  html.includes(name) || html.includes(escapeHtml(name));
+
+/** A page's HTML without the markers React puts between two pieces of text, so a sentence reads whole. */
+const plainText = (html: string) => html.replace(/<!-- -->/g, "");
+
+/** The markup of one list on the collection page, by its data-slot; null when the page draws none. */
+function listMarkup(html: string, slot: string): string | null {
+  const start = html.indexOf(`data-slot="${slot}"`);
+  if (start === -1) return null;
+  const end = html.indexOf("</ul>", start);
+  return end === -1 ? null : html.slice(start, end);
+}
+
+/** The card ids a list links to, in the order it draws them. */
+const linkedCardIds = (markup: string) =>
+  [...markup.matchAll(/href="\/cards\/([0-9a-f-]{36})"/g)].map((m) => m[1]);
+
+/** A list's rows, each as its own markup. */
+const listRows = (markup: string) => markup.split("<li").slice(1);
 
 interface Printing {
   printingId: string;
@@ -718,6 +756,349 @@ async function main() {
       { status: fillBob.status, text: fillBob.text.slice(0, 200) },
     );
 
+    // ---- the collection page (COLLECTION-PAGE) ----------------------------
+    // The plan's fixture, picked from the database the page reads: the most
+    // played legal commander of each kind (five colors, white alone, red
+    // alone, a Partner, a double-faced one), the most played banned one, and
+    // forty other cards that are no commander: thirty-nine by play and Sol
+    // Ring, held in two printings so its copies have something to add up.
+    // 46 cards in 47 rows, inserted directly (the import allows 10 an hour).
+    interface FixtureCard {
+      identityId: string;
+      printingId: string;
+      name: string;
+      externalKey: string;
+      ciMask: number;
+      popularity: number | null;
+    }
+    const asFixture = (row: postgres.Row): FixtureCard => ({
+      identityId: row.identity_id as string,
+      printingId: row.printing_id as string,
+      name: row.name as string,
+      externalKey: row.external_key as string,
+      ciMask: Number(row.ci_mask),
+      popularity: row.popularity === null ? null : Number(row.popularity),
+    });
+    const takenLeaders: string[] = [];
+    const pickLeader = async (
+      label: string,
+      kind: "five" | "white" | "red" | "partner" | "two-faced" | "banned",
+    ): Promise<FixtureCard> => {
+      const unruled = sql`not exists (
+        select 1 from legalities l
+        where l.card_identity_id = ci.id and l.format_id = ${FORMAT_ID.commander}
+          and l.effective_to is null and l.condition is null)`;
+      const banned = sql`exists (
+        select 1 from legalities l
+        where l.card_identity_id = ci.id and l.format_id = ${FORMAT_ID.commander}
+          and l.effective_to is null and l.condition is null and l.status = 'banned')`;
+      const where = {
+        five: sql`ci.ci_mask = 31 and ${unruled}`,
+        white: sql`ci.ci_mask = 1 and ${unruled}`,
+        red: sql`ci.ci_mask = 8 and ${unruled}`,
+        partner: sql`ci.attrs->'keywords' @> '["Partner"]'::jsonb and ${unruled}`,
+        "two-faced": sql`p.has_back and ci.name like '% // %' and ${unruled}`,
+        banned,
+      }[kind];
+      const [row] = await sql`
+        select ci.id as identity_id, p.id as printing_id, ci.name, ci.external_key, ci.ci_mask,
+               ci.popularity
+        from card_identities ci
+        join card_printings p on p.card_identity_id = ci.id and p.is_default and p.is_removed = false
+        where ci.game_id = ${GAME_ID.mtg} and ci.is_leader_candidate and ci.is_removed = false
+          and ci.id <> all(${takenLeaders}::uuid[])
+          and ${where}
+        order by ci.popularity asc nulls last, ci.id
+        limit 1`;
+      if (!row) throw new Error(`no ${label} in the database for the collection page's fixture`);
+      takenLeaders.push(row.identity_id as string);
+      return asFixture(row);
+    };
+    const five = await pickLeader("five-color commander", "five");
+    const white = await pickLeader("white commander", "white");
+    const red = await pickLeader("red commander", "red");
+    const partner = await pickLeader("Partner commander", "partner");
+    const twoFaced = await pickLeader("double-faced commander", "two-faced");
+    const bannedLeader = await pickLeader("banned commander", "banned");
+    const legalLeaders = [five, white, red, partner, twoFaced];
+    const others = (
+      await sql`
+        select ci.id as identity_id, p.id as printing_id, ci.name, ci.external_key, ci.ci_mask,
+               ci.popularity
+        from card_identities ci
+        join card_printings p on p.card_identity_id = ci.id and p.is_default and p.is_removed = false
+        where ci.game_id = ${GAME_ID.mtg} and ci.is_removed = false and ci.is_preview = false
+          and ci.is_leader_candidate = false and ci.popularity is not null
+          and ci.id <> ${solRing.identityId}
+          and not (ci.attrs @> '{"is_token": true}'::jsonb)
+        order by ci.popularity asc, ci.id
+        limit 39`
+    ).map(asFixture);
+    if (others.length !== 39) throw new Error("fewer than 39 other cards for the page's fixture");
+    const [solRow0] = await sql`
+      select ci.id as identity_id, ${solRing.printingId}::uuid as printing_id, ci.name,
+             ci.external_key, ci.ci_mask, ci.popularity
+      from card_identities ci where ci.id = ${solRing.identityId}`;
+    const solFixture = asFixture(solRow0);
+    const erinCards = [...legalLeaders, bannedLeader, ...others, solFixture];
+    const erinNames = erinCards.map((c) => c.name);
+
+    const erin = await mkUser("e");
+    await sql`
+      insert into collections (user_id, printing_id, finish, quantity)
+      select ${erin.id},
+             unnest(${[...legalLeaders, bannedLeader, ...others].map((c) => c.printingId)}::uuid[]),
+             'nonfoil', 1`;
+    // Sol Ring: two printings, 2 copies and 3. One card, five copies.
+    await sql`
+      insert into collections (user_id, printing_id, finish, quantity) values
+        (${erin.id}, ${solRing.printingId}, 'nonfoil', 2),
+        (${erin.id}, ${nonfoilOnlyId}, 'nonfoil', 3)`;
+    const [{ rows: erinRows, cards: erinCount }] = await sql`
+      select count(*)::int as rows, count(distinct p.card_identity_id)::int as cards
+      from collections c join card_printings p on p.id = c.printing_id where c.user_id = ${erin.id}`;
+    check(
+      "the page's fixture is 46 cards in 47 rows",
+      Number(erinCount) === 46 && Number(erinRows) === 47,
+      { erinRows, erinCount },
+    );
+
+    // What the page should say, worked out here from the fixture alone: the
+    // count beside a commander is every other fixture card whose colors sit
+    // inside its own; the order is that count, then play, then the name.
+    const fitsOf = (leader: FixtureCard) =>
+      erinCards.filter((c) => (c.ciMask & ~leader.ciMask) === 0).length - 1;
+    const expectedLeaders = [...legalLeaders].sort(
+      (a, b) =>
+        fitsOf(b) - fitsOf(a) ||
+        (a.popularity ?? Infinity) - (b.popularity ?? Infinity) ||
+        a.name.localeCompare(b.name, "en"),
+    );
+    const buildHref = (c: FixtureCard) =>
+      `/decks/new?game=mtg&leader=${encodeURIComponent(c.externalKey)}&autofill=1&owned=1`;
+
+    // Signed out: the sign-in buttons, and no card.
+    for (const path of ["/collection", "/collection?view=cards&q=sol"]) {
+      const guestPage = await api("GET", path);
+      check(
+        `GET ${path} signed out → 200, the sign-in buttons, never stored`,
+        guestPage.status === 200 &&
+          guestPage.text.includes("Sign in with Discord") &&
+          guestPage.text.includes("Sign in with Google") &&
+          (guestPage.headers.get("cache-control") ?? "").includes("no-store"),
+        { status: guestPage.status, cache: guestPage.headers.get("cache-control") },
+      );
+      check(
+        "…and its HTML holds no card name, no list and no build link",
+        erinNames.every((name) => !holdsName(guestPage.text, name)) &&
+          !guestPage.text.includes('data-slot="collection-') &&
+          !guestPage.text.includes("/decks/new?game="),
+        erinNames.filter((name) => holdsName(guestPage.text, name)),
+      );
+    }
+
+    // Signed in with no collection (bob): the empty state, and nobody else's cards.
+    const bobPage = await api("GET", `/collection?user=${erin.id}&userId=${erin.id}`, {
+      cookie: bob.cookie,
+    });
+    check(
+      "a signed-in player with no collection → “No collection imported yet” and the link to the import",
+      bobPage.status === 200 &&
+        bobPage.text.includes("No collection imported yet") &&
+        bobPage.text.includes('href="/account#collection"'),
+      bobPage.status,
+    );
+    check(
+      "…and another player's cards are nowhere in it, whatever the address names",
+      erinNames.every((name) => !holdsName(bobPage.text, name)),
+      erinNames.filter((name) => holdsName(bobPage.text, name)),
+    );
+
+    // The commanders view.
+    const pageStarted = Date.now();
+    const erinPage = await api("GET", "/collection", { cookie: erin.cookie });
+    const pageMs = Date.now() - pageStarted;
+    const leadersMarkup = listMarkup(erinPage.text, "collection-leaders") ?? "";
+    check(
+      `GET /collection as the collector → 200, never stored, not indexed (${pageMs} ms)`,
+      erinPage.status === 200 &&
+        (erinPage.headers.get("cache-control") ?? "").includes("no-store") &&
+        /<meta name="robots" content="noindex"/.test(erinPage.text),
+      { status: erinPage.status, cache: erinPage.headers.get("cache-control") },
+    );
+    check(
+      "each legal commander is listed once, in the expected order (most cards in its colors, then play)",
+      JSON.stringify(linkedCardIds(leadersMarkup)) ===
+        JSON.stringify(expectedLeaders.map((c) => c.identityId)),
+      {
+        got: linkedCardIds(leadersMarkup),
+        want: expectedLeaders.map((c) => `${c.name} (${fitsOf(c)})`),
+      },
+    );
+    const countIn = (row: string): number | null => {
+      if (row.includes("None of your other cards are in its colors")) return 0;
+      const m = />([\d,]+) of your cards (?:are|is) in its colors</.exec(row);
+      return m ? Number(m[1].replace(/,/g, "")) : null;
+    };
+    const leaderRows = listRows(leadersMarkup);
+    check(
+      "…each with the count of the other owned cards inside its colors",
+      leaderRows.length === 5 &&
+        leaderRows.every((row, i) => countIn(row) === fitsOf(expectedLeaders[i])),
+      leaderRows.map((row, i) => [
+        expectedLeaders[i]?.name,
+        countIn(row),
+        fitsOf(expectedLeaders[i]),
+      ]),
+    );
+    const fiveRow = leaderRows.find((row) => row.includes(five.identityId)) ?? "";
+    check(
+      "the five-color commander's count is every other owned card (45 of 46)",
+      countIn(fiveRow) === Number(erinCount) - 1 && countIn(fiveRow) === 45,
+      countIn(fiveRow),
+    );
+    const partnerRow = leaderRows.find((row) => row.includes(partner.identityId)) ?? "";
+    check(
+      `the partner (${partner.name}) is counted on its own colors`,
+      countIn(partnerRow) === fitsOf(partner) && fitsOf(partner) < 45,
+      { got: countIn(partnerRow), want: fitsOf(partner) },
+    );
+    check(
+      `the double-faced commander (${twoFaced.name}) is one row`,
+      linkedCardIds(leadersMarkup).filter((id) => id === twoFaced.identityId).length === 1 &&
+        holdsName(leadersMarkup, twoFaced.name),
+    );
+    check(
+      "every legal commander has “Build from my collection”: the new-deck link with the sheet open and the owned box ticked",
+      legalLeaders.every((c) => leadersMarkup.includes(`href="${escapeHtml(buildHref(c))}"`)) &&
+        (leadersMarkup.match(/href="\/decks\/new\?/g) ?? []).length === 5 &&
+        (leadersMarkup.match(/>Build from my collection</g) ?? []).length === 5,
+      (leadersMarkup.match(/href="\/decks\/new\?[^"]*"/g) ?? []).slice(0, 6),
+    );
+    const notLegalAt = erinPage.text.indexOf('data-slot="collection-not-legal"');
+    const notLegalLine =
+      notLegalAt === -1
+        ? ""
+        : erinPage.text.slice(notLegalAt, erinPage.text.indexOf("</p>", notLegalAt));
+    check(
+      `the banned commander (${bannedLeader.name}) is named in the quiet line and cannot be built`,
+      notLegalLine.includes(`${escapeHtml(bannedLeader.name)} (banned)`) &&
+        !linkedCardIds(leadersMarkup).includes(bannedLeader.identityId) &&
+        !erinPage.text.includes(`leader=${encodeURIComponent(bannedLeader.externalKey)}`),
+      notLegalLine.slice(0, 300),
+    );
+    check(
+      "the page leads back to the import, and to its second view",
+      erinPage.text.includes('href="/account#collection"') &&
+        erinPage.text.includes("Update or delete your collection") &&
+        erinPage.text.includes('href="/collection?view=cards"'),
+    );
+    // The build link's page is the static new-deck shell; what its sheet then
+    // asks is the owned Autofill, here for the five-color commander: a list
+    // made of this collection's cards and nothing else but basic lands.
+    const newDeck = await api("GET", buildHref(five));
+    check("the build link opens the new-deck page → 200", newDeck.status === 200, newDeck.status);
+    const erinOwned = new Set(erinCards.map((c) => c.identityId));
+    const erinFill = await api("POST", "/api/decks/autofill", {
+      cookie: erin.cookie,
+      body: {
+        game: "mtg",
+        format: "commander",
+        leaderIds: [five.identityId],
+        seed: 1_234_567,
+        ownedOnly: true,
+      },
+    });
+    const erinFillBody = j<{ picks: ShellPick[]; owned?: { applied: boolean } }>(erinFill.json);
+    const erinRanked = (erinFillBody.picks ?? []).filter((p) => p.tier !== "filler");
+    check(
+      "…and the owned Autofill for that commander is built from this collection: every pick but the basic lands is one of its cards",
+      erinFill.status === 200 &&
+        erinFillBody.owned?.applied === true &&
+        erinRanked.length > 0 &&
+        erinRanked.every((p) => erinOwned.has(p.cardId)),
+      {
+        status: erinFill.status,
+        ranked: erinRanked.length,
+        strangers: erinRanked.filter((p) => !erinOwned.has(p.cardId)).map((p) => p.name),
+      },
+    );
+    check(
+      "…never the banned commander, and never the commander itself",
+      erinRanked.every((p) => p.cardId !== bannedLeader.identityId && p.cardId !== five.identityId),
+    );
+
+    // The cards view: one row per card, in the database's own order.
+    const fixtureIds = erinCards.map((c) => c.identityId);
+    const idsBy = async (order: "name" | "rank") =>
+      (order === "name"
+        ? await sql`select id from card_identities where id in ${sql(fixtureIds)}
+                    order by name_norm asc, id asc`
+        : await sql`select id from card_identities where id in ${sql(fixtureIds)}
+                    order by popularity asc nulls last, name_norm asc, id asc`
+      ).map((r) => r.id as string);
+    const cardsPage = await api("GET", "/collection?view=cards", { cookie: erin.cookie });
+    const cardsMarkup = listMarkup(cardsPage.text, "collection-cards") ?? "";
+    check(
+      "“Your cards” lists the 46 cards once each, A to Z",
+      cardsPage.status === 200 &&
+        JSON.stringify(linkedCardIds(cardsMarkup)) === JSON.stringify(await idsBy("name")) &&
+        plainText(cardsPage.text).includes("46 cards, one row each"),
+      { status: cardsPage.status, rows: linkedCardIds(cardsMarkup).length },
+    );
+    const copiesIn = (row: string) => Number(/×<\/span>([\d,]+)</.exec(row)?.[1] ?? NaN);
+    const cardRowsMarkup = listRows(cardsMarkup);
+    const solCardRow = cardRowsMarkup.find((row) => row.includes(solRing.identityId)) ?? "";
+    check(
+      "…with a card's copies added up over its printings (Sol Ring: 2 + 3 = 5; every other card 1)",
+      copiesIn(solCardRow) === 5 &&
+        cardRowsMarkup.filter((row) => copiesIn(row) === 1).length === 45,
+      {
+        sol: copiesIn(solCardRow),
+        ones: cardRowsMarkup.filter((row) => copiesIn(row) === 1).length,
+      },
+    );
+    const rankPage = await api("GET", "/collection?view=cards&sort=rank", { cookie: erin.cookie });
+    check(
+      "…sorted by rank: most played first, unranked last",
+      JSON.stringify(linkedCardIds(listMarkup(rankPage.text, "collection-cards") ?? "")) ===
+        JSON.stringify(await idsBy("rank")),
+    );
+    const filtered = await api("GET", "/collection?view=cards&q=sol+ring", { cookie: erin.cookie });
+    const filteredIds = linkedCardIds(listMarkup(filtered.text, "collection-cards") ?? "");
+    check(
+      "…filtered by name: “sol ring” finds Sol Ring among fewer rows, every one a card of the collection",
+      filteredIds.includes(solRing.identityId) &&
+        filteredIds.length < 46 &&
+        filteredIds.every((id) => erinOwned.has(id)) &&
+        filtered.text.includes("of your cards match"),
+      filteredIds.length,
+    );
+    const noMatch = await api("GET", "/collection?view=cards&q=zzzzqqqq", { cookie: erin.cookie });
+    check(
+      "…a name nothing matches says so, with the collection still there",
+      noMatch.status === 200 &&
+        noMatch.text.includes("No cards in your collection match") &&
+        !noMatch.text.includes("No collection imported yet") &&
+        listMarkup(noMatch.text, "collection-cards") === null,
+    );
+
+    // Account's link to the page, only once there is a collection to view.
+    const erinAccount = await api("GET", "/account", { cookie: erin.cookie });
+    const bobAccount = await api("GET", "/account", { cookie: bob.cookie });
+    check(
+      "/account shows “View your collection” → /collection to the collector, and not to a player without one",
+      erinAccount.text.includes("View your collection") &&
+        erinAccount.text.includes('href="/collection"') &&
+        !bobAccount.text.includes("View your collection"),
+    );
+    const robotsTxt = await api("GET", "/robots.txt");
+    check(
+      "robots.txt keeps crawlers out of /collection",
+      robotsTxt.status === 200 && /^Disallow: \/collection$/m.test(robotsTxt.text),
+      robotsTxt.text.slice(0, 200),
+    );
+
     // ---- replace: wipe-then-insert ---------------------------------------
     const replace = await api("POST", "/api/collection", {
       cookie: alice.cookie,
@@ -834,6 +1215,63 @@ async function main() {
       recCapBody.recommendations?.every(
         (r) => r.cardId !== counterspell.identityId && r.cardId !== remora.identityId,
       ) === true,
+    );
+
+    // The collection page at the cap (COLLECTION-PAGE): sixty rows a page,
+    // no row on two pages, a last page and nothing past it. Carol's rows span
+    // both games; the page lists the game a collection is imported from.
+    const [{ n: carolCards }] = await sql`
+      select count(distinct p.card_identity_id)::int as n
+      from collections c join card_printings p on p.id = c.printing_id
+      join card_identities ci on ci.id = p.card_identity_id
+      where c.user_id = ${carol.id} and ci.game_id = ${GAME_ID.mtg}`;
+    const carolPages = Math.ceil(Number(carolCards) / 60);
+    const carolPage = async (page: number) => {
+      const started = Date.now();
+      const res = await api("GET", `/collection?view=cards&page=${page}`, { cookie: carol.cookie });
+      return {
+        res,
+        ms: Date.now() - started,
+        ids: linkedCardIds(listMarkup(res.text, "collection-cards") ?? ""),
+      };
+    };
+    const capPage1 = await carolPage(1);
+    const capPage2 = await carolPage(2);
+    check(
+      `“Your cards” at the cap (${carolCards} cards): pages 1 and 2 hold sixty rows each and share none (${capPage1.ms} ms, ${capPage2.ms} ms)`,
+      capPage1.ids.length === 60 &&
+        capPage2.ids.length === 60 &&
+        new Set([...capPage1.ids, ...capPage2.ids]).size === 120,
+      { one: capPage1.ids.length, two: capPage2.ids.length },
+    );
+    check(
+      `…page 2 says where it is (Page 2 of ${carolPages.toLocaleString("en-US")}) and links both ways`,
+      plainText(capPage2.res.text).includes(`Page 2 of ${carolPages.toLocaleString("en-US")}`) &&
+        capPage2.res.text.includes('href="/collection?view=cards"') &&
+        capPage2.res.text.includes('href="/collection?view=cards&amp;page=3"'),
+      plainText(capPage2.res.text).match(/Page \d[^<]{0,20}/)?.[0],
+    );
+    const capLast = await carolPage(carolPages);
+    check(
+      `…the last page (${carolPages}) holds the remainder and no Next (${capLast.ms} ms)`,
+      capLast.ids.length === Number(carolCards) - 60 * (carolPages - 1) &&
+        !capLast.res.text.includes(`page=${carolPages + 1}"`),
+      { rows: capLast.ids.length, want: Number(carolCards) - 60 * (carolPages - 1) },
+    );
+    const capPast = await carolPage(carolPages + 1);
+    check(
+      "…and a page past the end says so and lists nothing",
+      capPast.res.status === 200 &&
+        capPast.ids.length === 0 &&
+        capPast.res.text.includes("Nothing on page"),
+    );
+    const capLeadersStarted = Date.now();
+    const capLeaders = await api("GET", "/collection", { cookie: carol.cookie });
+    const capLeaderIds = linkedCardIds(listMarkup(capLeaders.text, "collection-leaders") ?? "");
+    check(
+      `the commanders view at the cap → 200, sixty to a page (${Date.now() - capLeadersStarted} ms)`,
+      capLeaders.status === 200 && capLeaderIds.length === 60 && new Set(capLeaderIds).size === 60,
+      { status: capLeaders.status, rows: capLeaderIds.length },
     );
 
     const wipeAll = await api("DELETE", "/api/collection", { cookie: carol.cookie });

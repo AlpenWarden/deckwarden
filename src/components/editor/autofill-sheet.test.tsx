@@ -1572,6 +1572,161 @@ describe("AutofillSheet — only cards I own (AUTOFILL-OWNED)", () => {
     expect(inDrawer.className).toContain("pointer-coarse:after:-inset-3.5");
   });
 
+  // ------------------------------------------------- opened already ticked
+  // COLLECTION-PAGE: "Build from my collection" opens the sheet with the box
+  // ticked (`startOwned`, the build link's one-time flag). The open is ONE
+  // request, which carries the flag only for a player who has a collection.
+  describe("opened already ticked (COLLECTION-PAGE)", () => {
+    /** The body every sheet opens with when nothing is ticked. */
+    const PLAIN = { game: "mtg", format: "commander", leaderIds: [atraxa.id], keep: [] };
+    const skeleton = () => screen.queryByLabelText("Building the shell…");
+    const errorLine = () => document.querySelector(".text-destructive");
+
+    it("the editor already knows the collection: ONE opening ask, with the flag, and the box reads ticked", async () => {
+      render(sheet({ collection: "available", startOwned: true }));
+      await asked(1);
+      expect(bodies()[0]).toEqual({ ...PLAIN, ownedOnly: true });
+      expect(ticked()).toBe(true);
+      expect(box().disabled).toBe(false);
+      // The list is the collection's: its notes, its count, Budget off with its reason.
+      expect(screen.getByText(BASICS_NOTE)).toBeTruthy();
+      expect(
+        within(footer()).getByText("2 of these 13 cards are from your collection."),
+      ).toBeTruthy();
+      expect(ownedNote()?.textContent).toBe(OWNED_COPY.budgetOff);
+      await idle();
+      expect(bodies()).toHaveLength(1);
+    });
+
+    it("the editor is still checking: nothing is asked and the list waits, ticked; its answer sends the ONE opening ask, with the flag", async () => {
+      const view = render(sheet({ collection: "checking", startOwned: true }));
+      await idle();
+      expect(bodies()).toHaveLength(0);
+      expect(skeleton()).toBeTruthy();
+      // Ticked, and not pressable yet; nothing explains a box that is about to work.
+      expect(ticked()).toBe(true);
+      expect(box().disabled).toBe(true);
+      expect(ownedNote()).toBeNull();
+
+      view.rerender(sheet({ collection: "available", startOwned: true }));
+      await asked(1);
+      expect(bodies()[0]).toEqual({ ...PLAIN, ownedOnly: true });
+      expect(ticked()).toBe(true);
+      expect(box().disabled).toBe(false);
+      await idle();
+      // One request for the whole open: never an unfiltered one first.
+      expect(bodies()).toHaveLength(1);
+      expect(errorLine()).toBeNull();
+    });
+
+    it("a pick made while it waits rides the one opening ask", async () => {
+      const view = render(sheet({ collection: "checking", startOwned: true }));
+      await idle();
+      fireEvent.click(
+        within(screen.getByRole("group", { name: "Your target" })).getByRole("button", {
+          name: "2",
+        }),
+      );
+      await idle();
+      expect(bodies()).toHaveLength(0);
+      view.rerender(sheet({ collection: "available", startOwned: true }));
+      await asked(1);
+      expect(bodies()[0]).toEqual({
+        ...PLAIN,
+        goals: { v: 1, targetLevel: 2 },
+        ownedOnly: true,
+      });
+      await idle();
+      expect(bodies()).toHaveLength(1);
+    });
+
+    it("no collection after all (a guest, an account without one, the link opened by someone else): ONE opening ask with no flag, the box unticked with its hint, and no error", async () => {
+      const view = render(sheet({ collection: "checking", startOwned: true }));
+      await idle();
+      expect(bodies()).toHaveLength(0);
+
+      view.rerender(sheet({ collection: "unavailable", startOwned: true }));
+      await asked(1);
+      expect(bodies()[0]).toEqual(PLAIN);
+      expect(ticked()).toBe(false);
+      expect(box().disabled).toBe(true);
+      expect(ownedNote()?.textContent).toBe(
+        "Sign in and import a collection on your Account page to filter by cards you own",
+      );
+      // The full list, with its estimate, and nothing that reads as a refusal.
+      expect(within(footer()).getByText(/Est\. total \$2/)).toBeTruthy();
+      expect(errorLine()).toBeNull();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      await idle();
+      expect(bodies()).toHaveLength(1);
+    });
+
+    it("the link's tick is spent once the editor has said no: a collection that shows up later ticks nothing and asks nothing", async () => {
+      const view = render(sheet({ collection: "unavailable", startOwned: true }));
+      await asked(1);
+      expect(bodies()[0]).toEqual(PLAIN);
+      expect(ticked()).toBe(false);
+
+      // The player signs in in another tab; the editor checks, then knows.
+      view.rerender(sheet({ collection: "checking", startOwned: true }));
+      view.rerender(sheet({ collection: "available", startOwned: true }));
+      await idle();
+      expect(bodies()).toHaveLength(1);
+      expect(ticked()).toBe(false);
+      expect(box().disabled).toBe(false);
+      expect(screen.getByText("Lands · 12")).toBeTruthy();
+
+      // The box is the player's from here: a tick asks once, with the flag.
+      fireEvent.click(box());
+      await asked(2);
+      expect(bodies()[1]).toEqual({ ...PLAIN, ownedOnly: true });
+    });
+
+    it("the check fails: ONE opening ask with no flag, and the line says it could not check", async () => {
+      const view = render(sheet({ collection: "checking", startOwned: true }));
+      await idle();
+      view.rerender(sheet({ collection: "failed", startOwned: true }));
+      await asked(1);
+      expect(bodies()[0]).toEqual(PLAIN);
+      expect(ticked()).toBe(false);
+      expect(box().disabled).toBe(true);
+      expect(ownedNote()?.textContent).toBe("Couldn't check your collection.");
+      expect(errorLine()).toBeNull();
+      await idle();
+      expect(bodies()).toHaveLength(1);
+
+      // The link's tick was spent on that answer too: a later yes ticks nothing by itself.
+      view.rerender(sheet({ collection: "available", startOwned: true }));
+      await idle();
+      expect(bodies()).toHaveLength(1);
+      expect(ticked()).toBe(false);
+      expect(box().disabled).toBe(false);
+    });
+
+    it("unticking a box that opened ticked asks once for the full list", async () => {
+      render(sheet({ collection: "available", startOwned: true }));
+      await asked(1);
+      fireEvent.click(box());
+      await asked(2);
+      expect(bodies()[1]).toEqual(PLAIN);
+      expect(ticked()).toBe(false);
+    });
+
+    it("no commander: the sentence, and nothing asked however the box starts", async () => {
+      render(sheet({ entries: [], collection: "available", startOwned: true }));
+      expect(screen.getByText(/Set a commander first/)).toBeTruthy();
+      await idle();
+      expect(bodies()).toHaveLength(0);
+    });
+
+    it("without the flag nothing changed: a sheet opened while the editor checks asks at once, unticked", async () => {
+      render(sheet({ collection: "checking" }));
+      await asked(1);
+      expect(bodies()[0]).toEqual(PLAIN);
+      expect(ticked()).toBe(false);
+    });
+  });
+
   it("the sheet's own sentences: the count's three forms, and U9's marks", () => {
     expect(collectionCountLine(70, 91)).toBe("70 of these 91 cards are from your collection.");
     expect(collectionCountLine(0, 37)).toBe("0 of these 37 cards are from your collection.");

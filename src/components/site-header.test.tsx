@@ -6,7 +6,9 @@
  * shapes, the account menu with the name row first (X1 — a link to /account
  * that scrolls to the top in the same click), the phone Menu (opens, lists
  * every link, Escape closes it and focus returns to the trigger), and
- * exactly one appearance control. The session is mocked at the Better Auth
+ * exactly one appearance control (Collection opens its own page since
+ * COLLECTION-PAGE, the owner's decision 11; the other three sections are
+ * /account's). The session is mocked at the Better Auth
  * client: the header never touches request data, so this is the only place
  * the signed-in shape is provable (the browser pane is signed out on prod).
  * X5: the slot's picture is UserAvatar at 24 px (the chosen picture, the
@@ -209,7 +211,7 @@ describe("SiteHeader", () => {
     expect(screen.getByText("B")).toBeTruthy(); // the initial fallback
   });
 
-  it("the account menu: the name row, the four /account sections as links, then Sign out (D1)", async () => {
+  it("the account menu: the name row, three /account sections and the collection's own page as links, then Sign out (D1; COLLECTION-PAGE)", async () => {
     session.current = { user: { name: "Bobandis6", image: null } };
     render(<SiteHeader />);
     open(screen.getByRole("button", { name: "Bobandis6" }));
@@ -223,7 +225,7 @@ describe("SiteHeader", () => {
       ["Bobandis6", "/account"],
       ["My decks", "/account#decks"],
       ["Bookmarks", "/account#bookmarks"],
-      ["Collection", "/account#collection"],
+      ["Collection", "/collection"],
       ["Profile & settings", "/account#settings"],
       ["Sign out", null],
     ]);
@@ -280,7 +282,7 @@ describe("SiteHeader", () => {
       ["Bobandis6", "/account"],
       ["My decks", "/account#decks"],
       ["Bookmarks", "/account#bookmarks"],
-      ["Collection", "/account#collection"],
+      ["Collection", "/collection"],
       ["Profile & settings", "/account#settings"],
       ["Public profile ↗", "/u/bobandis6"],
       ["Sign out", null],

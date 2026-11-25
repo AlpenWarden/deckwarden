@@ -347,7 +347,7 @@ Adoption- and ease-of-use-focused additions, each slotted into a milestone above
 | **Explainable recommendations** | The 2025–26 wave of AI deck builders is black-box; every Deckwarden suggestion shows evidence, source, and confidence. | M3 |
 | **PWA / offline deck viewing** | Paper events have terrible wifi. | LATER |
 | **Email digest ("3 new cards fit your decks")** | Retention hook; needs an email provider, so deferred. | LATER |
-| **Collection manager UI** | Moxfield's known weak spot — but a big surface; schema is ready from M1, import lands M3, full UI waits until the editor has proven retention. | post-M5 |
+| **Collection manager UI** | Moxfield's known weak spot — but a big surface; the schema and the import landed together in M3 (P3.7, 2026-09-02: the "schema ready from M1" this row once claimed had never been written), a read-only page of the collection followed on 2026-11-25 (COLLECTION-PAGE, `/collection`), and the full UI (editing, add buttons, public collections) waits until the editor has proven retention. | post-M5 |
 
 ---
 
