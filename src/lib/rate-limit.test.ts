@@ -109,6 +109,21 @@ describe("RATE_LIMITS policies", () => {
     ]);
   });
 
+  it("an owned Autofill ask (AUTOFILL-OWNED) has a bucket of the player's own, at the address bucket's numbers, sharing no key with it", () => {
+    const address = RATE_LIMITS.deckAutofill("1.2.3.4");
+    const player = RATE_LIMITS.deckAutofillOwned("user-1");
+    expect(player.map((l) => [l.key, l.max, l.windowSeconds])).toEqual([
+      ["deck-autofill-owned:user:user-1", 20, 60],
+      ["deck-autofill-owned:user-hour:user-1", 200, 3600],
+    ]);
+    expect(player.map((l) => [l.max, l.windowSeconds])).toEqual(
+      address.map((l) => [l.max, l.windowSeconds]),
+    );
+    // Keyed by the player alone: a second player never spends the first's.
+    const other = RATE_LIMITS.deckAutofillOwned("user-2").map((l) => l.key);
+    expect(other.some((key) => player.map((l) => l.key).includes(key))).toBe(false);
+  });
+
   it("Swap Lab's route (Y7a) has its own bucket too, shared with no other route", () => {
     const own = RATE_LIMITS.alternatives("1.2.3.4").map((l) => l.key);
     expect(own).toEqual(["alternatives:ip:1.2.3.4", "alternatives:ip-hour:1.2.3.4"]);

@@ -35,6 +35,13 @@
  * imported collection; otherwise the checkbox is disabled with the honest
  * hint. The server may still decline (session expired, collection wiped in
  * another tab) — its `owned.reason` is shown, never a silent empty list.
+ * On a draft the toggle stays off (AUTOFILL-OWNED, the owner's decision 8 of
+ * 2026-11-24): since that build a draft's editor learns its player has a
+ * collection, but the draft's route (POST /api/recommendations) takes no
+ * owned flag, so an enabled toggle there would tick and filter nothing. A
+ * collector's draft says the filter starts once the deck is saved, and the
+ * first save (any Add) enables it with no reload (LATER row 165's second
+ * half).
  *
  * Goals (Y6a, WAVE4 D7): the deck's target and per-card budget, checked by
  * the server (rank all → goals → slice, recommend/goals.ts) — this panel
@@ -67,6 +74,12 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { GoalsLine } from "@/components/deck/goals-line";
 import { Segmented } from "@/components/deck/segmented";
+import {
+  IMPORT_COLLECTION_HINT,
+  ImportCollectionHint,
+  ONLY_OWNED_LABEL,
+  OWNED_DRAFT_HINT,
+} from "@/components/editor/owned-copy";
 import { useResolvedAdd } from "@/components/editor/use-resolved-add";
 import { BRACKET_COPY } from "@/lib/brackets/copy";
 import type { EditorCard } from "@/lib/decks/editor-state";
@@ -155,7 +168,11 @@ export function RecommendationsPanel({
   const { pendingAdd, notice, add } = useResolvedAdd(adapter, format, onAdd, { announce: false });
 
   const leader = hasLeader(entries, format);
-  const wantOwned = onlyOwned && ownedAvailable;
+  // The owned filter needs a collection AND a deck row: a draft's route takes
+  // no owned flag (decision 8), so there the toggle is off and says when it
+  // starts. Without this gate it would tick and send a request that ignores it.
+  const ownedReady = ownedAvailable && deckId !== null;
+  const wantOwned = onlyOwned && ownedReady;
   // The goals the server checks (Y6a), canonical: an edit that leaves them
   // alone (the exceptions line) never asks again; one that changes them does.
   const sentGoals = useMemo(() => suggestionGoals(goals), [goals]);
@@ -286,15 +303,18 @@ export function RecommendationsPanel({
       {/* U10a (WAVE5.md D10, D1): the toggle is a Checkbox in a horizontal
           Field; without a collection the Field is disabled and the reason the
           `title` carried on hover is a FieldDescription under it, on every
-          pointer, with the Account link inside the sentence. */}
+          pointer, with the Account link inside the sentence. A collector's
+          draft is disabled too (AUTOFILL-OWNED), with its own reason. */}
       <Field
         orientation="horizontal"
-        disabled={!ownedAvailable}
+        disabled={!ownedReady}
         className="mt-1.5 flex-wrap gap-y-0.5 text-xs"
         title={
-          ownedAvailable
+          ownedReady
             ? "Restrict suggestions to cards you own any printing of"
-            : "Sign in and import a collection on your Account page to filter by cards you own"
+            : ownedAvailable
+              ? OWNED_DRAFT_HINT
+              : IMPORT_COLLECTION_HINT
         }
       >
         <Checkbox
@@ -302,15 +322,15 @@ export function RecommendationsPanel({
           onCheckedChange={(next) => setOnlyOwned(next)}
           data-testid="only-owned-toggle"
         />
-        <FieldLabel>Only cards I own</FieldLabel>
-        {!ownedAvailable && (
+        <FieldLabel>{ONLY_OWNED_LABEL}</FieldLabel>
+        {!ownedAvailable ? (
           <FieldDescription className="basis-full">
-            Sign in and{" "}
-            <Link href="/account" className="underline">
-              import a collection
-            </Link>{" "}
-            on your Account page to filter by cards you own
+            <ImportCollectionHint />
           </FieldDescription>
+        ) : (
+          deckId === null && (
+            <FieldDescription className="basis-full">{OWNED_DRAFT_HINT}</FieldDescription>
+          )
         )}
       </Field>
 

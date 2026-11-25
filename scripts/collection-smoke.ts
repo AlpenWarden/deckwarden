@@ -7,8 +7,11 @@
  * recommendations route's opt-in `?owned=1` in all three states (applied /
  * no-collection / signed-out), and once more for a collection at the cap
  * (OWNED-FILTER: the filter is a subquery keyed by the player, so the cap
- * costs no list of ids). Runs against a live server + real DB —
- * deliberately outside `pnpm check`.
+ * costs no list of ids), and Autofill's `ownedOnly` (AUTOFILL-OWNED): a
+ * player whose collection is a commander and thirty cards gets exactly
+ * those cards and the basic lands, with the open slots counted, and a
+ * signed-out caller or a player with no collection gets no list. Runs
+ * against a live server + real DB — deliberately outside `pnpm check`.
  *
  *   pnpm smoke:collection                                  # http://localhost:3000
  *   SMOKE_ALLOW_REMOTE=1 BASE_URL=https://deckwarden.gg pnpm smoke:collection   # a deploy, on purpose
@@ -19,6 +22,11 @@
  * yet); one deck is created (the per-IP deck-create limiter is 10/hour —
  * run this smoke before the deck-heavy ones). Everything is deleted in
  * `finally`, and the user delete doubles as the cascade proof.
+ *
+ * Autofill budget: three POSTs to /api/decks/autofill (the owned list and
+ * its two refusals; a refusal spends the per-address bucket too). That
+ * bucket is 20 a minute and `pnpm smoke:autofill` spends 18, so run the two
+ * a minute apart. A 429 is a failed check here, never a retry.
  */
 import { BASE } from "./smoke/guard"; // first import: a non-local BASE_URL exits 1 here
 import { mintSession } from "./smoke/session";
@@ -34,6 +42,7 @@ guardDatabaseUrl(); // right after the env load: a production DATABASE_URL exits
 import postgres from "postgres";
 
 import { COLLECTION_LIMITS } from "../src/lib/collection/types";
+import { FORMAT_ID, GAME_ID } from "../src/db/seed-data";
 
 const DB_URL = process.env.DATABASE_URL;
 if (!DB_URL) throw new Error("DATABASE_URL is not set.");
@@ -570,6 +579,143 @@ async function main() {
     check(
       "no owned param → hook off even with a collection (requested false)",
       j<{ owned: { requested: boolean } }>(recPlain.json).owned?.requested === false,
+    );
+
+    // ---- Autofill from the collection (AUTOFILL-OWNED) --------------------
+    // A fresh player whose rows are inserted directly (the import allows 10
+    // an hour per user). The collection is the plan's edge case: the
+    // commander, and the thirty most played cards in its colour that are not
+    // lands and not Game Changers, picked by the engine's own conditions
+    // (legal, in colour, ranked, no basics). No land at all. Asked at a
+    // target of 4, the list can only be those thirty and the basic lands.
+    const dana = await mkUser("d");
+    const danaCards = await sql`
+      select p.id as printing_id, ci.id as identity_id
+      from card_identities ci
+      join card_printings p on p.card_identity_id = ci.id and p.is_default and p.is_removed = false
+      where ci.game_id = ${GAME_ID.mtg} and ci.is_removed = false and ci.is_preview = false
+        and ci.id <> ${talrand.identityId}
+        and ci.primary_type <> 'Land' and ci.cost_value is not null
+        and ci.popularity is not null
+        and (ci.ci_mask & ~(select ci_mask from card_identities where id = ${talrand.identityId})) = 0
+        and not (ci.attrs @> '{"is_token": true}'::jsonb)
+        and not (ci.attrs @> '{"game_changer": true}'::jsonb)
+        and coalesce(ci.attrs->>'type_line', '') not like '%Basic%'
+        and not exists (
+          select 1 from legalities l
+          where l.card_identity_id = ci.id and l.format_id = ${FORMAT_ID.commander}
+            and l.effective_to is null and l.condition is null
+            and l.status in ('banned', 'not_legal'))
+      order by ci.popularity asc, ci.id
+      limit 30`;
+    if (danaCards.length !== 30)
+      throw new Error("fewer than thirty cards for the Autofill fixture");
+    const danaIds = new Set(danaCards.map((r) => r.identity_id as string));
+    await sql`
+      insert into collections (user_id, printing_id, finish, quantity)
+      select ${dana.id},
+             unnest(${[talrand.printingId, ...danaCards.map((r) => r.printing_id as string)]}::uuid[]),
+             'nonfoil', 1`;
+    const danaOwned = new Set(
+      (
+        await sql`
+          select distinct p.card_identity_id as id from collections c
+          join card_printings p on p.id = c.printing_id where c.user_id = ${dana.id}`
+      ).map((r) => r.id as string),
+    );
+
+    interface ShellPick {
+      cardId: string;
+      name: string;
+      qty: number;
+      tier: string;
+    }
+    const shellAsk = {
+      game: "mtg",
+      format: "commander",
+      leaderIds: [talrand.identityId],
+      seed: 1_234_567,
+      ownedOnly: true,
+      goals: { v: 1, targetLevel: 4 },
+    };
+    const fillStarted = Date.now();
+    const fill = await api("POST", "/api/decks/autofill", { cookie: dana.cookie, body: shellAsk });
+    const fillMs = Date.now() - fillStarted;
+    const fillBody = j<{
+      picks: ShellPick[];
+      notes: string[];
+      totals: { picks: number };
+      owned?: { applied: boolean };
+      cards: { id: string }[];
+    }>(fill.json);
+    const ranked = (fillBody.picks ?? []).filter((p) => p.tier !== "filler");
+    const basics = (fillBody.picks ?? []).filter((p) => p.tier === "filler");
+    check(
+      `autofill ownedOnly with a collection → 200, owned.applied, no-store (${fillMs} ms)`,
+      fill.status === 200 &&
+        fillBody.owned?.applied === true &&
+        fill.headers.get("cache-control") === "no-store",
+      { status: fill.status, owned: fillBody.owned, text: fill.text.slice(0, 200) },
+    );
+    check(
+      "…every pick that is not a basic-land filler is a card the player owns",
+      ranked.length > 0 && ranked.every((p) => danaOwned.has(p.cardId)),
+      ranked.filter((p) => !danaOwned.has(p.cardId)).map((p) => p.name),
+    );
+    check(
+      "…and they are exactly the thirty the collection holds: nothing topped up, nothing left out",
+      ranked.length === 30 && ranked.every((p) => danaIds.has(p.cardId) && p.qty === 1),
+      { ranked: ranked.length, strangers: ranked.filter((p) => !danaIds.has(p.cardId)).length },
+    );
+    const basicQty = basics.reduce((n, p) => n + p.qty, 0);
+    check(
+      "…the rest are basic lands, added without being owned: 37 of them, 67 cards in all",
+      basicQty === 37 && basics.every((p) => p.name === "Island") && fillBody.totals?.picks === 67,
+      { basics: basics.map((p) => `${p.name} × ${p.qty}`), total: fillBody.totals?.picks },
+    );
+    check(
+      "…the first note says the basic lands are not checked against the collection",
+      fillBody.notes?.[0] ===
+        "Basic lands are added as needed and aren't checked against your collection.",
+      fillBody.notes,
+    );
+    check(
+      "…the next counts the open slots and names where they are",
+      fillBody.notes?.[1]?.startsWith(
+        "Filled 67 of 99. Your collection ran out of cards that fit, leaving 32 slots open in Mana value ",
+      ) === true,
+      fillBody.notes,
+    );
+    check(
+      "…and at a target of 4 the collection had no Game Changer to bring in",
+      fillBody.notes?.includes(
+        "Still 4 Game Changers short of Bracket 4. Autofill had no more to bring in from your collection (Wizards' list)",
+      ) === true,
+      fillBody.notes,
+    );
+    check(
+      "…the answer's cards hold the commander too",
+      fillBody.cards?.some((c) => c.id === talrand.identityId) === true,
+    );
+
+    const fillGuest = await api("POST", "/api/decks/autofill", { body: shellAsk });
+    check(
+      "autofill ownedOnly signed out → 401 with a sentence and no list",
+      fillGuest.status === 401 &&
+        typeof j(fillGuest.json).error === "string" &&
+        !("picks" in j(fillGuest.json)),
+      { status: fillGuest.status, text: fillGuest.text.slice(0, 200) },
+    );
+    const fillBob = await api("POST", "/api/decks/autofill", {
+      cookie: bob.cookie,
+      body: shellAsk,
+    });
+    check(
+      "autofill ownedOnly without a collection → 409, reason no-collection, no list (never an unfiltered one)",
+      fillBob.status === 409 &&
+        j(fillBob.json).reason === "no-collection" &&
+        !("picks" in j(fillBob.json)),
+      { status: fillBob.status, text: fillBob.text.slice(0, 200) },
     );
 
     // ---- replace: wipe-then-insert ---------------------------------------

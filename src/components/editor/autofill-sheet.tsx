@@ -76,6 +76,33 @@
  *   a failure. Add never waits for it.
  * - The goals line stops naming the target (the choice does); its budget
  *   part stays.
+ *
+ * Only cards I own (AUTOFILL-OWNED, the owner's ask of 2026-11-24): a
+ * checkbox in the controls row, in Suggestions' toggle's own words
+ * (./owned-copy.tsx). The sheet asks nothing about the collection itself:
+ * the editor hands it what it knows (`collection`), and the box follows.
+ * - available: the box can be ticked. Ticked, the request gains
+ *   `ownedOnly: true` and loses `budgetUsd` (nothing else moves, so the
+ *   unticked body is today's byte for byte), Budget is switched off with its
+ *   value still in view, and a line under the controls says why: a price
+ *   limit says nothing about a card the player already has (the owner's
+ *   decision 5). The route builds the list from the player's cards and says
+ *   so (`owned.applied`).
+ * - unavailable (a guest, or an account with no collection): disabled, with
+ *   Suggestions' hint and its Account link. checking (a draft's editor is
+ *   still asking): disabled, no line. failed: disabled, "Couldn't check your
+ *   collection."
+ * - The tick is the sheet's own, like Budget: it is never stored on the deck
+ *   (decision 6), and a reopened sheet starts unticked.
+ * - With the filter applied the footer counts the checked picks that came
+ *   from the collection, in the price estimate's place: every pick but the
+ *   adapter's fillers, which the list takes as needed and never checks (the
+ *   route's note says so, with the other notes).
+ * - The route refuses such an ask from a signed-out caller (401) or an
+ *   account with no collection (409): a session that ended, or a collection
+ *   wiped in another tab, while the sheet was open. Each gets its own
+ *   sentence and Retry; nothing is asked again until the player acts, and
+ *   the box stays ticked so nothing unfiltered is ever asked for them.
  */
 import { CheckIcon, ChevronDownIcon, RotateCcwIcon } from "lucide-react";
 import Link from "next/link";
@@ -85,6 +112,7 @@ import { CardNamePreview } from "@/components/deck/card-name-preview";
 import { GoalsLine } from "@/components/deck/goals-line";
 import { Segmented } from "@/components/deck/segmented";
 import { useBracketFacts } from "@/components/deck/use-bracket-facts";
+import { ImportCollectionHint, ONLY_OWNED_LABEL } from "@/components/editor/owned-copy";
 import { sourceMeta } from "@/components/editor/recommendations-panel";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -134,7 +162,21 @@ export interface AutofillApply {
    * when it differs. Absent for a game without `brackets` (no choice shown).
    */
   target?: number | null;
+  /**
+   * AUTOFILL-OWNED: the added cards the route built from the player's
+   * collection (every checked pick but the fillers), so the editor can mark
+   * them owned with the list. Present only when the filter was applied.
+   */
+  owned?: string[];
 }
+
+/**
+ * What the editor knows of the player's collection (AUTOFILL-OWNED), which
+ * decides the "Only cards I own" box: `available` (an imported collection),
+ * `unavailable` (a guest, or an account with none), `checking` (a draft's
+ * editor is still asking) or `failed` (that check did not answer).
+ */
+export type CollectionState = "available" | "unavailable" | "checking" | "failed";
 
 /** The route's response, as W9a shipped it (shapes shared via the planner's types). */
 interface ShellResponse {
@@ -145,6 +187,8 @@ interface ShellResponse {
   totals: { picks: number; estUsd: number | null; unpriced: number };
   issues: ValidationIssue[];
   cards: CardWire[];
+  /** AUTOFILL-OWNED: present, and applied, only when the list was built from the player's cards. */
+  owned?: { applied: boolean };
 }
 
 type SheetState =
@@ -163,6 +207,32 @@ type SheetState =
  */
 const RETRY_WAIT_REASON = "Too many requests. Retry works again after the wait.";
 
+/** AUTOFILL-OWNED: the sheet's own sentences (pinned in its test). */
+export const OWNED_COPY = {
+  /** Under the controls while the box is ticked: why Budget is off. */
+  budgetOff: "Budget is off. Price limits don't apply to cards you own.",
+  /** The editor's collection check did not answer. */
+  checkFailed: "Couldn't check your collection.",
+  /** The route's 401: the session ended while the sheet was open. */
+  signedOut: `Sign in to build from your collection, or untick “${ONLY_OWNED_LABEL}” for the full list.`,
+  /** The route's 409: the collection is gone (wiped in another tab). */
+  noCollection: `No collection found on this account. Untick “${ONLY_OWNED_LABEL}” for the full list.`,
+} as const;
+
+/**
+ * The footer's count with the filter applied (AUTOFILL-OWNED): how many of
+ * the cards Add would add came from the collection. The rest are the
+ * adapter's fillers, which the route's note covers.
+ */
+export function collectionCountLine(fromCollection: number, added: number): string {
+  if (added === 1) {
+    return fromCollection === 1
+      ? "This card is from your collection."
+      : "This card isn't from your collection.";
+  }
+  return `${fromCollection} of these ${added} cards are from your collection.`;
+}
+
 const pickKey = (p: { zone: string; cardId: string }) => `${p.zone}\u0000${p.cardId}`;
 
 export function AutofillSheet({
@@ -176,6 +246,7 @@ export function AutofillSheet({
   estimate = null,
   linkPreviews = true,
   upgradeDoor = false,
+  collection = "unavailable",
   onApply,
   onClose,
 }: {
@@ -196,6 +267,8 @@ export function AutofillSheet({
   linkPreviews?: boolean;
   /** AUTOFILL-TARGET: whether the editor can open Upgrade toward once the cards are in (it names the door for a shell short of its target). */
   upgradeDoor?: boolean;
+  /** AUTOFILL-OWNED: what the editor knows of the player's collection; absent = none to build from. */
+  collection?: CollectionState;
   onApply: (apply: AutofillApply) => void;
   onClose: () => void;
 }) {
@@ -240,6 +313,11 @@ export function AutofillSheet({
     [brackets, goals, target],
   );
   const [keepChecked, setKeepChecked] = useState(true);
+  // Only cards I own (AUTOFILL-OWNED): the sheet's own tick, and only ever
+  // sent while the editor says there is a collection to build from.
+  const [ownedTicked, setOwnedTicked] = useState(false);
+  const ownedOnly = ownedTicked && collection === "available";
+  const ownedNoteId = useId();
   const [nonce, setNonce] = useState(0);
   const [sheet, setSheet] = useState<SheetState>({ state: "loading" });
   /** Unchecked pick keys (default: everything checked) and expanded evidence keys. */
@@ -277,8 +355,12 @@ export function AutofillSheet({
             keep: keeps
               .filter((e) => keepChecked || pinnedIds.has(e.cardId))
               .map((e) => ({ cardId: e.cardId, zone: e.zone, qty: e.qty })),
-            ...(budget !== "all" ? { budgetUsd: Number(budget) } : {}),
+            // AUTOFILL-OWNED: ticked, the per-card budget is left out (it is
+            // off) and the flag goes last; unticked, neither line changes
+            // the body by a byte.
+            ...(budget !== "all" && !ownedOnly ? { budgetUsd: Number(budget) } : {}),
             ...(sentGoals ? { goals: sentGoals } : {}),
+            ...(ownedOnly ? { ownedOnly: true } : {}),
           }),
         });
         if (res.status === 429) {
@@ -289,6 +371,16 @@ export function AutofillSheet({
           setSheet({
             state: "error",
             message: `Too many autofill requests. Try again in ${after} seconds.`,
+          });
+          return;
+        }
+        // AUTOFILL-OWNED: the route's two refusals of an owned ask. Each has
+        // its sentence and an enabled Retry; nothing is asked again until
+        // the player presses it or changes a control.
+        if (ownedOnly && (res.status === 401 || res.status === 409)) {
+          setSheet({
+            state: "error",
+            message: res.status === 401 ? OWNED_COPY.signedOut : OWNED_COPY.noCollection,
           });
           return;
         }
@@ -309,7 +401,17 @@ export function AutofillSheet({
     // keeps derives from entries and pinnedIds from the pin — both stable
     // while this modal is open.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adapter.id, format.code, leaderZone, leaderIds, keepChecked, budget, sentGoals, nonce]);
+  }, [
+    adapter.id,
+    format.code,
+    leaderZone,
+    leaderIds,
+    keepChecked,
+    budget,
+    ownedOnly,
+    sentGoals,
+    nonce,
+  ]);
 
   const shell = sheet.state === "ready" ? sheet.shell : null;
   const checkedPicks = useMemo(
@@ -332,6 +434,14 @@ export function AutofillSheet({
     }
     return { usd: priced ? usd : null, unpriced };
   }, [checkedPicks]);
+  // AUTOFILL-OWNED: the list on screen was built from the player's cards
+  // (the route's word, not the box's), and how many of the checked picks
+  // those are: every pick but the adapter's fillers.
+  const ownedApplied = shell?.owned?.applied === true;
+  const fromCollectionCount = checkedPicks.reduce(
+    (n, p) => n + (p.tier === "filler" ? 0 : p.qty),
+    0,
+  );
 
   /** "41 from Topdeck.gg, 21 from EDHREC, 37 from Land template" — adapter labels (U9: one dot a line). */
   const sourceLine = useMemo(() => {
@@ -396,8 +506,11 @@ export function AutofillSheet({
       cards: shell.cards,
       added: addedCount,
       ...(brackets ? { target } : {}),
+      ...(ownedApplied
+        ? { owned: checkedPicks.filter((p) => p.tier !== "filler").map((p) => p.cardId) }
+        : {}),
     });
-  }, [shell, nextList, addedCount, brackets, target, onApply]);
+  }, [shell, nextList, addedCount, brackets, target, ownedApplied, checkedPicks, onApply]);
 
   // The after-line's read (AUTOFILL-TARGET): that list as the editor will
   // hold it (merged), its combo facts by the editor's own hook (one GET per
@@ -474,6 +587,16 @@ export function AutofillSheet({
 
   const title = pinned ? COMBO_SHEET_TITLE : SHEET_TITLE;
   const alsoNeeds = pinned ? alsoNeedsLine(pinned.templates) : null;
+  // The line under the controls (AUTOFILL-OWNED): why the box is off, or,
+  // ticked, why Budget is. Nothing while the editor is still checking.
+  const ownedNote =
+    collection === "unavailable" ? (
+      <ImportCollectionHint />
+    ) : collection === "failed" ? (
+      OWNED_COPY.checkFailed
+    ) : ownedOnly ? (
+      OWNED_COPY.budgetOff
+    ) : null;
   const content =
     leaders.length === 0 ? (
       <p className="text-muted-foreground text-sm">
@@ -527,26 +650,61 @@ export function AutofillSheet({
           </div>
         )}
 
-        {/* Controls: budget chips · keep checkbox · Reroll (D8). */}
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <Segmented label="Budget" options={BUDGET_OPTIONS} value={budget} onChange={setPick} />
-          {keepCount > 0 && (
-            <Field orientation="horizontal" className="w-auto gap-1.5">
-              <Checkbox checked={keepChecked} onCheckedChange={(next) => setKeepChecked(next)} />
-              <FieldLabel className="cursor-pointer">
-                Keep my {keepCount} card{keepCount === 1 ? "" : "s"}
+        {/* Controls: budget chips · keep checkbox · only cards I own · Reroll
+            (D8; AUTOFILL-OWNED). The line under them is the owned box's: why
+            it is off, or, ticked, why Budget is. It sits under the row, so no
+            control moves when it comes and goes. */}
+        <div data-slot="autofill-controls" className="space-y-1">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <Segmented
+              label="Budget"
+              options={BUDGET_OPTIONS}
+              value={budget}
+              onChange={setPick}
+              disabled={ownedOnly}
+              describedBy={ownedOnly ? ownedNoteId : undefined}
+            />
+            {keepCount > 0 && (
+              <Field orientation="horizontal" className="w-auto gap-1.5">
+                <Checkbox checked={keepChecked} onCheckedChange={(next) => setKeepChecked(next)} />
+                <FieldLabel className="cursor-pointer">
+                  Keep my {keepCount} card{keepCount === 1 ? "" : "s"}
+                </FieldLabel>
+              </Field>
+            )}
+            <Field
+              orientation="horizontal"
+              disabled={collection !== "available"}
+              className="w-auto gap-1.5"
+            >
+              <Checkbox
+                checked={ownedOnly}
+                onCheckedChange={(next) => setOwnedTicked(next)}
+                aria-describedby={ownedNote ? ownedNoteId : undefined}
+              />
+              <FieldLabel className={collection === "available" ? "cursor-pointer" : undefined}>
+                {ONLY_OWNED_LABEL}
               </FieldLabel>
             </Field>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={sheet.state === "loading"}
+              onClick={() => setNonce((n) => n + 1)}
+            >
+              <RotateCcwIcon aria-hidden />
+              Reroll
+            </Button>
+          </div>
+          {ownedNote && (
+            <p
+              id={ownedNoteId}
+              data-slot="autofill-owned-note"
+              className="text-muted-foreground text-xs"
+            >
+              {ownedNote}
+            </p>
           )}
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={sheet.state === "loading"}
-            onClick={() => setNonce((n) => n + 1)}
-          >
-            <RotateCcwIcon aria-hidden />
-            Reroll
-          </Button>
         </div>
 
         {sheet.state === "loading" && (
@@ -666,12 +824,20 @@ export function AutofillSheet({
                     onRetry={facts.retry}
                   />
                 )}
+                {/* The price estimate; with the list built from the player's
+                    cards (AUTOFILL-OWNED), the count of those in its place. */}
                 <p className="text-muted-foreground text-xs">
-                  {addedCount > 0 &&
-                    (est.usd !== null
-                      ? `Est. total $${est.usd.toFixed(0)} (cheapest printings)`
-                      : "No price data for these picks.")}
-                  {est.unpriced > 0 && ` · ${est.unpriced} unpriced`}
+                  {ownedApplied ? (
+                    addedCount > 0 && collectionCountLine(fromCollectionCount, addedCount)
+                  ) : (
+                    <>
+                      {addedCount > 0 &&
+                        (est.usd !== null
+                          ? `Est. total $${est.usd.toFixed(0)} (cheapest printings)`
+                          : "No price data for these picks.")}
+                      {est.unpriced > 0 && ` · ${est.unpriced} unpriced`}
+                    </>
+                  )}
                 </p>
               </div>
               <div className="flex items-center gap-2">

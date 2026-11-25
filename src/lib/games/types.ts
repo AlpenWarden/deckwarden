@@ -444,6 +444,15 @@ export interface AutofillMeta {
       n: number;
       costTexts: readonly string[];
     }): { name: string; qty: number; why: string }[];
+    /**
+     * AUTOFILL-OWNED (the owner's decisions 4 and 9 of 2026-11-24): what a
+     * list built only from the player's collection says about its fillers,
+     * in the game's words. They are assumed: added as the template needs
+     * them and never checked against the collection (MTG: basic lands, which
+     * many collection files leave out). The route sends it as a note when
+     * such a list holds fillers. Absent = it says nothing.
+     */
+    collectionNote?: string;
   };
   /**
    * Tournament lock tier: a candidate played in ≥ lockShare of the set's
@@ -1005,12 +1014,19 @@ export interface BracketsMeta<A = Record<string, unknown>> {
    * to the deck's target, in the adapter's words: how many of the cards
    * `toward` counts it brought in, and how many the shell is still short
    * where it had no more to bring (`budgetUsd`: the sheet's per-card budget,
-   * when one narrowed the candidates). Each line names its source; a zero
-   * says nothing. Optional, with `toward`: without it the shell says
-   * nothing about reaching.
+   * when one narrowed the candidates; `fromCollection`, AUTOFILL-OWNED: the
+   * candidates were only cards the player owns, so what came in came from
+   * their collection and what is short is what it does not hold). Each line
+   * names its source; a zero says nothing. Optional, with `toward`: without
+   * it the shell says nothing about reaching.
    */
   reachNotes?(
-    reach: Readonly<{ added: number; short: number; budgetUsd?: number }>,
+    reach: Readonly<{
+      added: number;
+      short: number;
+      budgetUsd?: number;
+      fromCollection?: boolean;
+    }>,
     targetLevel: number,
   ): string[];
   /**

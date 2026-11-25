@@ -15,6 +15,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { massEntryUrl } from "@/lib/buy/links";
@@ -25,6 +26,19 @@ import { MD_QUERY, WIDE_QUERY } from "./use-tier";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: vi.fn(), refresh: vi.fn(), push: vi.fn() }),
+}));
+// AUTOFILL-OWNED: a draft's editor reads the client's session to learn whether
+// its player has a collection. A guest unless a test signs someone in, so it
+// asks nothing about one and no test depends on the auth client's own request
+// (the precedent is src/components/site-header.test.tsx).
+const session = vi.hoisted(() => ({
+  current: null as { user: { id: string } } | null,
+  pending: false,
+}));
+vi.mock("@/lib/auth-client", () => ({
+  authClient: {
+    useSession: () => ({ data: session.current, isPending: session.pending, error: null }),
+  },
 }));
 
 import { DeckEditor } from "./deck-editor";
@@ -230,6 +244,9 @@ beforeEach(() => {
   );
   window.localStorage.clear();
   window.history.replaceState(null, "", "/decks/new?game=mtg");
+  // Signed out (AUTOFILL-OWNED): a test that needs a player signs one in.
+  session.current = null;
+  session.pending = false;
 });
 
 afterEach(() => {
@@ -1898,6 +1915,241 @@ describe("DeckEditor — Autofill review sheet + doors (W9b/W9c)", () => {
     await pollFor(() => screen.queryByText(/Set a commander first/));
     expect(autofillPosts()).toBe(0);
     expect(posts()).toBe(0);
+  });
+
+  // ------------------------------------------------------------ AUTOFILL-OWNED
+  const collectionAsks = () =>
+    fetchMock.mock.calls
+      .map(([url, init]) => `${(init as RequestInit | undefined)?.method ?? "GET"} ${String(url)}`)
+      .filter((ask) => ask.includes("/api/collection"));
+  const ownedLookups = () =>
+    fetchMock.mock.calls
+      .filter(([url]) => String(url) === "/api/collection/owned")
+      .map(
+        ([, init]) => (JSON.parse((init as RequestInit).body as string) as { ids: string[] }).ids,
+      );
+  const ownedBox = () =>
+    within(autofillDialog()!).getByRole("checkbox", {
+      name: "Only cards I own",
+    }) as HTMLButtonElement;
+  const ownedNote = () => document.querySelector<HTMLElement>("[data-slot=autofill-owned-note]");
+  const ownershipText = () => screen.queryByTestId("ownership-line")?.textContent ?? null;
+  const ownedMarks = () =>
+    within(section("Deck list")).queryAllByRole("img", { name: "In your collection" });
+  const suggestionsToggle = () => screen.getByTestId("only-owned-toggle") as HTMLButtonElement;
+  const BASICS_NOTE = "Basic lands are added as needed and aren't checked against your collection.";
+  /** The route's answer to an owned ask: the same picks, its note, and that the filter applied. */
+  const ownedShellResponse = { ...shellResponse, notes: [BASICS_NOTE], owned: { applied: true } };
+  /**
+   * A signed-in player's routes. `collection` answers the editor's one read
+   * (a response, or a promise of one); the collection holds Command Tower
+   * and nothing else the tests add.
+   */
+  function collectorRoute(collection: () => unknown) {
+    return (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/collection") return collection();
+      if (url === "/api/collection/owned") {
+        const { ids } = JSON.parse(init!.body as string) as { ids: string[] };
+        return ok({ owned: ids.filter((id) => id === tower.id) });
+      }
+      if (url === "/api/decks/autofill") {
+        const body = JSON.parse(init!.body as string) as { ownedOnly?: boolean };
+        return {
+          ...ok(body.ownedOnly ? ownedShellResponse : shellResponse),
+          headers: new Headers(),
+        };
+      }
+      return autofillRoute(input, init);
+    };
+  }
+  const summary = (rows: number) =>
+    ok({ summary: { rows, printings: rows, identities: rows, updatedAt: null } });
+
+  it("AUTOFILL-OWNED, a guest's draft: nothing is asked about a collection, the box is disabled with its hint, and Add is W9b's", async () => {
+    await openDraftSheet();
+    expect(ownedBox().disabled).toBe(true);
+    expect(ownedNote()?.textContent).toBe(
+      "Sign in and import a collection on your Account page to filter by cards you own",
+    );
+    expect(autofillBodies()).toEqual([
+      { game: "mtg", format: "commander", leaderIds: [commander.id], keep: [] },
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Add 12 cards" }));
+    await pollFor(() => screen.queryByText("Added 12 cards"));
+    await settle(1500);
+    await act(async () => {});
+    expect(posts()).toBe(1);
+    expect(puts()).toBe(1);
+    // No ownership line, no marks, and no request that names a collection or a session.
+    expect(ownershipText()).toBeNull();
+    expect(ownedMarks()).toHaveLength(0);
+    expect(collectionAsks()).toEqual([]);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("/api/auth"))).toEqual([]);
+  });
+
+  it("AUTOFILL-OWNED, a signed-in collector's draft: ONE collection read; the box waits for it, then ticks; after Add the ownership line and the owned marks show with the list, with no reload", async () => {
+    session.current = { user: { id: "user-1" } };
+    const gate = deferred();
+    fetchMock.mockImplementation(collectorRoute(() => gate.promise.then(() => summary(2400))));
+    stubViewport(1440);
+    render(
+      <DeckEditor deckId={null} draftGame="mtg" draftFormat="commander" draftLeaderKey="atraxa" />,
+    );
+    fireEvent.click(
+      await pollFor(() => screen.queryByRole("button", { name: "Autofill a starter shell" })),
+    );
+    await pollFor(() => screen.queryByRole("button", { name: "Add 12 cards" }));
+    // Still checking: disabled, and no hint that would send a collector to import one.
+    expect(collectionAsks()).toEqual(["GET /api/collection"]);
+    expect(ownedBox().disabled).toBe(true);
+    expect(ownedNote()).toBeNull();
+    expect(ownershipText()).toBeNull();
+
+    gate.resolve();
+    await pollFor(() => (ownedBox().disabled ? null : ownedBox()));
+    expect(ownedNote()).toBeNull();
+    // The draft knows its player now, before any save: its line shows, for the seeded commander.
+    await pollFor(() => (ownedLookups().length === 1 ? true : null));
+    expect(ownedLookups()).toEqual([[commander.id]]);
+    expect(ownershipText()).toBe("You own 0/1 · missing 1 (no price data) ·");
+    // Suggestions' own toggle stays off on a draft and says when it starts (decision 8).
+    expect(suggestionsToggle().disabled).toBe(true);
+    expect(
+      screen.getByText("Filtering by your collection starts once the deck is saved."),
+    ).toBeTruthy();
+
+    fireEvent.click(ownedBox());
+    await pollFor(() =>
+      autofillPosts() === 2 ? screen.queryByRole("button", { name: "Add 12 cards" }) : null,
+    );
+    expect(autofillBodies()).toEqual([
+      { game: "mtg", format: "commander", leaderIds: [commander.id], keep: [] },
+      { game: "mtg", format: "commander", leaderIds: [commander.id], keep: [], ownedOnly: true },
+    ]);
+    expect(within(autofillDialog()!).getByText(BASICS_NOTE)).toBeTruthy();
+    expect(
+      within(autofillDialog()!).getByText("1 of these 12 cards are from your collection."),
+    ).toBeTruthy();
+    // Ticking and reloading the list wrote nothing.
+    expect(posts()).toBe(0);
+    expect(saveStatus()).toBe("saved");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add 12 cards" }));
+    // In the render the list lands in, before the lookup for the new cards is even sent:
+    // Command Tower came from the collection; the commander and the eleven basics are missing.
+    expect(ownedLookups()).toHaveLength(1);
+    expect(ownershipText()).toBe("You own 1/13 · missing 2 (no price data) ·");
+    expect(ownedMarks()).toHaveLength(1);
+    await pollFor(() => screen.queryByText("Added 12 cards"));
+
+    await settle(1500);
+    await act(async () => {});
+    // The deck saved in place (one create, one PUT, the URL swapped), and nothing reloaded.
+    expect(posts()).toBe(1);
+    expect(puts()).toBe(1);
+    expect(window.location.pathname).toBe("/decks/deck-1/edit");
+    // The lookup asked about the new cards once, and agrees.
+    expect(ownedLookups()).toHaveLength(2);
+    expect(new Set(ownedLookups()[1])).toEqual(new Set([tower.id, wastes.id]));
+    expect(ownershipText()).toBe("You own 1/13 · missing 2 (no price data) ·");
+    expect(ownedMarks()).toHaveLength(1);
+    // One collection read for the whole session of this editor, and the row's toggle is live.
+    expect(collectionAsks().filter((ask) => ask === "GET /api/collection")).toHaveLength(1);
+    expect(suggestionsToggle().disabled).toBe(false);
+  });
+
+  it("AUTOFILL-OWNED, a collector's empty draft: the collection is read once, and no ownership line shows until the list holds a card", async () => {
+    session.current = { user: { id: "user-1" } };
+    fetchMock.mockImplementation(collectorRoute(() => summary(2400)));
+    stubViewport(1440);
+    render(<DeckEditor deckId={null} draftGame="mtg" draftFormat="commander" />);
+    await pollFor(() => within(section("Deck list")).queryByText("No cards yet"));
+    await settle(1500);
+    await act(async () => {});
+    expect(collectionAsks()).toEqual(["GET /api/collection"]);
+    // Nothing to own yet, so nothing is said (never "You own 0/0") and nothing is looked up.
+    expect(ownershipText()).toBeNull();
+    expect(ownedLookups()).toHaveLength(0);
+    expect(posts()).toBe(0);
+
+    // The first card brings the line with it.
+    const input = screen.getByRole("combobox", { name: "Card search" });
+    fireEvent.change(input, { target: { value: "sol" } });
+    await settle();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(ownershipText()).toBe("You own 0/1 · missing 1 (no price data) ·");
+  });
+
+  it("AUTOFILL-OWNED, under StrictMode's double mount the collection is still read once, and the draft learns it", async () => {
+    session.current = { user: { id: "user-1" } };
+    fetchMock.mockImplementation(collectorRoute(() => summary(2400)));
+    stubViewport(1440);
+    render(
+      <StrictMode>
+        <DeckEditor deckId={null} draftGame="mtg" draftFormat="commander" draftLeaderKey="atraxa" />
+      </StrictMode>,
+    );
+    await pollFor(() => screen.queryByTestId("ownership-line"));
+    await settle(1500);
+    await act(async () => {});
+    expect(collectionAsks().filter((ask) => ask === "GET /api/collection")).toHaveLength(1);
+    expect(ownershipText()).toBe("You own 0/1 · missing 1 (no price data) ·");
+  });
+
+  it("AUTOFILL-OWNED, a signed-in player with no collection: one read, then the box is disabled with the hint, and nothing else is asked about it", async () => {
+    session.current = { user: { id: "user-2" } };
+    fetchMock.mockImplementation(collectorRoute(() => summary(0)));
+    stubViewport(1440);
+    render(
+      <DeckEditor deckId={null} draftGame="mtg" draftFormat="commander" draftLeaderKey="atraxa" />,
+    );
+    fireEvent.click(
+      await pollFor(() => screen.queryByRole("button", { name: "Autofill a starter shell" })),
+    );
+    await pollFor(() => screen.queryByRole("button", { name: "Add 12 cards" }));
+    await pollFor(() => ownedNote());
+    expect(ownedBox().disabled).toBe(true);
+    expect(within(ownedNote()!).getByRole("link", { name: "import a collection" })).toBeTruthy();
+    await settle(1500);
+    expect(collectionAsks()).toEqual(["GET /api/collection"]);
+    expect(ownershipText()).toBeNull();
+  });
+
+  it("AUTOFILL-OWNED, a collection read that fails: the box is disabled and says it could not check; a session still pending asks nothing yet", async () => {
+    session.current = { user: { id: "user-3" } };
+    fetchMock.mockImplementation(
+      collectorRoute(() => ({ ok: false, status: 500, json: async () => ({}) })),
+    );
+    stubViewport(1440);
+    const first = render(
+      <DeckEditor deckId={null} draftGame="mtg" draftFormat="commander" draftLeaderKey="atraxa" />,
+    );
+    fireEvent.click(
+      await pollFor(() => screen.queryByRole("button", { name: "Autofill a starter shell" })),
+    );
+    await pollFor(() => screen.queryByRole("button", { name: "Add 12 cards" }));
+    await pollFor(() => ownedNote());
+    expect(ownedBox().disabled).toBe(true);
+    expect(ownedNote()?.textContent).toBe("Couldn't check your collection.");
+    expect(collectionAsks()).toEqual(["GET /api/collection"]);
+    first.unmount();
+
+    // The session has not answered yet: checking, and no collection read until it names a player.
+    fetchMock.mockClear();
+    session.current = null;
+    session.pending = true;
+    render(
+      <DeckEditor deckId={null} draftGame="mtg" draftFormat="commander" draftLeaderKey="atraxa" />,
+    );
+    fireEvent.click(
+      await pollFor(() => screen.queryByRole("button", { name: "Autofill a starter shell" })),
+    );
+    await pollFor(() => screen.queryByRole("button", { name: "Add 12 cards" }));
+    expect(ownedBox().disabled).toBe(true);
+    expect(ownedNote()).toBeNull();
+    expect(collectionAsks()).toEqual([]);
   });
 });
 

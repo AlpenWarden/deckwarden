@@ -17,15 +17,34 @@
  *
  * The live halves are smoke:autofill's goal cases and the seed-1,234,567
  * shell recorded before and after.
+ *
+ * AUTOFILL-OWNED (`ownedOnly`), with the session and the collection check
+ * as stand-ins too:
+ *
+ * - without the flag nothing about the player is read, both gathers get the
+ *   options they always got, and the answer has no `owned`;
+ * - with it the answer is a filtered list or none: 401 signed out, 409 with
+ *   no collection, 429 past the player's own limit, each before anything is
+ *   read for the list;
+ * - a collector's ask hands both gathers the player and no per-card budget,
+ *   says `owned.applied`, and leads its notes with the adapter's line about
+ *   the fillers;
+ * - a collection too small for the deck gets exactly its cards and the
+ *   fillers, the open slots counted, and at a target the reach note says
+ *   where Autofill found no more.
+ *
+ * The live half is smoke:collection's owned checks.
  */
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GAME_ID } from "@/db/seed-data";
 import type { MtgAttrs } from "@/lib/games/mtg/attrs";
 import { mtgAdapter } from "@/lib/games/mtg/adapter";
 import { mtgShellNotes } from "@/lib/games/mtg/brackets";
+import { mtgAutofill } from "@/lib/games/mtg/recommend";
 import { card, type MtgCard } from "@/lib/games/mtg/test-fixtures";
+import type { RateLimit } from "@/lib/rate-limit";
 import type { CandidateCard } from "@/lib/recommend/types";
 
 const mocks = vi.hoisted(() => ({
@@ -36,6 +55,8 @@ const mocks = vi.hoisted(() => ({
   loadCompleteCombos: vi.fn(),
   loadCardWires: vi.fn(),
   enforceRateLimit: vi.fn(),
+  getSessionUserId: vi.fn(),
+  hasCollection: vi.fn(),
 }));
 
 vi.mock("@/lib/recommend/queries", () => ({
@@ -53,6 +74,9 @@ vi.mock("@/lib/rate-limit", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/rate-limit")>()),
   enforceRateLimit: mocks.enforceRateLimit,
 }));
+// AUTOFILL-OWNED: who is asking and whether they hold a collection.
+vi.mock("@/lib/auth", () => ({ getSessionUserId: mocks.getSessionUserId }));
+vi.mock("@/lib/collection/owned", () => ({ hasCollection: mocks.hasCollection }));
 
 const { POST } = await import("./route");
 
@@ -132,6 +156,8 @@ async function post(body: unknown) {
       picks: { cardId: string; tier: string; qty: number }[];
       notes: string[];
       error?: string;
+      reason?: string;
+      owned?: { applied: boolean };
     },
   };
 }
@@ -140,6 +166,9 @@ const BASE = { game: "mtg", format: "commander", leaderIds: [leader.id], seed: 1
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.enforceRateLimit.mockResolvedValue(null);
+  // Signed out with no collection unless a test says otherwise.
+  mocks.getSessionUserId.mockResolvedValue(null);
+  mocks.hasCollection.mockResolvedValue(false);
   mocks.loadEntryFacts.mockImplementation(async (_gameId: number, ids: string[]) => {
     return new Map(
       ids
@@ -279,5 +308,245 @@ describe("POST /api/decks/autofill — goals (Y6b)", () => {
     const { res } = await post({ ...BASE, game: "optcg", format: "standard", goals: { v: 1 } });
     expect(res.status).toBe(400);
     expect(mocks.loadEntryFacts).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/decks/autofill — only cards I own (AUTOFILL-OWNED)", () => {
+  const PLAYER = "11111111-1111-4111-8111-111111111111";
+  const collector = () => {
+    mocks.getSessionUserId.mockResolvedValue(PLAYER);
+    mocks.hasCollection.mockResolvedValue(true);
+  };
+  /** The options each gather was handed: the curve gather first, then the base one. */
+  const gatherOptions = () =>
+    mocks.gatherSignals.mock.calls.map(([, opts]) => opts as Record<string, unknown>);
+  /** The buckets each limiter call spent, in order. */
+  const limiterKeys = () =>
+    mocks.enforceRateLimit.mock.calls.map(([limits]) => (limits as RateLimit[]).map((l) => l.key));
+  const LAND = { column: "primary_type", value: "Land" };
+
+  it("without the flag, absent or false, nothing about the player is read: both gathers get the options they always got, and the answer has no `owned`", async () => {
+    collector(); // even for a signed-in collector
+    for (const extra of [{}, { ownedOnly: false }]) {
+      mocks.gatherSignals.mockClear();
+      const { res, body } = await post({ ...BASE, ...extra });
+      expect(res.status).toBe(200);
+      expect("owned" in body).toBe(false);
+      expect(body.notes).toEqual([]);
+      // Key for key: no `ownedBy`, not even an undefined one.
+      expect(gatherOptions()).toStrictEqual([
+        {
+          poolLimit: 600,
+          tournamentPoolLimit: 200,
+          scope: { ...LAND, op: "ne" },
+          maxPriceUsd: undefined,
+        },
+        {
+          poolLimit: 150,
+          tournamentPoolLimit: 100,
+          scope: { ...LAND, op: "eq" },
+          maxPriceUsd: undefined,
+          includeCombos: false,
+        },
+      ]);
+    }
+    expect(mocks.getSessionUserId).not.toHaveBeenCalled();
+    expect(mocks.hasCollection).not.toHaveBeenCalled();
+    // One limiter call an ask, the address's alone.
+    expect(limiterKeys()).toEqual([
+      ["deck-autofill:ip:unknown", "deck-autofill:ip-hour:unknown"],
+      ["deck-autofill:ip:unknown", "deck-autofill:ip-hour:unknown"],
+    ]);
+
+    // A per-card budget still reaches both gathers when the box is not ticked.
+    mocks.gatherSignals.mockClear();
+    await post({ ...BASE, budgetUsd: 5 });
+    expect(gatherOptions().map((o) => o.maxPriceUsd)).toEqual([5, 5]);
+  });
+
+  it("signed out: 401 with one sentence and no list; the player's limit is not spent and nothing is read for the list", async () => {
+    const { res, body } = await post({ ...BASE, ownedOnly: true });
+    expect(res.status).toBe(401);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(body).toEqual({ error: "Sign in to build a list from your collection" });
+    expect(mocks.getSessionUserId).toHaveBeenCalledTimes(1);
+    expect(mocks.hasCollection).not.toHaveBeenCalled();
+    expect(limiterKeys()).toEqual([["deck-autofill:ip:unknown", "deck-autofill:ip-hour:unknown"]]);
+    expect(mocks.loadEntryFacts).not.toHaveBeenCalled();
+    expect(mocks.gatherSignals).not.toHaveBeenCalled();
+  });
+
+  it("signed in with no collection: 409 with `reason: no-collection` and no list, never an unfiltered one", async () => {
+    mocks.getSessionUserId.mockResolvedValue(PLAYER);
+    const { res, body } = await post({ ...BASE, ownedOnly: true });
+    expect(res.status).toBe(409);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(body).toEqual({
+      error: "This account has no collection to build a list from",
+      reason: "no-collection",
+    });
+    expect(mocks.hasCollection).toHaveBeenCalledTimes(1);
+    expect(mocks.hasCollection).toHaveBeenCalledWith(PLAYER);
+    // The address first, then the player, once the session is proven.
+    expect(limiterKeys()).toEqual([
+      ["deck-autofill:ip:unknown", "deck-autofill:ip-hour:unknown"],
+      [`deck-autofill-owned:user:${PLAYER}`, `deck-autofill-owned:user-hour:${PLAYER}`],
+    ]);
+    expect(mocks.loadEntryFacts).not.toHaveBeenCalled();
+    expect(mocks.gatherSignals).not.toHaveBeenCalled();
+  });
+
+  it("a body the route refuses anyway is a 400 before the session is read", async () => {
+    collector();
+    for (const bad of [{ goals: { v: 2 } }, { format: "nope" }]) {
+      const { res } = await post({ ...BASE, ownedOnly: true, ...bad });
+      expect(res.status).toBe(400);
+    }
+    expect(mocks.getSessionUserId).not.toHaveBeenCalled();
+  });
+
+  it("past the player's own limit: the 429, and nothing is read for the list", async () => {
+    collector();
+    mocks.enforceRateLimit.mockImplementation(async (limits: RateLimit[]) =>
+      limits.some((l) => l.key.startsWith("deck-autofill-owned:"))
+        ? NextResponse.json(
+            { error: "Too many requests. Try again shortly." },
+            { status: 429, headers: { "Retry-After": "12" } },
+          )
+        : null,
+    );
+    const { res, body } = await post({ ...BASE, ownedOnly: true });
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBe("12");
+    expect("picks" in body).toBe(false);
+    expect(mocks.hasCollection).not.toHaveBeenCalled();
+    expect(mocks.gatherSignals).not.toHaveBeenCalled();
+    // The same player's unticked ask is not held by it.
+    const plain = await post(BASE);
+    expect(plain.res.status).toBe(200);
+  });
+
+  it("a collector's ask: both gathers get the player and no per-card budget, the answer says `owned.applied`, and the notes lead with the basic-lands line", async () => {
+    collector();
+    const { res, body } = await post({ ...BASE, ownedOnly: true, budgetUsd: 1 });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(gatherOptions()).toStrictEqual([
+      {
+        poolLimit: 600,
+        tournamentPoolLimit: 200,
+        scope: { ...LAND, op: "ne" },
+        maxPriceUsd: undefined,
+        ownedBy: PLAYER,
+      },
+      {
+        poolLimit: 150,
+        tournamentPoolLimit: 100,
+        scope: { ...LAND, op: "eq" },
+        maxPriceUsd: undefined,
+        includeCombos: false,
+        ownedBy: PLAYER,
+      },
+    ]);
+    expect(mocks.hasCollection).toHaveBeenCalledTimes(1);
+    expect(body.owned).toEqual({ applied: true });
+    expect(body.picks.reduce((n, p) => n + p.qty, 0)).toBe(99);
+    // The fillers are in the list, so the adapter's line about them is too: first, and alone.
+    expect(body.picks.some((p) => p.tier === "filler")).toBe(true);
+    expect(body.notes).toEqual([mtgAutofill.base.collectionNote]);
+    expect(body.notes).toEqual([
+      "Basic lands are added as needed and aren't checked against your collection.",
+    ]);
+  });
+
+  it("no fillers in the list, no line about them: a full deck says only that it is full", async () => {
+    collector();
+    // 99 kept copies of a basic beside the commander: nothing left to plan.
+    const keep = [{ cardId: basics[1].id, zone: "main", qty: 99 }];
+    const { res, body } = await post({ ...BASE, ownedOnly: true, keep });
+    expect(res.status).toBe(200);
+    expect(body.picks).toEqual([]);
+    expect(body.notes).toEqual(["The deck is already full. Nothing to add."]);
+    expect(body.owned).toEqual({ applied: true });
+  });
+
+  it("a collection too small for the deck, at a target of 4: its thirty cards and the basics, the open slots counted and named, and no more Game Changers to bring in", async () => {
+    collector();
+    // What the engine's filter would leave: thirty ranked cards in colour, no
+    // Game Changer among them, and no land.
+    const mine = plains.slice(0, 30);
+    mocks.gatherSignals.mockImplementation(
+      async (_snapshot: unknown, opts: { scope?: { op: string }; ownedBy?: string }) => ({
+        candidates:
+          opts.ownedBy !== PLAYER
+            ? []
+            : opts.scope?.op === "eq"
+              ? []
+              : mine.map((c) => candidate(c, popularity.get(c.id)!)),
+        combosByCandidate: new Map(),
+        combosTruncated: false,
+      }),
+    );
+    const { res, body } = await post({
+      ...BASE,
+      ownedOnly: true,
+      goals: { v: 1, targetLevel: 4 },
+    });
+    expect(res.status).toBe(200);
+
+    const ranked = body.picks.filter((p) => p.tier !== "filler");
+    const fillers = body.picks.filter((p) => p.tier === "filler");
+    // Every card the collection holds, and nothing else but the basics: no topping up.
+    expect(new Set(ranked.map((p) => p.cardId))).toEqual(new Set(mine.map((c) => c.id)));
+    expect(ranked).toHaveLength(30);
+    expect(fillers.reduce((n, p) => n + p.qty, 0)).toBe(37);
+    expect(fillers.every((p) => basics.some((b) => b.id === p.cardId))).toBe(true);
+    expect(body.picks.reduce((n, p) => n + p.qty, 0)).toBe(67);
+
+    expect(body.notes).toEqual([
+      "Basic lands are added as needed and aren't checked against your collection.",
+      "Filled 67 of 99. Your collection ran out of cards that fit, leaving 32 slots open in Mana value 1, Mana value 2, Mana value 3, Mana value 4, Mana value 5, Mana value 6, Mana value 7+.",
+      "Still 4 Game Changers short of Bracket 4. Autofill had no more to bring in from your collection (Wizards' list)",
+    ]);
+  });
+
+  it("at a target, Game Changers the collection holds come in, and the note says where from", async () => {
+    collector();
+    // Three owned Game Changers the plan would never sample: free spells far
+    // down the popularity order, behind nine plain ones for a bucket of two.
+    const mineChangers = ["A", "B", "C"].map((n) =>
+      named(`Owned Changer ${n}`, { costValue: 0, attrs: { game_changer: true } }),
+    );
+    for (const c of mineChangers) every.set(c.id, c);
+    mocks.gatherSignals.mockImplementation(
+      async (_snapshot: unknown, opts: { scope?: { op: string }; ownedBy?: string }) => ({
+        candidates:
+          opts.ownedBy !== PLAYER
+            ? []
+            : opts.scope?.op === "eq"
+              ? lands.map((c, i) => candidate(c, i + 1))
+              : [
+                  ...plains.map((c) => candidate(c, popularity.get(c.id)!)),
+                  ...mineChangers.map((c, i) => candidate(c, 6000 + i)),
+                ],
+        combosByCandidate: new Map(),
+        combosTruncated: false,
+      }),
+    );
+    try {
+      const { body } = await post({ ...BASE, ownedOnly: true, goals: { v: 1, targetLevel: 4 } });
+      // Cradle, a land, is in the plan already; the three spells come in for it to read as Bracket 4.
+      expect(flaggedIn(body.picks, "game_changer")).toBe(4);
+      // Each takes a pick's place, so the list's order is the plan's, not theirs.
+      expect(new Set(body.picks.filter((p) => p.tier === "reach").map((p) => p.cardId))).toEqual(
+        new Set(mineChangers.map((c) => c.id)),
+      );
+      expect(body.notes).toEqual([
+        "Basic lands are added as needed and aren't checked against your collection.",
+        "Added 3 Game Changers from your collection to show your Bracket 4 target (Wizards' list)",
+      ]);
+    } finally {
+      for (const c of mineChangers) every.delete(c.id);
+    }
   });
 });

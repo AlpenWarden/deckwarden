@@ -139,6 +139,20 @@
  * sends its goals PATCH beside the PUT. The toast says both; its Undo
  * restores the list and leaves the target, as the Fit sheet's total stays.
  *
+ * AUTOFILL-OWNED (the owner's ask of 2026-11-24): a draft learns whether its
+ * player has a collection. A saved deck is told by its own GET; a draft has
+ * no GET (/decks/new is static, and its first save swaps the URL without a
+ * reload), so it never knew (LATER row 165). Now a draft reads the session
+ * the header's account slot already holds (`authClient.useSession`: the
+ * same store, no second request) and, for a signed-in player, asks GET
+ * /api/collection once per mount. A guest asks nothing. From then on a
+ * draft behaves as a saved deck with a collection does: the owned lookups
+ * mark cards, the ownership line shows, and the estimate and the Fit sheet
+ * count owned cards at $0. The Autofill sheet gets the answer as
+ * `collection` (available, unavailable, checking or failed) for its "Only
+ * cards I own" box, and hands back the picks it built from the collection,
+ * so the ownership line is right in the render the list lands in.
+ *
  * Game-agnostic by construction: zones, labels, and card display all come off
  * the adapter registry (FormatDef, display.*) — nothing MTG-specific here.
  */
@@ -154,7 +168,11 @@ import { BuyDeckDialog, countedEntries } from "@/components/deck/buy-deck-menu";
 import { SampleHand } from "@/components/deck/sample-hand";
 import { useBracketFacts } from "@/components/deck/use-bracket-facts";
 import type { SwapEditing } from "@/components/editor/alternatives-section";
-import { AutofillSheet, type AutofillApply } from "@/components/editor/autofill-sheet";
+import {
+  AutofillSheet,
+  type AutofillApply,
+  type CollectionState,
+} from "@/components/editor/autofill-sheet";
 import {
   CardDetailPane,
   type PrintingEditing,
@@ -194,6 +212,7 @@ import { Button } from "@/components/ui/button";
 import { ModalFinalFocus } from "@/components/ui/modal";
 import { Tabs, TabsContent, TabsIndicator, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast, Toaster } from "@/components/ui/toast";
+import { authClient } from "@/lib/auth-client";
 import { autofillTargetToast } from "@/lib/brackets/autofill-target";
 import { factsIds } from "@/lib/brackets/facts";
 import { targetFitDoor } from "@/lib/brackets/target-fit";
@@ -504,6 +523,16 @@ export function DeckEditor({
   const [owned, setOwned] = useState<ReadonlySet<string>>(() => new Set());
   const [hasCollection, setHasCollection] = useState(false);
   const ownedCheckedRef = useRef<Set<string>>(new Set());
+  // AUTOFILL-OWNED: a draft's own answer to "does this player have a
+  // collection?". A saved deck's GET says it; a draft has no GET. The
+  // session is the one the header's account slot holds (the client's one
+  // store), read here for drafts only; a signed-in player is asked about
+  // once per mount (the effect below), a guest never. "unknown" until that
+  // answer lands; a collection found sets `hasCollection` itself.
+  const session = authClient.useSession();
+  const draftPlayerId = initialDeckId === null ? (session.data?.user?.id ?? null) : null;
+  const [draftCollection, setDraftCollection] = useState<"unknown" | "none" | "failed">("unknown");
+  const draftCollectionAskedRef = useRef(false);
   // Right pane tab (P3.2/P3.3/P3.4). liveDeckId mirrors deckIdRef as STATE so
   // the panels re-render when draft mode's first save mints the row.
   const [rightTab, setRightTab] = useState<RightTab>("card");
@@ -1096,6 +1125,34 @@ export function DeckEditor({
       }
     })();
   }, [draftSeed, draftComboKey, draftLeaderKey, draftAutofill, load]);
+
+  // A draft learns its player's collection (AUTOFILL-OWNED): ONE GET
+  // /api/collection per mount, and only once the session names a player, so
+  // a guest's draft asks nothing. The ref guard keeps StrictMode's double
+  // effect, and a session refetch for the same player, from asking twice;
+  // like the seeders above the request is not aborted on cleanup. Any row
+  // means a collection: the owned lookups below start marking cards, and the
+  // Autofill sheet's box enables. The server's 401 (a session that ended) is
+  // "none", the guest's answer; any other failure says it could not check.
+  useEffect(() => {
+    if (draftPlayerId === null || draftCollectionAskedRef.current) return;
+    draftCollectionAskedRef.current = true;
+    void (async () => {
+      try {
+        const res = await fetch("/api/collection", { cache: "no-store" });
+        if (res.status === 401) {
+          setDraftCollection("none");
+          return;
+        }
+        if (!res.ok) throw new Error(`collection check failed (${res.status})`);
+        const json: { summary?: { rows?: number } } = await res.json();
+        if ((json.summary?.rows ?? 0) > 0) setHasCollection(true);
+        else setDraftCollection("none");
+      } catch {
+        setDraftCollection("failed");
+      }
+    })();
+  }, [draftPlayerId]);
 
   // Owned lookups for cards added mid-session (P3.7): one debounced POST per
   // burst of new ids, only for users with a collection. A failed lookup
@@ -2018,10 +2075,21 @@ export function DeckEditor({
   // The toast says both, and that the Undo restores the list and leaves the
   // target (the Fit sheet's total, the owner's call 4 of 2026-11-15).
   const handleAutofillApply = useCallback(
-    ({ entries: next, cards: wires, added, target }: AutofillApply) => {
+    ({ entries: next, cards: wires, added, target, owned: fromCollection }: AutofillApply) => {
       const brackets = adapter?.brackets;
       const from = goalsRef.current?.targetLevel ?? null;
       const moved = brackets !== undefined && target !== undefined && target !== from;
+      // AUTOFILL-OWNED: picks the route built from the player's collection
+      // are owned by construction, so they are marked in the render the list
+      // lands in. The owned lookup still asks about every new card (the
+      // assumed basics among them), as after any whole-list change.
+      if (fromCollection && fromCollection.length > 0) {
+        setOwned((prev) => {
+          const marked = new Set(prev);
+          for (const id of fromCollection) marked.add(id);
+          return marked;
+        });
+      }
       applyListSwap(
         next,
         wires,
@@ -2354,6 +2422,19 @@ export function DeckEditor({
     () => ownedForPricing(hasCollection ? owned : null, preconCopies),
     [hasCollection, owned, preconCopies],
   );
+  // AUTOFILL-OWNED: what the Autofill sheet's "Only cards I own" box is told.
+  // A saved deck knows from its GET. A draft is checking until its session
+  // has answered and, for a signed-in player, its one collection read has
+  // too, so the box never shows a guest's hint to a collector for a moment.
+  const collectionState: CollectionState = hasCollection
+    ? "available"
+    : initialDeckId !== null
+      ? "unavailable"
+      : session.isPending || (draftPlayerId !== null && draftCollection === "unknown")
+        ? "checking"
+        : draftCollection === "failed" || (draftPlayerId === null && Boolean(session.error))
+          ? "failed"
+          : "unavailable";
   // PRECON-CHANGES: what the list on screen changed from the precon's own
   // list, derived on every render and never stored: the deck pane's second
   // line, the sheet's two lists and the rows' marks. Null without a lineage.
@@ -2368,14 +2449,15 @@ export function DeckEditor({
   );
   // "You own N/100 · missing ≈ $Y" (P3.7): pure math over the same entries,
   // card prices and owned set; null (nothing rendered) without a collection
-  // or an owned precon, whose copies count up to its own quantities.
-  const ownership = useMemo(
-    () =>
-      (hasCollection || preconCopies !== null) && load.state === "ready"
-        ? deckOwnership(entries, cards, owned, load.format, preconCopies ?? undefined)
-        : null,
-    [hasCollection, preconCopies, load, entries, cards, owned],
-  );
+  // or an owned precon, whose copies count up to its own quantities. And
+  // null for a list with no counted card (AUTOFILL-OWNED): a draft knows its
+  // player's collection now, so a collector's new, empty deck would open on
+  // "You own 0/0". With nothing to own there is nothing to say.
+  const ownership = useMemo(() => {
+    if (!(hasCollection || preconCopies !== null) || load.state !== "ready") return null;
+    const summary = deckOwnership(entries, cards, owned, load.format, preconCopies ?? undefined);
+    return summary.totalQty > 0 ? summary : null;
+  }, [hasCollection, preconCopies, load, entries, cards, owned]);
   // The deck's cost at its cheapest printings (Y8): every goals line's
   // "est. $212 of your $150", and the Fit sheet's starting point. Owned
   // copies count $0 only with a collection, and an owned precon's copies
@@ -2764,6 +2846,8 @@ export function DeckEditor({
               // shows, and whether Upgrade toward is a door here.
               linkPreviews={share?.visibility !== "private"}
               upgradeDoor={swapInOn}
+              // AUTOFILL-OWNED: what the "Only cards I own" box is told.
+              collection={collectionState}
               onApply={handleAutofillApply}
               onClose={closeAutofill}
             />

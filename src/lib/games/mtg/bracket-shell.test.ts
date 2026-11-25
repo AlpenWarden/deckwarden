@@ -106,6 +106,33 @@ describe("mtgReachNotes — what building up to the target brought in, and what 
   it("nothing brought in and nothing short says nothing", () => {
     expect(mtgReachNotes({ added: 0, short: 0 }, 4)).toEqual([]);
   });
+
+  it("from the player's collection (AUTOFILL-OWNED): where the Game Changers came from, and where Autofill found no more", () => {
+    // A target of 4 with no Game Changers in the collection.
+    expect(mtgReachNotes({ added: 0, short: 4, fromCollection: true }, 4)).toEqual([
+      "Still 4 Game Changers short of Bracket 4. Autofill had no more to bring in from your collection (Wizards' list)",
+    ]);
+    expect(mtgReachNotes({ added: 1, short: 0, fromCollection: true }, 3)).toEqual([
+      "Added 1 Game Changer from your collection to show your Bracket 3 target (Wizards' list)",
+    ]);
+    expect(mtgReachNotes({ added: 2, short: 2, fromCollection: true }, 4)).toEqual([
+      "Added 2 Game Changers from your collection to show your Bracket 4 target (Wizards' list)",
+      "Still 2 Game Changers short of Bracket 4. Autofill had no more to bring in from your collection (Wizards' list)",
+    ]);
+    // A target of 5 is still never claimed.
+    expect(mtgReachNotes({ added: 3, short: 1, fromCollection: true }, 5)).toEqual([
+      "Added 3 Game Changers from your collection to show Bracket 4, the most a list of cards can show (Wizards' list)",
+      "Still 1 Game Changer short of Bracket 4. Autofill had no more to bring in from your collection (Wizards' list)",
+    ]);
+    // No per-card budget applies to an owned card: one handed in beside the flag is not named.
+    expect(mtgReachNotes({ added: 0, short: 1, budgetUsd: 5, fromCollection: true }, 3)).toEqual([
+      "Still 1 Game Changer short of Bracket 3. Autofill had no more to bring in from your collection (Wizards' list)",
+    ]);
+    // The flag off is the wording above, whether it is false or absent.
+    expect(mtgReachNotes({ added: 1, short: 1, budgetUsd: 5, fromCollection: false }, 3)).toEqual(
+      mtgReachNotes({ added: 1, short: 1, budgetUsd: 5 }, 3),
+    );
+  });
 });
 
 const commander = card({ name: "Test Commander", isLeaderCandidate: true });
@@ -250,6 +277,8 @@ describe("D0's copy guard over the notes and the badges", () => {
     ...[1, 2, 3].flatMap((t) => mtgShellNotes({ "game-changers": 1, combo: 1 }, t)),
     ...[3, 4, 5].flatMap((t) => mtgReachNotes({ added: 2, short: 1, budgetUsd: 5 }, t)),
     ...[3, 4, 5].flatMap((t) => mtgReachNotes({ added: 1, short: 2 }, t)),
+    // AUTOFILL-OWNED: the same lines for a list built from the collection.
+    ...[3, 4, 5].flatMap((t) => mtgReachNotes({ added: 2, short: 1, fromCollection: true }, t)),
     ...CASES.flatMap((k) => mtgComboBadge(k.combo, new Set())?.words ?? []),
     mtgComboBadge(combo("cmd", [commander, a, b]), COMMANDER)!.words,
   ];
@@ -268,7 +297,9 @@ describe("D0's copy guard over the notes and the badges", () => {
 
   it("U9's marks hold in the reach notes: no dash aside, no middle dot, and every line names its source", () => {
     const reach = every.filter((s) => /^(Added|Still) /.test(s));
-    expect(reach).toHaveLength(12);
+    // Twelve without the collection, six with it.
+    expect(reach).toHaveLength(18);
+    expect(reach.filter((s) => s.includes("from your collection"))).toHaveLength(6);
     expect(reach.filter((s) => /[—–·]/.test(s))).toEqual([]);
     expect(reach.filter((s) => !s.endsWith("(Wizards' list)"))).toEqual([]);
   });

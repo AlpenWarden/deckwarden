@@ -38,16 +38,37 @@
  * came in, or what the shell is still short (`brackets.reachNotes`). A
  * shell that already shows its target is unchanged, pick for pick.
  *
+ * Only cards I own (AUTOFILL-OWNED, the owner's ask of 2026-11-24):
+ * `ownedOnly: true` builds the shell from the asking player's collection.
+ * It is the one ask that reads the session, and it reads it only then: any
+ * other body is answered as before, with no session read and no collection
+ * read. The answer is a filtered list or none at all, never an unfiltered
+ * one: signed out is 401, an account with no collection row is 409 with
+ * `reason: "no-collection"`, and both gathers get the player (`ownedBy`, the
+ * engine's filter, a probe on the collection: OWNED-FILTER), so every ranked
+ * pick is a card they own any printing of. The filter is strict (the
+ * owner's decision 3): slots the collection cannot fill stay open and the
+ * shortfall note counts them. The adapter's fillers are assumed, not
+ * checked (decision 4), and its `collectionNote` says so. A per-card budget
+ * in the same body is ignored (decision 5): a price limit says nothing
+ * about a card the player already has. The answer carries
+ * `owned: { applied: true }`, and only then. `cards` still holds the
+ * leaders and the kept cards, which need not be owned.
+ *
  * Caching intent: force-dynamic + no-store — output depends on the body
- * and (for omitted seeds) a server roll. Rate-limited per IP as the app's
- * costliest read; W9b's reroll button spends this budget.
+ * and (for omitted seeds) a server roll, and with `ownedOnly` on who is
+ * asking. Rate-limited per IP as the app's costliest read; W9b's reroll
+ * button spends this budget. An `ownedOnly` ask also spends a bucket of
+ * the player's own, once the session is proven.
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 
 import { findFormat, GAME_ID } from "@/db/seed-data";
 import { badRequest, noStoreJson, parseJsonBody } from "@/lib/api/json";
+import { getSessionUserId } from "@/lib/auth";
 import { loadCardWires } from "@/lib/cards/wire";
+import { hasCollection } from "@/lib/collection/owned";
 import { loadCompleteCombos } from "@/lib/combos/queries";
 import { clientIp } from "@/lib/decks/access";
 import { cardListIssues, type DeckCardInput } from "@/lib/decks/cards";
@@ -100,6 +121,8 @@ const BODY = z.object({
     .optional(),
   /** The deck's goals (Y6b) — shape-checked against the game below. */
   goals: z.unknown().optional(),
+  /** AUTOFILL-OWNED: only cards the asking player owns. Only `true` acts. */
+  ownedOnly: z.boolean().optional(),
 });
 
 export async function POST(request: NextRequest) {
@@ -139,6 +162,35 @@ export async function POST(request: NextRequest) {
   const brackets = adapter.brackets;
   const targetLevel = brackets ? (deckGoals?.targetLevel ?? null) : null;
 
+  // Only cards I own (AUTOFILL-OWNED): who is asking, read only when the body
+  // asks for their cards, after the cheap 400s and before anything is read
+  // for the list. No session, or no collection, is a refusal, never a list.
+  let ownedBy: string | undefined;
+  if (body.ownedOnly === true) {
+    const userId = await getSessionUserId(request.headers);
+    if (!userId) {
+      return noStoreJson(
+        { error: "Sign in to build a list from your collection" },
+        { status: 401 },
+      );
+    }
+    const limitedPlayer = await enforceRateLimit(RATE_LIMITS.deckAutofillOwned(userId));
+    if (limitedPlayer) return limitedPlayer;
+    if (!(await hasCollection(userId))) {
+      return noStoreJson(
+        { error: "This account has no collection to build a list from", reason: "no-collection" },
+        { status: 409 },
+      );
+    }
+    ownedBy = userId;
+  }
+  // The engine's owned hook, spread into both gathers only when set, so any
+  // other ask hands them the options it always has.
+  const ownedFilter = ownedBy !== undefined ? { ownedBy } : {};
+  const fromCollection = ownedBy !== undefined;
+  // A price limit says nothing about a card the player already has (decision 5).
+  const perCardUsd = fromCollection ? undefined : budgetUsd;
+
   // Server-authoritative facts for every id the client sent (with the
   // bracket flags the goals check reads, where the game declares them).
   const ids = [...new Set([...leaderIds, ...keep.map((k) => k.cardId)])];
@@ -177,14 +229,16 @@ export async function POST(request: NextRequest) {
       poolLimit: CURVE_POOL,
       tournamentPoolLimit: CURVE_TOURNAMENT_POOL,
       scope: { ...baseScope, op: "ne" },
-      maxPriceUsd: budgetUsd,
+      maxPriceUsd: perCardUsd,
+      ...ownedFilter,
     }),
     gatherSignals(snapshot, {
       poolLimit: BASE_POOL,
       tournamentPoolLimit: BASE_TOURNAMENT_POOL,
       scope: baseScope,
-      maxPriceUsd: budgetUsd,
+      maxPriceUsd: perCardUsd,
       includeCombos: false,
+      ...ownedFilter,
     }),
   ]);
 
@@ -293,7 +347,14 @@ export async function POST(request: NextRequest) {
             targetLevel,
           ),
           ...(draft.reach && brackets.reachNotes
-            ? brackets.reachNotes({ ...draft.reach, budgetUsd }, targetLevel)
+            ? brackets.reachNotes(
+                {
+                  ...draft.reach,
+                  budgetUsd: perCardUsd,
+                  ...(fromCollection ? { fromCollection } : {}),
+                },
+                targetLevel,
+              )
             : []),
         ]
       : [];
@@ -346,7 +407,20 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  const shell = finishShell(draft, fillerPicks, { zone: mainZone.id, budgetUsd });
+  const shell = finishShell(draft, fillerPicks, {
+    zone: mainZone.id,
+    budgetUsd: perCardUsd,
+    ...(fromCollection ? { fromCollection } : {}),
+  });
+  // The fillers are assumed, never checked against the collection (the
+  // owner's decision 4): the adapter's line says so, first among the notes,
+  // whenever such a list holds any.
+  const fillerNote =
+    fromCollection &&
+    autofill.base.collectionNote !== undefined &&
+    shell.picks.some((p) => p.tier === "filler")
+      ? [autofill.base.collectionNote]
+      : [];
 
   // Authoritative validation over keep + picks — same pure adapter code the
   // editor runs. Same-card entries merge (kept basics + fillers).
@@ -376,9 +450,11 @@ export async function POST(request: NextRequest) {
     seed: shell.seed,
     picks: shell.picks,
     groups: shell.groups,
-    notes: [...shell.notes, ...goalNotes],
+    notes: [...fillerNote, ...shell.notes, ...goalNotes],
     totals: shell.totals,
     issues: validation,
     cards: wires.filter((w) => usedIds.has(w.id)),
+    // Said only when asked: any other answer is the shape it always was.
+    ...(fromCollection ? { owned: { applied: true } } : {}),
   });
 }

@@ -68,9 +68,9 @@ export default function PrivacyPage() {
           Importing a collection is optional too. If you upload a ManaBox or Moxfield CSV export on
           the account page, the file is read in your browser and only three things per line reach
           our servers: which card printing, its finish, and how many. Purchase prices, conditions,
-          languages, and binder names are never sent. The collection is private. It only ever shows{" "}
-          <em>you</em> which cards you own in decks you view, and you can wipe it from the account
-          page at any time.
+          languages, and binder names are never sent. The collection is private. It is only ever
+          shown to <em>you</em>, and used to mark the cards you own and to build lists for you, and
+          you can wipe it from the account page at any time.
         </p>
         <p>
           While signed in, a session cookie keeps you signed in, beside a short-lived cached copy of

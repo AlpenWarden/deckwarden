@@ -149,11 +149,27 @@ export const RATE_LIMITS = {
    * driven and reachable without a deck row. 20/min absorbs honest reroll
    * bursts from the W9b sheet; the hourly lid is the Neon-compute first
    * line the Wave-2 plan calls for (client-side reroll over the returned
-   * window is the recorded second).
+   * window is the recorded second). Every ask spends this bucket first,
+   * signed in or not; an ask for the player's own cards spends
+   * `deckAutofillOwned` as well.
    */
   deckAutofill: (ip: string | null): RateLimit[] => [
     { key: `deck-autofill:ip:${ip ?? "unknown"}`, max: 20, windowSeconds: 60 },
     { key: `deck-autofill:ip-hour:${ip ?? "unknown"}`, max: 200, windowSeconds: 3600 },
+  ],
+  /**
+   * POST /api/decks/autofill with `ownedOnly` (AUTOFILL-OWNED) — the one
+   * Autofill ask that reads who is asking, so it has a second bucket keyed by
+   * the player, at the address bucket's numbers. Spent only once the session
+   * is proven: a signed-out caller's refusals count against their address
+   * alone and can never use up a player's allowance, and one session moved
+   * between addresses is still held to 20 a minute. The sheet asks once per
+   * tick, target pick and Reroll, so neither number is reachable in honest
+   * use.
+   */
+  deckAutofillOwned: (userId: string): RateLimit[] => [
+    { key: `deck-autofill-owned:user:${userId}`, max: 20, windowSeconds: 60 },
+    { key: `deck-autofill-owned:user-hour:${userId}`, max: 200, windowSeconds: 3600 },
   ],
   /**
    * GET /api/leaders/random (W9c) — the "Surprise me" roll: one indexed

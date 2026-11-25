@@ -16,6 +16,11 @@
  * body a deck at that target sends, the note under the choice, the
  * after-line's cases over mocked facts, what Add hands over, and that
  * nothing but the route's POST and the facts GET is ever asked.
+ * AUTOFILL-OWNED: the "Only cards I own" box in each state the editor can
+ * hand it (available, unavailable, checking, failed), one more ask per tick
+ * with the flag and without the per-card budget, Budget switched off with
+ * its reason, the footer's count in the estimate's place, the route's two
+ * refusals, and what Add hands over.
  */
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,7 +32,12 @@ import { COMMANDER } from "@/lib/games/mtg/formats";
 import { atraxa, card } from "@/lib/games/mtg/test-fixtures";
 import { getAdapter } from "@/lib/games/registry";
 import type { CompleteCombo } from "@/lib/games/types";
-import { AutofillSheet, type AutofillApply } from "./autofill-sheet";
+import {
+  AutofillSheet,
+  collectionCountLine,
+  OWNED_COPY,
+  type AutofillApply,
+} from "./autofill-sheet";
 
 const mtg = getAdapter("mtg");
 
@@ -1234,5 +1244,346 @@ describe("AutofillSheet — Your target (AUTOFILL-TARGET)", () => {
         new Set(["POST /api/decks/autofill", "GET /api/combos/complete"]),
       );
     });
+  });
+});
+
+describe("AutofillSheet — only cards I own (AUTOFILL-OWNED)", () => {
+  const BASICS_NOTE = "Basic lands are added as needed and aren't checked against your collection.";
+  const SHORT_NOTE =
+    "Filled 13 of 99. Your collection ran out of cards that fit, leaving 86 slots open in Mana value 5.";
+  /** What the route answers an owned ask: the same picks, its notes, and that the filter applied. */
+  const ownedShell = { ...shell, notes: [BASICS_NOTE, SHORT_NOTE], owned: { applied: true } };
+  /** A status the route answers an owned ask with instead of a list; null = the list. */
+  let refuse: 401 | 409 | null = null;
+  function ownedRoutes(input: RequestInfo | URL, init?: RequestInit) {
+    if (String(input) === "/api/decks/autofill") {
+      const body = JSON.parse(init!.body as string) as { ownedOnly?: boolean };
+      if (body.ownedOnly && refuse !== null) {
+        return {
+          ok: false,
+          status: refuse,
+          headers: new Headers(),
+          json: async () => ({ error: "refused" }),
+        };
+      }
+      return ok(body.ownedOnly ? ownedShell : shell);
+    }
+    return routes(input);
+  }
+
+  const box = () => screen.getByRole("checkbox", { name: "Only cards I own" }) as HTMLButtonElement;
+  const ticked = () => box().getAttribute("aria-checked") === "true";
+  const ownedNote = () => document.querySelector<HTMLElement>("[data-slot=autofill-owned-note]");
+  const budget = () => screen.getByRole("group", { name: "Budget" });
+  const budgetItems = () => within(budget()).getAllByRole("button") as HTMLButtonElement[];
+  const footer = () => document.querySelector<HTMLElement>("[data-slot=autofill-footer]")!;
+  async function asked(n: number) {
+    await waitFor(() => expect(bodies()).toHaveLength(n));
+    await screen.findByText("Lands · 12");
+  }
+  /** Long enough for an effect that would ask again to have asked. */
+  const idle = () => new Promise((resolve) => setTimeout(resolve, 60));
+
+  beforeEach(() => {
+    refuse = null;
+    fetchMock.mockImplementation(ownedRoutes);
+  });
+
+  it("ticking the box asks ONCE more, with the flag and nothing else moved; the opening ask carries none; unticking sends the opening body again, byte for byte", async () => {
+    render(sheet({ entries: [leaderEntry, keptEntry], collection: "available" }));
+    await asked(1);
+    expect("ownedOnly" in bodies()[0]).toBe(false);
+    expect(box().disabled).toBe(false);
+    expect(ticked()).toBe(false);
+    // Nothing explains a box that can be ticked.
+    expect(ownedNote()).toBeNull();
+
+    fireEvent.click(box());
+    await asked(2);
+    expect(ticked()).toBe(true);
+    expect(bodies()[1]).toEqual({
+      game: "mtg",
+      format: "commander",
+      leaderIds: [atraxa.id],
+      keep: [{ cardId: signet.id, zone: "main", qty: 1 }],
+      ownedOnly: true,
+    });
+    expect("seed" in bodies()[1]).toBe(false);
+    await idle();
+    expect(bodies()).toHaveLength(2);
+
+    fireEvent.click(box());
+    await asked(3);
+    expect(rawBodies()[2]).toBe(rawBodies()[0]);
+  });
+
+  it("ticked, Budget is switched off and says why: the body carries no budgetUsd, the pick stays in view and comes back with the untick", async () => {
+    render(sheet({ collection: "available" }));
+    await asked(1);
+    fireEvent.click(screen.getByRole("button", { name: "≤ $1 a card" }));
+    await asked(2);
+    expect(bodies()[1].budgetUsd).toBe(1);
+
+    fireEvent.click(box());
+    await asked(3);
+    expect("budgetUsd" in bodies()[2]).toBe(false);
+    expect(bodies()[2].ownedOnly).toBe(true);
+    // Off: every item disabled, the pick still pressed.
+    expect(budgetItems().map((b) => b.disabled)).toEqual([true, true, true]);
+    expect(screen.getByRole("button", { name: "≤ $1 a card" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    // The line under the controls says why, and both controls point at it.
+    expect(ownedNote()?.textContent).toBe(
+      "Budget is off. Price limits don't apply to cards you own.",
+    );
+    expect(ownedNote()?.textContent).toBe(OWNED_COPY.budgetOff);
+    expect(budget().getAttribute("aria-describedby")).toBe(ownedNote()!.id);
+    expect(box().getAttribute("aria-describedby")).toContain(ownedNote()!.id);
+    // A press on the switched-off Budget asks nothing.
+    fireEvent.click(screen.getByRole("button", { name: "≤ $5 a card" }));
+    await idle();
+    expect(bodies()).toHaveLength(3);
+
+    fireEvent.click(box());
+    await asked(4);
+    expect(bodies()[3].budgetUsd).toBe(1);
+    expect("ownedOnly" in bodies()[3]).toBe(false);
+    expect(budgetItems().map((b) => b.disabled)).toEqual([false, false, false]);
+    expect(budget().hasAttribute("aria-describedby")).toBe(false);
+    expect(ownedNote()).toBeNull();
+  });
+
+  it("a deck whose goal is a per-card budget: ticked, the goals still ride and the budget does not", async () => {
+    const goals: DeckGoals = { v: 1, targetLevel: 3, budget: { perCardUsd: 5 } };
+    render(sheet({ goals, collection: "available" }));
+    await asked(1);
+    expect(bodies()[0].budgetUsd).toBe(5);
+    fireEvent.click(box());
+    await asked(2);
+    expect(bodies()[1]).toEqual({
+      game: "mtg",
+      format: "commander",
+      leaderIds: [atraxa.id],
+      keep: [],
+      goals: bodies()[0].goals,
+      ownedOnly: true,
+    });
+  });
+
+  it("a target pick and Reroll keep the tick: each asks once, still with the flag", async () => {
+    render(sheet({ collection: "available" }));
+    await asked(1);
+    fireEvent.click(box());
+    await asked(2);
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Your target" })).getByRole("button", { name: "2" }),
+    );
+    await asked(3);
+    fireEvent.click(screen.getByRole("button", { name: "Reroll" }));
+    await asked(4);
+    expect(bodies().map((b) => b.ownedOnly)).toEqual([undefined, true, true, true]);
+    expect(ticked()).toBe(true);
+  });
+
+  it("the route's notes read verbatim, the footer counts the picks from the collection in the estimate's place and follows the checks, and Add adds exactly the cards shown", async () => {
+    const onApply = vi.fn();
+    render(sheet({ collection: "available", onApply }));
+    await asked(1);
+    expect(within(footer()).getByText(/Est\. total \$2/)).toBeTruthy();
+
+    fireEvent.click(box());
+    await asked(2);
+    expect(screen.getByText(BASICS_NOTE)).toBeTruthy();
+    expect(screen.getByText(SHORT_NOTE)).toBeTruthy();
+    // Command Tower and Arcane Signet came from the collection; the eleven Wastes are the fillers.
+    expect(
+      within(footer()).getByText("2 of these 13 cards are from your collection."),
+    ).toBeTruthy();
+    expect(within(footer()).queryByText(/Est\. total|unpriced|No price data/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Include Wastes × 11" }));
+    expect(within(footer()).getByText("2 of these 2 cards are from your collection.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Include Arcane Signet" }));
+    expect(within(footer()).getByText("This card is from your collection.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Include Command Tower" }));
+    expect(within(footer()).queryByText(/from your collection/)).toBeNull();
+    for (const name of ["Include Lands", "Include Arcane Signet"]) {
+      fireEvent.click(screen.getByRole("checkbox", { name }));
+    }
+
+    // Add: the commander and the thirteen picks on screen, and nothing else.
+    fireEvent.click(screen.getByRole("button", { name: "Add 13 cards" }));
+    const apply = onApply.mock.calls[0][0] as AutofillApply;
+    expect(apply.added).toBe(13);
+    expect(apply.entries).toEqual([
+      leaderEntry,
+      { cardId: tower.id, zone: "main", qty: 1, tags: [] },
+      { cardId: wastes.id, zone: "main", qty: 11, tags: [] },
+      { cardId: signet.id, zone: "main", qty: 1, tags: [] },
+    ]);
+    // The picks from the collection, for the editor's owned marks: never the fillers.
+    expect(apply.owned).toEqual([tower.id, signet.id]);
+    // Still nothing asked but the shell and the after-line's facts.
+    const asks = fetchMock.mock.calls.map(([url, init]) => [
+      (init as RequestInit | undefined)?.method ?? "GET",
+      String(url).split("?")[0],
+    ]);
+    expect(new Set(asks.map((a) => a.join(" ")))).toEqual(
+      new Set(["POST /api/decks/autofill", "GET /api/combos/complete"]),
+    );
+  });
+
+  it("the footer follows the route's word, not the box: an unticked list keeps its estimate, and its Add hands over no owned cards", async () => {
+    const onApply = vi.fn();
+    render(sheet({ collection: "available", onApply }));
+    await asked(1);
+    expect(within(footer()).getByText(/Est\. total \$2/)).toBeTruthy();
+    expect(within(footer()).queryByText(/from your collection/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Add 13 cards" }));
+    expect("owned" in (onApply.mock.calls[0][0] as AutofillApply)).toBe(false);
+  });
+
+  it("a guest, or an account with no collection (what the editor says when it says nothing): disabled, with Suggestions' hint and its Account link, and Autofill is as it was", async () => {
+    for (const props of [{}, { collection: "unavailable" as const }]) {
+      const view = render(sheet(props));
+      await asked(1);
+      expect(box().disabled).toBe(true);
+      expect(ticked()).toBe(false);
+      expect(ownedNote()?.textContent).toBe(
+        "Sign in and import a collection on your Account page to filter by cards you own",
+      );
+      expect(
+        within(ownedNote()!)
+          .getByRole("link", { name: "import a collection" })
+          .getAttribute("href"),
+      ).toBe("/account");
+      expect(box().getAttribute("aria-describedby")).toContain(ownedNote()!.id);
+      // It cannot be ticked, so nothing more is asked, and Budget is its own control still.
+      fireEvent.click(box());
+      await idle();
+      expect(bodies()).toHaveLength(1);
+      expect(bodies()[0]).toEqual({
+        game: "mtg",
+        format: "commander",
+        leaderIds: [atraxa.id],
+        keep: [],
+      });
+      expect(budgetItems().map((b) => b.disabled)).toEqual([false, false, false]);
+      view.unmount();
+      fetchMock.mockClear();
+    }
+  });
+
+  it("while the editor is still checking: disabled with no line; a failed check says so; an answer enables the box and asks nothing", async () => {
+    const view = render(sheet({ collection: "checking" }));
+    await asked(1);
+    expect(box().disabled).toBe(true);
+    expect(ownedNote()).toBeNull();
+    expect(box().hasAttribute("aria-describedby")).toBe(false);
+
+    view.rerender(sheet({ collection: "failed" }));
+    expect(box().disabled).toBe(true);
+    expect(ownedNote()?.textContent).toBe("Couldn't check your collection.");
+
+    view.rerender(sheet({ collection: "available" }));
+    expect(box().disabled).toBe(false);
+    expect(ownedNote()).toBeNull();
+    await idle();
+    expect(bodies()).toHaveLength(1);
+  });
+
+  it("the flag is sent only while the editor says there is a collection: if that stops being true under a ticked box, the next ask carries none", async () => {
+    const view = render(sheet({ collection: "available" }));
+    await asked(1);
+    fireEvent.click(box());
+    await asked(2);
+    expect(bodies()[1].ownedOnly).toBe(true);
+
+    // The editor's answer changes (a restore re-read the deck: the collection is gone).
+    view.rerender(sheet({ collection: "unavailable" }));
+    await asked(3);
+    expect("ownedOnly" in bodies()[2]).toBe(false);
+    expect(rawBodies()[2]).toBe(rawBodies()[0]);
+    expect(box().disabled).toBe(true);
+    expect(ticked()).toBe(false);
+    // The list on screen is the full one again, with its estimate, and Budget is back.
+    expect(within(footer()).getByText(/Est\. total \$2/)).toBeTruthy();
+    expect(budgetItems().map((b) => b.disabled)).toEqual([false, false, false]);
+    expect(ownedNote()?.textContent).toBe(
+      "Sign in and import a collection on your Account page to filter by cards you own",
+    );
+  });
+
+  it("a 401 while the sheet is open: its sentence and no list, the box still ticked, and nothing asked again until Retry", async () => {
+    refuse = 401;
+    render(sheet({ collection: "available" }));
+    await asked(1);
+    fireEvent.click(box());
+    expect(
+      await screen.findByText(
+        "Sign in to build from your collection, or untick “Only cards I own” for the full list.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText("Lands · 12")).toBeNull();
+    await idle();
+    // The opening ask and the refused one: no retry by itself, and no unfiltered ask in its place.
+    expect(bodies()).toHaveLength(2);
+    expect(ticked()).toBe(true);
+
+    const retry = screen.getByRole("button", { name: "Retry" });
+    expect(retry.getAttribute("aria-disabled")).not.toBe("true");
+    expect(retry.hasAttribute("title")).toBe(false);
+    fireEvent.click(retry);
+    await waitFor(() => expect(bodies()).toHaveLength(3));
+    expect(bodies()[2].ownedOnly).toBe(true);
+    await idle();
+    expect(bodies()).toHaveLength(3);
+  });
+
+  it("a 409 while the sheet is open: its sentence, nothing asked again by itself, and unticking brings the full list back", async () => {
+    refuse = 409;
+    render(sheet({ collection: "available" }));
+    await asked(1);
+    fireEvent.click(box());
+    expect(
+      await screen.findByText(
+        "No collection found on this account. Untick “Only cards I own” for the full list.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText("Lands · 12")).toBeNull();
+    await idle();
+    expect(bodies()).toHaveLength(2);
+    expect(ticked()).toBe(true);
+
+    fireEvent.click(box());
+    await asked(3);
+    expect("ownedOnly" in bodies()[2]).toBe(false);
+    expect(within(footer()).getByText(/Est\. total \$2/)).toBeTruthy();
+  });
+
+  it("on a phone the box sits in the Drawer's controls, with the touch target the other checkboxes have", async () => {
+    render(sheet({ phone: true, collection: "available" }));
+    await asked(1);
+    const popup = document.querySelector<HTMLElement>("[data-slot=drawer-popup]")!;
+    const inDrawer = within(popup).getByRole("checkbox", { name: "Only cards I own" });
+    expect(inDrawer.closest("[data-slot=autofill-controls]")).toBeTruthy();
+    // The Checkbox's own 44 px hit area on a coarse pointer (16 px box, 14 px each side).
+    expect(inDrawer.className).toContain("pointer-coarse:after:-inset-3.5");
+  });
+
+  it("the sheet's own sentences: the count's three forms, and U9's marks", () => {
+    expect(collectionCountLine(70, 91)).toBe("70 of these 91 cards are from your collection.");
+    expect(collectionCountLine(0, 37)).toBe("0 of these 37 cards are from your collection.");
+    expect(collectionCountLine(1, 1)).toBe("This card is from your collection.");
+    expect(collectionCountLine(0, 1)).toBe("This card isn't from your collection.");
+    const every = [
+      ...Object.values(OWNED_COPY),
+      collectionCountLine(70, 91),
+      collectionCountLine(1, 1),
+      collectionCountLine(0, 1),
+    ];
+    expect(every.filter((s) => /[—–·]/.test(s))).toEqual([]);
+    expect(every.filter((s) => !s.endsWith("."))).toEqual([]);
   });
 });

@@ -286,6 +286,60 @@ describe("finishShell notes (the W9b-rendered vocabulary — exact strings)", ()
     expect(FULL_NOTE).toBe("The deck is already full. Nothing to add.");
   });
 
+  it("pins the shortfall wording for a list built from the player's collection (AUTOFILL-OWNED): the open slots counted, where they are, and never a budget", () => {
+    expect(shortfallNote(91, 99, ["Mana value 1"], undefined, true)).toBe(
+      "Filled 91 of 99. Your collection ran out of cards that fit, leaving 8 slots open in Mana value 1.",
+    );
+    expect(shortfallNote(98, 99, ["Mana value 5", "Mana value 7+"], undefined, true)).toBe(
+      "Filled 98 of 99. Your collection ran out of cards that fit, leaving 1 slot open in Mana value 5, Mana value 7+.",
+    );
+    // A budget handed in beside the flag is not named: no price limit applies to an owned card.
+    expect(shortfallNote(60, 99, ["Lands"], 5, true)).toBe(
+      "Filled 60 of 99. Your collection ran out of cards that fit, leaving 39 slots open in Lands.",
+    );
+    // The flag off is the wording above, with or without the argument.
+    expect(shortfallNote(93, 99, ["Lands"], undefined, false)).toBe(
+      "Filled 93 of 99. Too few candidates in Lands.",
+    );
+  });
+
+  it("a collection too small for the deck: every card it holds is planned, the fillers fill the base, and the note counts the open slots and names where they are", () => {
+    // What the owned filter left: five spells for seven curve slots (none
+    // at 2+) and no land. Nothing is topped up.
+    const pool = [
+      rec({ costValue: 0 }),
+      rec({ costValue: 0 }),
+      rec({ costValue: 1 }),
+      rec({ costValue: 1 }),
+      rec({ costValue: 1 }),
+    ];
+    const draft = buildShell(input({ pool, basePool: [] }));
+    expect(new Set(draft.picks.map((p) => p.cardId))).toEqual(new Set(pool.map((r) => r.cardId)));
+    expect(draft.fillerNeed).toBe(3);
+    expect(draft.shortLabels).toEqual(["Mana value 2+"]);
+    const fillers = [
+      { cardId: "f-1", name: "Plains", qty: 3, cheapestUsd: null, why: "basic filler" },
+    ];
+    const owned = finishShell(draft, fillers, { zone: "main", fromCollection: true });
+    expect(owned.totals.picks).toBe(8);
+    expect(owned.notes).toEqual([
+      "Filled 8 of 10. Your collection ran out of cards that fit, leaving 2 slots open in Mana value 2+.",
+    ]);
+    // The same draft with the flag off, or absent, reads as it always has.
+    for (const opts of [{ zone: "main" }, { zone: "main", fromCollection: false }]) {
+      expect(finishShell(draft, fillers, opts).notes).toEqual([
+        "Filled 8 of 10. Too few candidates in Mana value 2+.",
+      ]);
+    }
+    // A full list from the collection says nothing about it.
+    expect(
+      finishShell(buildShell(input({ pool: bigPool(), basePool: [] })), fillers, {
+        zone: "main",
+        fromCollection: true,
+      }).notes,
+    ).toEqual([]);
+  });
+
   it("reports a real shortfall with the short groups named", () => {
     // Nothing in any pool: every bucket + the base go short.
     const shell = finishShell(buildShell(input({ slots: 10 })), [], {

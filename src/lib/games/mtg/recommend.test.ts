@@ -272,6 +272,23 @@ describe("autofill declaration (W9a — the starter-shell contract)", () => {
     expect(mtgRecommend.sources?.["land-template"]?.label).toBeTruthy();
   });
 
+  it("says what a list built from a collection assumes of its fillers (AUTOFILL-OWNED): basic lands, added as needed, never checked", () => {
+    expect(autofill.base.collectionNote).toBe(
+      "Basic lands are added as needed and aren't checked against your collection.",
+    );
+    // U9's marks: no dash aside, no middle dot.
+    expect(autofill.base.collectionNote).not.toMatch(/[—–·]/);
+    // Every filler it can add is a basic land, the colourless deck's Wastes too.
+    expect(autofill.base.fillerNames).toEqual([
+      "Plains",
+      "Island",
+      "Swamp",
+      "Mountain",
+      "Forest",
+      "Wastes",
+    ]);
+  });
+
   it("scopes the base pool to Lands and classifies base cards the same way", () => {
     expect(autofill.base.scope).toEqual({ column: "primary_type", op: "eq", value: "Land" });
     expect(autofill.base.isBase({ primaryType: "Land", costValue: null })).toBe(true);

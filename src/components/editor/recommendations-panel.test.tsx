@@ -359,6 +359,46 @@ describe("RecommendationsPanel — a saved deck (P3.2)", () => {
     await flush();
     expect(String(deckGets().at(-1)![0])).toBe("/api/decks/deck-1/recommendations?owned=1");
   });
+
+  it("a collector's draft (AUTOFILL-OWNED): the toggle is off and says it starts once the deck is saved; the draft's ask never carries it; the first save enables it with no reload", async () => {
+    const toggle = () => screen.getByTestId("only-owned-toggle") as HTMLButtonElement;
+    const hint = () => document.querySelector<HTMLElement>("[data-slot=field-description]");
+    // No row yet, and the editor knows the player has a collection.
+    const view = render(<RecommendationsPanel {...props({ ownedAvailable: true })} />);
+    await flush();
+    expect(toggle().disabled).toBe(true);
+    expect(toggle().getAttribute("aria-checked")).toBe("false");
+    expect(hint()?.textContent).toBe("Filtering by your collection starts once the deck is saved.");
+    // Not the guest's hint: this player has a collection.
+    expect(screen.queryByRole("link", { name: "import a collection" })).toBeNull();
+    // It cannot be ticked, and the snapshot route was asked once, with no owned flag.
+    fireEvent.click(toggle());
+    await flush();
+    expect(snapshotCalls()).toHaveLength(1);
+    expect(JSON.parse((snapshotCalls()[0][1] as RequestInit).body as string)).not.toHaveProperty(
+      "ownedOnly",
+    );
+    expect(deckGets()).toHaveLength(0);
+
+    // The row mints (any Add saves the deck): enabled, the hint gone, and a tick filters.
+    view.rerender(<RecommendationsPanel {...props({ ownedAvailable: true, deckId: "deck-1" })} />);
+    expect(toggle().disabled).toBe(false);
+    expect(hint()).toBeNull();
+    fireEvent.click(toggle());
+    await flush();
+    expect(String(deckGets().at(-1)![0])).toBe("/api/decks/deck-1/recommendations?owned=1");
+    expect(snapshotCalls()).toHaveLength(1);
+  });
+
+  it("a guest's draft keeps the hint it always had: sign in and import a collection", async () => {
+    render(<RecommendationsPanel {...props()} />);
+    await flush();
+    expect((screen.getByTestId("only-owned-toggle") as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole("link", { name: "import a collection" }).getAttribute("href")).toBe(
+      "/account",
+    );
+    expect(screen.queryByText(/starts once the deck is saved/)).toBeNull();
+  });
 });
 
 // --- Goals (Y6a, WAVE4 D7) -------------------------------------------------------------------

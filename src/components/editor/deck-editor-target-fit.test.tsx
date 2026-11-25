@@ -17,6 +17,13 @@ import { MD_QUERY, WIDE_QUERY } from "./use-tier";
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: vi.fn(), refresh: vi.fn(), push: vi.fn() }),
 }));
+// AUTOFILL-OWNED: a draft's editor reads the client's session to learn whether
+// its player has a collection. A guest here, so it asks nothing about one and
+// no test depends on the auth client's own request (the precedent is
+// src/components/site-header.test.tsx).
+vi.mock("@/lib/auth-client", () => ({
+  authClient: { useSession: () => ({ data: null, isPending: false, error: null }) },
+}));
 
 import { DeckEditor } from "./deck-editor";
 

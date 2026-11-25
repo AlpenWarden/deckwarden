@@ -1233,15 +1233,32 @@ export function mtgShellNotes(skipped: Readonly<Record<string, number>>, target:
  * more to bring in: the candidates held none, a per-card budget left none,
  * or the kept cards left no pick to replace. Counts, never card names (the
  * notes' rule), and every line names its source (D0).
+ *
+ * AUTOFILL-OWNED (the owner's decision 9 of 2026-11-24): with
+ * `fromCollection` the candidates were only cards the player owns, so both
+ * lines say "from your collection": where the Game Changers came from, and
+ * where Autofill found no more. The second stays about what Autofill could
+ * bring in, as without the flag: it is also what a list reads when the
+ * collection holds more of them and the kept cards left no pick to replace.
+ * No per-card budget applies to owned cards, so that clause never rides
+ * with it.
  */
 export function mtgReachNotes(
-  reach: Readonly<{ added: number; short: number; budgetUsd?: number }>,
+  reach: Readonly<{
+    added: number;
+    short: number;
+    budgetUsd?: number;
+    fromCollection?: boolean;
+  }>,
   target: number,
 ): string[] {
   const shows = Math.min(target, gameChangerLevel(Number.POSITIVE_INFINITY));
+  const owned = reach.fromCollection === true;
   const notes: string[] = [];
   if (reach.added > 0) {
-    const cards = `${reach.added} ${plural(reach.added, "Game Changer", "Game Changers")}`;
+    const cards = `${reach.added} ${plural(reach.added, "Game Changer", "Game Changers")}${
+      owned ? " from your collection" : ""
+    }`;
     notes.push(
       shows === target
         ? `Added ${cards} to show your Bracket ${target} target (${SOURCE_SHORT.gameChangers})`
@@ -1250,10 +1267,13 @@ export function mtgReachNotes(
   }
   if (reach.short > 0) {
     const cards = `${reach.short} ${plural(reach.short, "Game Changer", "Game Changers")}`;
+    const limit = owned
+      ? " from your collection"
+      : reach.budgetUsd === undefined
+        ? ""
+        : ` under the $${reach.budgetUsd}-a-card budget`;
     notes.push(
-      `Still ${cards} short of Bracket ${shows}. Autofill had no more to bring in${
-        reach.budgetUsd === undefined ? "" : ` under the $${reach.budgetUsd}-a-card budget`
-      } (${SOURCE_SHORT.gameChangers})`,
+      `Still ${cards} short of Bracket ${shows}. Autofill had no more to bring in${limit} (${SOURCE_SHORT.gameChangers})`,
     );
   }
   return notes;

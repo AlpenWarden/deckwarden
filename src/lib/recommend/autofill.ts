@@ -47,15 +47,29 @@ export const COMBO_PICK_CAP = 6;
 /** Tier C samples from the top `need × SAMPLE_WINDOW` of what's left. */
 export const SAMPLE_WINDOW = 2;
 
-/** The notes[] vocabulary — W9b renders these verbatim (pinned in tests). */
+/**
+ * The notes[] vocabulary — W9b renders these verbatim (pinned in tests).
+ *
+ * AUTOFILL-OWNED: with `fromCollection` the candidates were the player's own
+ * cards (the route's `ownedOnly`), so the shortfall says the collection ran
+ * out and counts the slots it left open. A list built that way is never
+ * topped up with cards to buy (the owner's decision 3), so this sentence is
+ * what a small collection gets where a full list would be. No per-card
+ * budget applies to owned cards, so it is never named here.
+ */
 export const FULL_NOTE = "The deck is already full. Nothing to add.";
 export function shortfallNote(
   picked: number,
   slots: number,
   labels: readonly string[],
   budgetUsd?: number,
+  fromCollection = false,
 ): string {
   const where = labels.join(", ");
+  if (fromCollection) {
+    const open = slots - picked;
+    return `Filled ${picked} of ${slots}. Your collection ran out of cards that fit, leaving ${open} ${open === 1 ? "slot" : "slots"} open in ${where}.`;
+  }
   return budgetUsd !== undefined
     ? `Filled ${picked} of ${slots}. The $${budgetUsd}-a-card budget leaves too few candidates in ${where}.`
     : `Filled ${picked} of ${slots}. Too few candidates in ${where}.`;
@@ -464,7 +478,12 @@ export function buildShell(input: ShellInput): ShellDraft {
 export function finishShell(
   draft: ShellDraft,
   fillers: readonly FillerPick[],
-  opts: { zone: string; budgetUsd?: number },
+  opts: {
+    zone: string;
+    budgetUsd?: number;
+    /** AUTOFILL-OWNED: the pools held only cards the player owns; the shortfall note says so. */
+    fromCollection?: boolean;
+  },
 ): ShellResult {
   const picks = [...draft.picks];
   let fillerQty = 0;
@@ -495,7 +514,9 @@ export function finishShell(
     if (fillerQty < draft.fillerNeed) labels.unshift(draft.baseLabel);
     // A gap without a named group (borrowing emptied every pool) still says so.
     if (labels.length === 0) labels.push("the candidate pools");
-    notes.push(shortfallNote(totalQty, draft.slots, labels, opts.budgetUsd));
+    notes.push(
+      shortfallNote(totalQty, draft.slots, labels, opts.budgetUsd, opts.fromCollection ?? false),
+    );
   }
 
   const byGroup = new Map<string, number>();

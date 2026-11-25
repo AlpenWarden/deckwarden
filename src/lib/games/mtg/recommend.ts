@@ -140,6 +140,9 @@ export const mtgAutofill: AutofillMeta = {
         .map((c, i) => ({ name: c.name, qty: qty[i], why: FILLER_WHY }))
         .filter((f) => f.qty > 0);
     },
+    // AUTOFILL-OWNED (the owner's decision 4): a list built from the
+    // collection still takes its basics from the template, owned or not.
+    collectionNote: "Basic lands are added as needed and aren't checked against your collection.",
   },
   lockShare: TOURNAMENT_STAPLE_SHARE,
   lockMinLists: 5,

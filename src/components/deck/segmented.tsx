@@ -33,6 +33,12 @@
  * side, inside the 1 px edge; the line-height is set, not inherited, so the
  * height doesn't depend on the surrounding text size. The container's edge
  * is `--border-control`, and the thumb slides in 120 ms.
+ *
+ * AUTOFILL-OWNED: `disabled` switches the whole choice off and keeps its
+ * value in view, dimmed (the Autofill sheet's Budget while "Only cards I
+ * own" is ticked). A choice that is off says why in a line of the caller's,
+ * named by `describedBy` (D1: a disabled control's reason is visible text,
+ * on every pointer).
  */
 import type { CSSProperties } from "react";
 
@@ -64,6 +70,8 @@ export function Segmented<T extends string>({
   value,
   onChange,
   touch = true,
+  disabled = false,
+  describedBy,
 }: {
   /** The visible label before the group; omit it when the question sits above (then pass ariaLabel). */
   label?: string;
@@ -75,6 +83,10 @@ export function Segmented<T extends string>({
   onChange: (value: T) => void;
   /** 44 px items on coarse pointers; on by default since R6. */
   touch?: boolean;
+  /** The choice is off: every item disabled, the value still shown. */
+  disabled?: boolean;
+  /** The id of the line that says why the choice is off (the group's `aria-describedby`). */
+  describedBy?: string;
 }) {
   const index = options.findIndex((option) => option.value === value);
   return (
@@ -82,6 +94,8 @@ export function Segmented<T extends string>({
       {label && <span className="text-muted-foreground text-xs">{label}</span>}
       <ToggleGroup
         aria-label={ariaLabel ?? label}
+        aria-describedby={describedBy}
+        disabled={disabled}
         value={value === null ? [] : [value]}
         onValueChange={(next: unknown[]) => {
           const picked = next[0];
@@ -101,7 +115,11 @@ export function Segmented<T extends string>({
           <span
             aria-hidden
             data-slot="segmented-thumb"
-            className="bg-accent pointer-events-none absolute inset-y-0 left-0 -z-10 w-[calc(100%/var(--seg-count))] translate-x-[calc(var(--seg-index)*100%)] motion-safe:transition-transform motion-safe:duration-[120ms] motion-safe:ease-settle-120"
+            className={cn(
+              "bg-accent pointer-events-none absolute inset-y-0 left-0 -z-10 w-[calc(100%/var(--seg-count))] translate-x-[calc(var(--seg-index)*100%)] motion-safe:transition-transform motion-safe:duration-[120ms] motion-safe:ease-settle-120",
+              // Off: the thumb fades with its label (the items' own `disabled:opacity-50`).
+              disabled && "opacity-50",
+            )}
           />
         )}
         {options.map((option) => (
