@@ -9,18 +9,24 @@
  * `document.activeElement` read with no await in between, and a submit by
  * the FormData a `submit` listener sees. SEARCH-EXAMPLES: the first focus
  * asks /api/cards/examples once, so tests that focus the box tell the two
- * routes apart by path (`suggests()`).
+ * routes apart by path (`suggests()`). COMMANDER-DOOR: where the build
+ * entry may show (its own describe, at the end): not on an editor path, not
+ * for a game with a pending commander pick, and in the words of the game
+ * whose rows show. The entry itself is name-suggest.test.tsx's. The cases
+ * above it are unedited; their rows are not leaders, so none gets an entry.
  */
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { writePickIntent } from "@/lib/decks/leader-pick-intent";
+import { listAdapters } from "@/lib/games/registry";
 import type { SuggestRow } from "@/lib/search/suggest";
 
 const nav = vi.hoisted(() => ({ pathname: "/" as string | null }));
 vi.mock("next/navigation", () => ({ usePathname: () => nav.pathname }));
 
-import { HeaderSearch, isEditorPath, pageGame } from "./header-search";
+import { BUILD_ENTRY, HeaderSearch, isEditorPath, pageGame } from "./header-search";
 import { SUGGEST_DEBOUNCE_MS } from "./name-suggest";
 
 interface Pending {
@@ -629,5 +635,178 @@ describe("HeaderSearch: the examples (SEARCH-EXAMPLES)", () => {
     act(() => input.focus());
     await respond({ nope: true }, examplesAsked()[0]);
     expect(listbox()).toBeNull();
+  });
+});
+
+describe("HeaderSearch: the build entry (COMMANDER-DOOR)", () => {
+  const ATRAXA = row("Atraxa, Praetors' Voice", {
+    isLeader: true,
+    slug: "atraxa-praetors-voice",
+    typeLine: "Legendary Creature — Phyrexian Angel Horror",
+    externalKey: "7e6b9b59-cd68-4e3c-827b-38833c92d6eb",
+  });
+  const LUFFY_LEADER = row("Monkey.D.Luffy", {
+    isLeader: true,
+    slug: "monkey-d-luffy-op01-003",
+    typeLine: "Leader — Straw Hat Crew",
+    externalKey: "OP01-003",
+  });
+  const ATRAXA_ENTRY = [
+    "Build with Atraxa, Praetors' Voice",
+    "/decks/new?game=mtg&leader=7e6b9b59-cd68-4e3c-827b-38833c92d6eb",
+  ];
+  const LUFFY_ENTRY = [
+    "Build with Monkey.D.Luffy (OP01-003)",
+    "/decks/new?game=optcg&leader=OP01-003",
+  ];
+
+  beforeEach(() => {
+    window.sessionStorage.clear();
+  });
+  afterEach(() => {
+    window.sessionStorage.clear();
+  });
+
+  /** The build entries in the open popup, as [words, address]. */
+  const entries = () =>
+    options()
+      .filter((o) => (o.getAttribute("href") ?? "").startsWith("/decks/new"))
+      .map((o) => [o.textContent, o.getAttribute("href")]);
+
+  /** Type a text the page's game answers. */
+  async function ask(input: HTMLElement, text: string, rows: SuggestRow[]) {
+    typeText(input, text);
+    await debounce();
+    await answer(rows);
+  }
+
+  /** Type a text the page's game misses and the other game answers. */
+  async function askOther(input: HTMLElement, text: string, rows: SuggestRow[]) {
+    typeText(input, text);
+    await debounce();
+    await answer([]);
+    await answer(rows);
+  }
+
+  it("atraxa offers the entry second in the list, between the top row and the rest; sol ring offers none", async () => {
+    const { input } = renderOn("/");
+    await ask(input, "atraxa", [ATRAXA, row("Atraxa's Fall", { typeLine: "Sorcery" })]);
+    expect(options().map((o) => [o.textContent, o.getAttribute("href")])).toEqual([
+      [expect.stringContaining("Atraxa, Praetors' Voice"), "/cards/id-atraxa-praetors-voice"],
+      ATRAXA_ENTRY,
+      [expect.stringContaining("Atraxa's Fall"), "/cards/id-atraxa-s-fall"],
+      ["Show every card matching “atraxa”↵", null],
+    ]);
+    expect(screen.getByRole("option", { name: ATRAXA_ENTRY[0] }).tagName).toBe("A");
+    expect(screen.getByRole("status").textContent).toBe("2 suggestions");
+
+    await ask(input, "sol ring", [SOL_RING]);
+    expect(entries()).toEqual([]);
+  });
+
+  it("a banned commander on top offers none", async () => {
+    const { input } = renderOn("/commanders", "mtg");
+    await ask(input, "golos", [
+      row("Golos, Tireless Pilgrim", { isLeader: true, buildBlocked: true }),
+    ]);
+    expect(options()).toHaveLength(2);
+    expect(entries()).toEqual([]);
+  });
+
+  it("from a Magic page, a text only One Piece answers offers a One Piece entry: the card number in its words, a One Piece deck", async () => {
+    const { input } = renderOn("/commanders", "mtg");
+    await askOther(input, "luffy", [LUFFY_LEADER]);
+    expect(screen.getByRole("status").textContent).toBe("No Magic cards match. 1 One Piece card.");
+    expect(entries()).toEqual([LUFFY_ENTRY]);
+    expect(screen.getByRole("option", { name: LUFFY_ENTRY[0] }).getAttribute("href")).toBe(
+      LUFFY_ENTRY[1],
+    );
+  });
+
+  it("from a One Piece page, a text only Magic answers offers a Magic entry: no number, a Magic deck", async () => {
+    const { input } = renderOn("/leaders", "optcg");
+    await askOther(input, "atraxa", [ATRAXA]);
+    expect(screen.getByRole("status").textContent).toBe("No One Piece cards match. 1 Magic card.");
+    expect(entries()).toEqual([ATRAXA_ENTRY]);
+  });
+
+  it("a One Piece page's own leader: the card number in the words", async () => {
+    const { input } = renderOn("/leaders", "optcg");
+    await ask(input, "luffy", [LUFFY_LEADER]);
+    expect(entries()).toEqual([LUFFY_ENTRY]);
+  });
+
+  it.each(["/decks", "/decks/new", "/decks/abc12345/edit"])(
+    "on %s (an editor path; /decks/new is the picker's too) there is no entry",
+    async (path) => {
+      const { input } = renderOn(path, "mtg");
+      await ask(input, "atraxa", [ATRAXA]);
+      expect(entries()).toEqual([]);
+      expect(options()).toHaveLength(2); // the row and the footer
+    },
+  );
+
+  it("on a share page /d/<id> there is one", async () => {
+    const { input } = renderOn("/d/abc12345", "mtg");
+    await ask(input, "atraxa", [ATRAXA]);
+    expect(entries()).toEqual([ATRAXA_ENTRY]);
+  });
+
+  it("a pending Magic pick on a Magic page: atraxa offers no entry, and a text only One Piece answers still offers its own", async () => {
+    writePickIntent({ deckId: "deck-1", deckName: "Krenko Mob Rule", game: "mtg" });
+    const { input } = renderOn("/commanders", "mtg");
+    await ask(input, "atraxa", [ATRAXA]);
+    expect(entries()).toEqual([]);
+    await askOther(input, "luffy", [LUFFY_LEADER]);
+    expect(entries()).toEqual([LUFFY_ENTRY]);
+  });
+
+  it("a pending One Piece pick on a Magic page: the One Piece answer offers none, and atraxa still offers its own", async () => {
+    writePickIntent({ deckId: "deck-2", deckName: "Luffy", game: "optcg" });
+    const { input } = renderOn("/commanders", "mtg");
+    await askOther(input, "luffy", [LUFFY_LEADER]);
+    expect(entries()).toEqual([]);
+    await ask(input, "atraxa", [ATRAXA]);
+    expect(entries()).toEqual([ATRAXA_ENTRY]);
+  });
+
+  it("a pending One Piece pick on a One Piece page: its own leader offers none", async () => {
+    writePickIntent({ deckId: "deck-2", deckName: "Luffy", game: "optcg" });
+    const { input } = renderOn("/leaders", "optcg");
+    await ask(input, "luffy", [LUFFY_LEADER]);
+    expect(entries()).toEqual([]);
+  });
+
+  it("the server's HTML is the same with a pick pending: the pick reads null there", () => {
+    nav.pathname = "/commanders";
+    const plain = renderToString(<HeaderSearch />);
+    writePickIntent({ deckId: "deck-1", deckName: "Krenko Mob Rule", game: "mtg" });
+    expect(renderToString(<HeaderSearch />)).toBe(plain);
+  });
+
+  it("following the entry closes the phone's row, like any link in the popup", async () => {
+    const follow = (e: MouseEvent) => e.preventDefault(); // jsdom cannot navigate
+    document.addEventListener("click", follow);
+    try {
+      const { input, form, searchButton } = renderOn("/", "mtg");
+      fireEvent.click(searchButton);
+      await ask(input, "atraxa", [ATRAXA]);
+      expect(form.hasAttribute("data-search-open")).toBe(true);
+      fireEvent.click(screen.getByRole("option", { name: ATRAXA_ENTRY[0] }));
+      expect(form.hasAttribute("data-search-open")).toBe(false);
+      expect(listbox()).toBeNull();
+    } finally {
+      document.removeEventListener("click", follow);
+    }
+  });
+
+  it("the header's own fact about each game matches the adapters: a printed id in the words exactly where the game has idBadge", () => {
+    const adapters = listAdapters();
+    expect(Object.keys(BUILD_ENTRY).sort()).toEqual(adapters.map((a) => a.id).sort());
+    for (const adapter of adapters) {
+      expect(BUILD_ENTRY[adapter.id as keyof typeof BUILD_ENTRY].withKey).toBe(
+        adapter.display.idBadge !== undefined,
+      );
+    }
   });
 });

@@ -82,8 +82,29 @@
  * so the popup never shuts and reopens between examples and rows. A focus
  * on a box that already holds a name changes nothing (no request, no
  * popup) until a key is typed, as before.
+ *
+ * COMMANDER-DOOR's opt-in `buildEntry` (the header's box once more): when
+ * the top row is a leader candidate that the answer does not mark
+ * `buildBlocked` (a banned or not-legal commander carries that member, see
+ * src/lib/search/suggest.ts), one more entry sits directly under it, "Build
+ * with <card name>", a link to a new deck with that card in place. It is an
+ * option like the rows (arrow keys, Enter, 44 px on coarse pointers, its
+ * words its accessible name), with a hammer where a thumbnail sits, and its
+ * words wrap, so a long name is never cut off. Only the top row gets one
+ * (LATER row 506). The prop names the games that may get an entry and, per
+ * game, whether the words carry the row's printed id ("Build with
+ * Monkey.D.Luffy (OP01-003)": One Piece's leaders share names); the box
+ * reads it for the game whose rows show, so after a fallback the other
+ * game's entry is that game's. Never among the examples, never in pick
+ * mode. The status line counts rows only, as with the footer. So the popup
+ * now holds up to 8 rows, this entry and the footer, which amends D0's "at
+ * most 8 rows". The highlight is a position in the list, and an answer that
+ * lands does not clear it (Base UI offers no way to), so an answer landing
+ * under a highlight on the second position puts this entry under it
+ * (LATER.md has the row). Without the prop (the five other boxes) nothing
+ * differs.
  */
-import { SearchIcon } from "lucide-react";
+import { HammerIcon, SearchIcon } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 
@@ -97,6 +118,7 @@ import {
   AutocompleteList,
   AutocompleteStatus,
 } from "@/components/ui/autocomplete";
+import { leaderBuildHref, leaderBuildWords } from "@/lib/decks/leader-build-link";
 import { NAME_MIN_CHARS, nameKey } from "@/lib/search/name-key";
 import type { SuggestGame, SuggestResponse, SuggestRow } from "@/lib/search/suggest";
 import { cn } from "@/lib/utils";
@@ -113,7 +135,17 @@ export interface NameExample {
 }
 
 type ExampleEntry = NameExample & { example: true };
-type Entry = SuggestRow | typeof FOOTER | ExampleEntry;
+
+/** COMMANDER-DOOR: the entry under a top row that can lead a new deck. */
+interface BuildEntry {
+  build: true;
+  /** The top row's id, for a key of the entry's own beside the row's. */
+  id: string;
+  href: string;
+  words: string;
+}
+
+type Entry = SuggestRow | typeof FOOTER | ExampleEntry | BuildEntry;
 
 export interface NameSuggestProps {
   game: "mtg" | "optcg";
@@ -154,6 +186,13 @@ export interface NameSuggestProps {
    * no empty state. Empty: none yet, nothing shows until they arrive.
    */
   examples?: readonly NameExample[];
+  /**
+   * COMMANDER-DOOR: the games whose top row may get a "Build with <card
+   * name>" entry under it, each with whether the words carry the row's
+   * printed id. Read for the game whose rows show. Undefined, or a game left
+   * out: no entry for it.
+   */
+  buildEntry?: Partial<Record<SuggestGame, { withKey: boolean }>>;
 }
 
 /** The line over the other game's rows, and the status line's words for them. */
@@ -192,6 +231,7 @@ export function NameSuggest({
   fallback,
   onAnswer,
   examples,
+  buildEntry,
 }: NameSuggestProps) {
   const [inner, setInner] = useState(defaultValue ?? "");
   const text = value ?? inner;
@@ -273,10 +313,37 @@ export function NameSuggest({
   // The examples stand until the first answer for a long enough text lands.
   const showExamples = exampleEntries.length > 0 && (!active || (answer === null && !failed));
   const open = want && (showExamples || (active && answer !== null && !failed));
-  const entries: Entry[] = showExamples ? exampleEntries : footerNoun ? [...rows, FOOTER] : rows;
-  const typed = text.trim();
   /** The game whose rows show (the other game's after a fallback). */
   const rowGame = answer?.game ?? game;
+  // COMMANDER-DOOR: the top row's build entry. The top row is read off the
+  // answer itself (the first row with a place to go, which is `rows[0]`),
+  // and the entry is memoized on that row's own text and the option, so the
+  // list's items keep their identity between renders.
+  const withKey = onPick ? undefined : buildEntry?.[rowGame]?.withKey;
+  const top =
+    withKey === undefined ? undefined : answer?.rows.find((row) => rowHref(row, target) !== null);
+  const topId = top !== undefined && top.isLeader && !top.buildBlocked ? top.id : null;
+  const topName = top?.name ?? "";
+  const topKey = top?.externalKey ?? "";
+  const build = useMemo<BuildEntry | null>(
+    () =>
+      topId === null
+        ? null
+        : {
+            build: true,
+            id: topId,
+            href: leaderBuildHref(rowGame, topKey),
+            words: leaderBuildWords(topName, withKey ? topKey : null),
+          },
+    [topId, topName, topKey, withKey, rowGame],
+  );
+  const listed: Entry[] = build ? [rows[0], build, ...rows.slice(1)] : rows;
+  const entries: Entry[] = showExamples
+    ? exampleEntries
+    : footerNoun
+      ? [...listed, FOOTER]
+      : listed;
+  const typed = text.trim();
   const note =
     fallback && answer && answer.game !== answer.asked && rows.length > 0
       ? fallbackLine(fallback.names, answer.asked, answer.game, rows.length)
@@ -306,7 +373,7 @@ export function NameSuggest({
       }}
       highlightItemOnHover={false}
       itemToStringValue={(entry: Entry) =>
-        "footer" in entry ? text : "example" in entry ? entry.text : entry.name
+        "footer" in entry || "build" in entry ? text : "example" in entry ? entry.text : entry.name
       }
       name={name}
     >
@@ -385,6 +452,17 @@ export function NameSuggest({
                 separated={rows.length > 0}
                 onPick={() => inputRef.current?.form?.requestSubmit()}
               />
+            ) : "build" in entry ? (
+              <AutocompleteItem
+                key={`build:${entry.id}`}
+                value={entry}
+                render={<Link href={entry.href} prefetch={false} />}
+                onClick={(e) => {
+                  if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) setWant(false);
+                }}
+              >
+                <BuildBody words={entry.words} />
+              </AutocompleteItem>
             ) : onPick ? (
               <AutocompleteItem
                 key={entry.id}
@@ -432,6 +510,26 @@ function ExampleBody({ example }: { example: NameExample }) {
       <span className="text-muted-foreground max-w-[45%] shrink-0 truncate text-xs">
         {example.detail}
       </span>
+    </>
+  );
+}
+
+/**
+ * The build entry's hammer (in the thumbnail's column) and its words. They
+ * wrap rather than truncate, as the footer's do: the card's whole name is
+ * the entry's point.
+ */
+function BuildBody({ words }: { words: string }) {
+  return (
+    <>
+      <span
+        aria-hidden
+        data-slot="build-icon"
+        className="text-muted-foreground flex w-[1.625rem] shrink-0 justify-center"
+      >
+        <HammerIcon />
+      </span>
+      <span className="min-w-0 flex-1 wrap-break-word">{words}</span>
     </>
   );
 }

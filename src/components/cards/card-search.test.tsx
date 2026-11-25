@@ -12,13 +12,21 @@
  * requests, chip, header, "Most popular" strip and `?printing=` tile links;
  * the picker's own behavior is set-picker.test.tsx's. SEARCH-EXAMPLES: the
  * Try line's sentence of /cards links, and when it leaves for good.
+ * COMMANDER-DOOR: the grid's request carries `format=<code>` last (the ten
+ * exact pins of the grid's address above gained it; the strip's two did
+ * not), and a tile whose card can lead a deck and is legal gets a build
+ * link under its image. The new cases have a row builder of their own
+ * (`wire`): the shared `results()` emits no leader candidate, and the cases
+ * that count links rely on that.
  */
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { CONDITIONAL_BAN, LEADER_BUILD_CASES } from "@/lib/decks/leader-build-fixtures";
+import { writePickIntent } from "@/lib/decks/leader-pick-intent";
 import type { ReleasedSet } from "@/lib/sets/lines";
 
-import { CardSearch, MOST_PLAYED, SKELETON_CARDS } from "./card-search";
+import { CardSearch, MOST_PLAYED, SKELETON_CARDS, TileBuildLink } from "./card-search";
 
 type Deferred = { resolve: (body: unknown) => void };
 let requests: { url: string; deferred: Deferred }[] = [];
@@ -91,7 +99,7 @@ describe("CardSearch — groups, chips, skeleton", () => {
       vi.advanceTimersByTime(250);
     });
     expect(requests).toHaveLength(1);
-    expect(requests[0].url).toBe("/api/cards/search?game=mtg&limit=60");
+    expect(requests[0].url).toBe("/api/cards/search?game=mtg&limit=60&format=commander");
     requests[0].deferred.resolve({ results: results(2), total: 2 });
     await flush();
     expect(document.querySelector("[data-slot=results-skeleton]")).toBeNull();
@@ -128,7 +136,7 @@ describe("CardSearch — groups, chips, skeleton", () => {
     });
     // X2 (REC-2): a typed name asks for the dropdown's order.
     expect(requests.at(-1)!.url).toBe(
-      "/api/cards/search?game=optcg&limit=60&name=luffy&type=Character&color=within%3ARG&traits=Straw+Hat+Crew&sort=best",
+      "/api/cards/search?game=optcg&limit=60&name=luffy&type=Character&color=within%3ARG&traits=Straw+Hat+Crew&sort=best&format=standard",
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Remove filter: Color Red" }));
@@ -149,7 +157,9 @@ describe("CardSearch — groups, chips, skeleton", () => {
       vi.advanceTimersByTime(250);
     });
     // One Piece without a name falls back to the honest name sort (P4.4).
-    expect(requests.at(-1)!.url).toBe("/api/cards/search?game=optcg&limit=60&sort=name");
+    expect(requests.at(-1)!.url).toBe(
+      "/api/cards/search?game=optcg&limit=60&sort=name&format=standard",
+    );
   });
 
   it("Load more keeps its own loading label and appends; a re-search keeps the results, not the skeleton", async () => {
@@ -248,7 +258,7 @@ describe("CardSearch — the Set group (X4a)", () => {
     // …then the grid and the strip, together, after the debounce.
     expect(requests.map((r) => r.url)).toEqual([
       "/api/sets?game=mtg",
-      "/api/cards/search?game=mtg&limit=60&set=blb&sort=number",
+      "/api/cards/search?game=mtg&limit=60&set=blb&sort=number&format=commander",
       `/api/cards/search?game=mtg&limit=${MOST_PLAYED}&set=blb&sort=pop`,
     ]);
     await answer("/api/sets", { sets: SETS });
@@ -292,7 +302,9 @@ describe("CardSearch — the Set group (X4a)", () => {
   it("the picker's first press fetches the list once; a pick re-runs the grid at once; × and Clear all clear it", async () => {
     render(<CardSearch game="mtg" />);
     debounce();
-    expect(requests.map((r) => r.url)).toEqual(["/api/cards/search?game=mtg&limit=60"]);
+    expect(requests.map((r) => r.url)).toEqual([
+      "/api/cards/search?game=mtg&limit=60&format=commander",
+    ]);
     await answer("/api/cards/search", { results: results(2), total: 2 });
 
     const setBox = screen.getByRole("combobox", { name: "Set" }) as HTMLInputElement;
@@ -311,7 +323,7 @@ describe("CardSearch — the Set group (X4a)", () => {
     expect(setBox.value).toBe("Bloomburrow");
     debounce();
     expect(lastUrl("/api/cards/search?game=mtg&limit=60")).toBe(
-      "/api/cards/search?game=mtg&limit=60&set=blb&sort=number",
+      "/api/cards/search?game=mtg&limit=60&set=blb&sort=number&format=commander",
     );
     expect(lastUrl(`/api/cards/search?game=mtg&limit=${MOST_PLAYED}`)).toBe(
       `/api/cards/search?game=mtg&limit=${MOST_PLAYED}&set=blb&sort=pop`,
@@ -327,7 +339,7 @@ describe("CardSearch — the Set group (X4a)", () => {
     expect(setBox.value).toBe("");
     expect(document.querySelector("[data-slot=set-header]")).toBeNull();
     debounce();
-    expect(requests.at(-1)!.url).toBe("/api/cards/search?game=mtg&limit=60");
+    expect(requests.at(-1)!.url).toBe("/api/cards/search?game=mtg&limit=60&format=commander");
 
     fireEvent.mouseDown(setBox, { button: 0 });
     fireEvent.input(setBox, { target: { value: "eld" }, inputType: "insertText" });
@@ -336,14 +348,14 @@ describe("CardSearch — the Set group (X4a)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Clear all" }));
     expect(setChip()).toBeNull();
     debounce();
-    expect(requests.at(-1)!.url).toBe("/api/cards/search?game=mtg&limit=60");
+    expect(requests.at(-1)!.url).toBe("/api/cards/search?game=mtg&limit=60&format=commander");
   });
 
   it("a set and a name: the dropdown's order inside the set, and no strip", async () => {
     render(<CardSearch game="mtg" initialSet="blb" initialName="for" />);
     debounce();
     expect(pending("/api/cards/search").map((r) => r.url)).toEqual([
-      "/api/cards/search?game=mtg&limit=60&name=for&set=blb&sort=best",
+      "/api/cards/search?game=mtg&limit=60&name=for&set=blb&sort=best&format=commander",
     ]);
     await answer("/api/sets", { sets: SETS });
     await answer("/api/cards/search", { results: scopedResults(2), total: 2 });
@@ -383,7 +395,9 @@ describe("CardSearch — the Set group (X4a)", () => {
   it("One Piece ignores a preset set: no group, no chip, no list, the request unchanged", async () => {
     render(<CardSearch game="optcg" initialSet="op01" />);
     debounce();
-    expect(requests.map((r) => r.url)).toEqual(["/api/cards/search?game=optcg&limit=60&sort=name"]);
+    expect(requests.map((r) => r.url)).toEqual([
+      "/api/cards/search?game=optcg&limit=60&sort=name&format=standard",
+    ]);
     expect(setChip()).toBeNull();
   });
 });
@@ -467,5 +481,264 @@ describe("CardSearch — the Try line (SEARCH-EXAMPLES)", () => {
     expect(tryLine()).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Remove filter: Set Bloomburrow (BLB)" }));
     expect(tryLine()).toBeNull();
+  });
+});
+
+/** A results row as the search route sends it with `format=`: the card and its rulings there. */
+function wire(name: string, extra: Record<string, unknown> = {}) {
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  return {
+    id: `id-${slug}`,
+    name,
+    externalKey: `key-${slug}`,
+    primaryType: "Creature",
+    costValue: 4,
+    colorsMask: 0,
+    ciMask: 0,
+    cheapestUsd: null,
+    popularity: null as number | null,
+    isLeaderCandidate: false,
+    isPreview: false,
+    attrs: {},
+    legality: [] as unknown[],
+    image: null,
+    ...extra,
+  };
+}
+const leaderRow = (name: string, extra: Record<string, unknown> = {}) =>
+  wire(name, { isLeaderCandidate: true, ...extra });
+
+describe("CardSearch — build links under commander tiles (COMMANDER-DOOR)", () => {
+  const GRID = "/api/cards/search?game=mtg&limit=60";
+  const OP_GRID = "/api/cards/search?game=optcg&limit=60";
+
+  beforeEach(() => {
+    window.sessionStorage.clear();
+  });
+  afterEach(() => {
+    window.sessionStorage.clear();
+  });
+
+  const buildLinks = () => [
+    ...document.querySelectorAll<HTMLAnchorElement>('a[data-slot="tile-build"]'),
+  ];
+  /** Each build link as [its accessible name, its address]. */
+  const built = () =>
+    screen
+      .queryAllByRole("link", { name: /^Build with / })
+      .map((a) => [a.textContent, a.getAttribute("href")]);
+  /** The words a link shows: its text without what is kept for screen readers. */
+  function visibleWords(link: HTMLElement): string {
+    const copy = link.cloneNode(true) as HTMLElement;
+    for (const hidden of copy.querySelectorAll(".sr-only")) hidden.remove();
+    return copy.textContent ?? "";
+  }
+
+  async function grid(rows: unknown[], game: "mtg" | "optcg" = "mtg", name = "") {
+    render(<CardSearch game={game} initialName={name} />);
+    debounce();
+    await answer(game === "mtg" ? GRID : OP_GRID, { results: rows, total: rows.length });
+  }
+
+  it("each legal commander's tile has its build link under its image, in the same item, and no other tile has one", async () => {
+    await grid(
+      [
+        leaderRow("Atraxa, Praetors' Voice"),
+        wire("Atraxa's Fall"),
+        leaderRow("Atraxa, Grand Unifier"),
+        leaderRow("Golos, Tireless Pilgrim", { legality: [{ status: "banned" }] }),
+      ],
+      "mtg",
+      "atraxa",
+    );
+    expect(lastUrl(GRID)).toBe(`${GRID}&name=atraxa&sort=best&format=commander`);
+    expect(built()).toEqual([
+      [
+        "Build with Atraxa, Praetors' Voice",
+        "/decks/new?game=mtg&leader=key-atraxa-praetors-voice",
+      ],
+      ["Build with Atraxa, Grand Unifier", "/decks/new?game=mtg&leader=key-atraxa-grand-unifier"],
+    ]);
+    expect(buildLinks()).toHaveLength(2);
+
+    const items = [...document.querySelectorAll("ul.grid > li")];
+    expect(items.map((li) => within(li as HTMLElement).getAllByRole("link").length)).toEqual([
+      2, 1, 2, 1,
+    ]);
+    // In the tile's own item: the image's link to the card page first, then the build link.
+    const [image, build] = within(items[0] as HTMLElement).getAllByRole("link");
+    expect(image.getAttribute("href")).toBe("/cards/id-atraxa-praetors-voice");
+    expect(image.textContent).toBe("Atraxa, Praetors' Voice"); // the tile, here its no-image stand-in
+    expect(build).toBe(buildLinks()[0]);
+    expect(image.contains(build)).toBe(false);
+    // The grid draws the plan's form: every word shows.
+    expect(visibleWords(build)).toBe("Build with Atraxa, Praetors' Voice");
+  });
+
+  it.each(LEADER_BUILD_CASES)("the rule, $label: link = $builds", async (c) => {
+    await grid([wire("Card", { isLeaderCandidate: c.isLeaderCandidate, legality: c.legality })]);
+    expect(buildLinks()).toHaveLength(c.builds ? 1 : 0);
+    expect(screen.getAllByRole("link")).toHaveLength(c.builds ? 2 : 1);
+  });
+
+  it("a ban that carries a condition does not block; beside it, an unconditional ban does", async () => {
+    await grid([
+      leaderRow("Pair Banned", { legality: CONDITIONAL_BAN }),
+      leaderRow("Banned Outright", { legality: [...CONDITIONAL_BAN, { status: "banned" }] }),
+    ]);
+    expect(built().map(([words]) => words)).toEqual(["Build with Pair Banned"]);
+  });
+
+  it("One Piece: the card number is in the words and is the key; OP03-040 has no link, OP11-040 with a pair ban only has one", async () => {
+    await grid(
+      [
+        leaderRow("Monkey.D.Luffy", { id: "l1", externalKey: "OP01-003" }),
+        leaderRow("Nami", { id: "n", externalKey: "OP03-040", legality: [{ status: "banned" }] }),
+        leaderRow("Monkey.D.Luffy", {
+          id: "l2",
+          externalKey: "OP11-040",
+          legality: CONDITIONAL_BAN,
+        }),
+        wire("Monkey.D.Luffy", { id: "c", externalKey: "OP01-024" }),
+      ],
+      "optcg",
+    );
+    expect(lastUrl(OP_GRID)).toBe(`${OP_GRID}&sort=name&format=standard`);
+    expect(built()).toEqual([
+      ["Build with Monkey.D.Luffy (OP01-003)", "/decks/new?game=optcg&leader=OP01-003"],
+      ["Build with Monkey.D.Luffy (OP11-040)", "/decks/new?game=optcg&leader=OP11-040"],
+    ]);
+  });
+
+  it("no two build links on a results page share a name, on a Magic search and on a One Piece one", async () => {
+    await grid([leaderRow("Atraxa, Praetors' Voice"), leaderRow("Atraxa, Grand Unifier")]);
+    let names = built().map(([words]) => words);
+    expect(new Set(names).size).toBe(names.length);
+    cleanup();
+
+    stubFetch();
+    await grid(
+      ["OP01-003", "OP05-060", "ST01-001"].map((key) =>
+        leaderRow("Monkey.D.Luffy", { id: key, externalKey: key }),
+      ),
+      "optcg",
+    );
+    names = built().map(([words]) => words);
+    expect(names).toHaveLength(3);
+    expect(new Set(names).size).toBe(3);
+  });
+
+  it("while a commander pick is pending for the grid's game there are no build links; a pick for the other game changes nothing", async () => {
+    writePickIntent({ deckId: "deck-1", deckName: "Krenko Mob Rule", game: "mtg" });
+    await grid([leaderRow("Atraxa, Praetors' Voice"), wire("Sol Ring")]);
+    expect(buildLinks()).toHaveLength(0);
+    expect(screen.getAllByRole("link")).toHaveLength(2); // the tiles keep their card links
+    cleanup();
+
+    window.sessionStorage.clear();
+    writePickIntent({ deckId: "deck-2", deckName: "Luffy", game: "optcg" });
+    stubFetch();
+    await grid([leaderRow("Atraxa, Praetors' Voice"), wire("Sol Ring")]);
+    expect(built().map(([words]) => words)).toEqual(["Build with Atraxa, Praetors' Voice"]);
+  });
+
+  it("the set strip asks what it asked before, and its tiles get no build links though they are commanders", async () => {
+    const scoped = (name: string, i: number, rank: number | null) =>
+      leaderRow(name, {
+        printingId: `11111111-1111-4111-8111-${String(i).padStart(12, "0")}`,
+        popularity: rank,
+      });
+    render(<CardSearch game="mtg" initialSet="blb" />);
+    debounce();
+    expect(lastUrl(`/api/cards/search?game=mtg&limit=${MOST_PLAYED}`)).toBe(
+      `/api/cards/search?game=mtg&limit=${MOST_PLAYED}&set=blb&sort=pop`,
+    );
+    expect(lastUrl(GRID)).toBe(`${GRID}&set=blb&sort=number&format=commander`);
+    await answer("/api/sets", { sets: SETS });
+    await answer(GRID, { results: [scoped("Baylen, the Haymaker", 0, 46)], total: 279 });
+    await answer(`/api/cards/search?game=mtg&limit=${MOST_PLAYED}`, {
+      results: [
+        scoped("Baylen, the Haymaker", 0, 46),
+        scoped("Bello, Bard of the Brambles", 1, 90),
+      ],
+      total: 279,
+    });
+    const strip = screen.getByRole("region", { name: "Most popular in Bloomburrow" });
+    const stripLinks = within(strip).getAllByRole("link");
+    expect(stripLinks).toHaveLength(2);
+    expect(stripLinks.every((a) => a.getAttribute("href")!.startsWith("/cards/"))).toBe(true);
+    expect(strip.querySelector('[data-slot="tile-build"]')).toBeNull();
+    // The grid's own tile for the same card has one; its image keeps the set's printing.
+    const build = buildLinks();
+    expect(build).toHaveLength(1);
+    expect(build[0].getAttribute("href")).toBe(
+      "/decks/new?game=mtg&leader=key-baylen-the-haymaker",
+    );
+    const tile = build[0].closest("li")!;
+    expect(within(tile).getAllByRole("link")[0].getAttribute("href")).toMatch(/\?printing=1111/);
+  });
+
+  it("Load more pages get them too, and ask with the format after the offset", async () => {
+    const first = [leaderRow("Atraxa, Praetors' Voice"), ...results(59, 1)];
+    render(<CardSearch game="mtg" />);
+    debounce();
+    await answer(GRID, { results: first, total: 61 });
+    expect(buildLinks()).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    expect(requests.at(-1)!.url).toBe(`${GRID}&offset=60&format=commander`);
+    await answer(GRID, { results: [leaderRow("Kenrith, the Returned King")], total: 61 });
+    expect(built().map(([words]) => words)).toEqual([
+      "Build with Atraxa, Praetors' Voice",
+      "Build with Kenrith, the Returned King",
+    ]);
+  });
+
+  it("the link is a block under the image: a 44 px target on touch with no negative margin, its words in a span that wraps", async () => {
+    await grid([leaderRow("Asmoranomardicadaistinaculdacar")]);
+    const [link] = buildLinks();
+    const classes = link.className.split(/\s+/);
+    expect(classes).toEqual(
+      expect.arrayContaining([
+        "block",
+        "pointer-coarse:flex",
+        "pointer-coarse:min-h-11",
+        "pointer-coarse:items-center",
+      ]),
+    );
+    expect(classes.some((c) => /(^|:)-m[trblxy]?-/.test(c))).toBe(false);
+    const words = link.firstElementChild as HTMLElement;
+    expect(words.tagName).toBe("SPAN");
+    expect(words.className).toBe("min-w-0 wrap-break-word");
+    expect(words.textContent).toBe("Build with Asmoranomardicadaistinaculdacar");
+  });
+
+  it.each(["full", "short"] as const)(
+    "the %s form: the link's name is the whole sentence and begins with its visible words, word for word",
+    (form) => {
+      const WORDS = "Build with Esika, God of the Tree // The Prismatic Bridge";
+      render(<TileBuildLink href="/decks/new?game=mtg&leader=k" words={WORDS} form={form} />);
+      const link = screen.getByRole("link", { name: WORDS });
+      const visible = visibleWords(link);
+      expect(visible.trim()).toBe(form === "full" ? WORDS : "Build");
+      // Word for word: the name starts with what shows, up to a word's end.
+      expect(WORDS.startsWith(visible)).toBe(true);
+      expect(WORDS === visible || visible.endsWith(" ")).toBe(true);
+      // The rest is there for screen readers only, after the space (never with it inside).
+      const hidden = link.querySelector(".sr-only");
+      if (form === "short") expect(hidden?.textContent).toBe(WORDS.slice("Build ".length));
+      else expect(hidden).toBeNull();
+    },
+  );
+
+  it("the short form keeps a One Piece card number in the name", () => {
+    render(
+      <TileBuildLink
+        href="/decks/new?game=optcg&leader=OP01-003"
+        words="Build with Monkey.D.Luffy (OP01-003)"
+        form="short"
+      />,
+    );
+    const link = screen.getByRole("link", { name: "Build with Monkey.D.Luffy (OP01-003)" });
+    expect(visibleWords(link).trim()).toBe("Build");
   });
 });

@@ -7,8 +7,13 @@
  * so "Enter with no highlight submits the form" is pinned as its contract:
  * the keydown is NOT default-prevented (the browser then submits) and the
  * popup closes; the footer row's submit is a real `submit` event.
+ *
+ * COMMANDER-DOOR: the opt-in build entry under a top row that can lead a new
+ * deck, in its own describe at the end. The cases above it run without the
+ * prop, with rows that are leaders, and are unedited: no entry there is the
+ * proof that the five other boxes did not change.
  */
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -574,5 +579,244 @@ describe("NameSuggest: the examples (SEARCH-EXAMPLES)", () => {
     await debounce();
     expect(listbox()).toBeNull();
     expect(pending).toHaveLength(0);
+  });
+});
+
+describe("NameSuggest: the build entry (COMMANDER-DOOR)", () => {
+  /** The header's box: every card, rows to card pages, the footer, and the opt-in prop. */
+  const HEADER: Partial<NameSuggestProps> = {
+    scope: "cards",
+    rowHref: { prefix: "/cards/", key: "id" },
+    detail: "type",
+    footerNoun: "card",
+    buildEntry: { mtg: { withKey: false }, optcg: { withKey: true } },
+  };
+  const SOL_RING = row("Sol Ring", { isLeader: false, slug: null, typeLine: "Artifact" });
+  const GOLOS = row("Golos, Tireless Pilgrim", { buildBlocked: true });
+  const LUFFY = row("Monkey.D.Luffy", { externalKey: "OP01-003", typeLine: "Leader" });
+  const ATRAXA_BUILD = "Build with Atraxa, Praetors' Voice";
+  const ATRAXA_HREF = "/decks/new?game=mtg&leader=key-atraxa-praetors-voice";
+
+  /** Each option as its tag, its address and its words. */
+  const listed = () => options().map((o) => [o.tagName, o.getAttribute("href"), o.textContent]);
+  const buildOptions = () =>
+    options().filter((o) => (o.getAttribute("href") ?? "").startsWith("/decks/new"));
+
+  /** Record followed links instead of navigating (jsdom cannot). */
+  function recordFollows() {
+    const followed: string[] = [];
+    const follow = (e: MouseEvent) => {
+      const a = (e.target as Element).closest("a");
+      if (a) {
+        followed.push(a.getAttribute("href")!);
+        e.preventDefault();
+      }
+    };
+    document.addEventListener("click", follow);
+    return { followed, stop: () => document.removeEventListener("click", follow) };
+  }
+
+  async function typed(input: HTMLElement, text: string, rows: SuggestRow[]) {
+    typeText(input, text);
+    await debounce();
+    await answer(rows);
+  }
+
+  it("a top row that is a legal leader gets one entry directly under it: an option that is a link, named by its words", async () => {
+    // The entry's key is its own: sharing the row's would make React report a duplicate.
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { input } = renderInForm(HEADER);
+    await typed(input, "atraxa", [ATRAXA, GRAND]);
+    expect(errors).not.toHaveBeenCalled();
+    errors.mockRestore();
+    expect(listed()).toEqual([
+      ["A", "/cards/id-atraxa-praetors-voice", expect.stringContaining("Atraxa, Praetors' Voice")],
+      ["A", ATRAXA_HREF, ATRAXA_BUILD],
+      ["A", "/cards/id-atraxa-grand-unifier", expect.stringContaining("Atraxa, Grand Unifier")],
+      ["DIV", null, "Show every card matching “atraxa”↵"],
+    ]);
+    // An option of the listbox whose accessible name is its words.
+    const entry = screen.getByRole("option", { name: ATRAXA_BUILD });
+    expect(entry).toBe(options()[1]);
+    // A hammer in the thumbnail's column, hidden from the name; no thumbnail of its own.
+    const icon = entry.querySelector('[data-slot="build-icon"]')!;
+    expect(icon.getAttribute("aria-hidden")).toBe("true");
+    expect(icon.querySelector("svg")).not.toBeNull();
+    expect(entry.querySelector('[data-slot="thumb"]')).toBeNull();
+    // The whole name stays readable: the words wrap and are never cut off.
+    const words = entry.querySelector("span:not([data-slot])")!;
+    expect(words.textContent).toBe(ATRAXA_BUILD);
+    expect(words.className).toContain("min-w-0");
+    expect(words.className).toContain("wrap-break-word");
+    expect(words.className).not.toContain("truncate");
+    // The status line counts the rows, not the entry (nor the footer).
+    expect(screen.getByRole("status").textContent).toBe("2 suggestions");
+  });
+
+  it("only the top row: a leader in second place gets none, and neither does a top row that is no leader", async () => {
+    const { input } = renderInForm(HEADER);
+    await typed(input, "sol", [SOL_RING, ATRAXA]);
+    expect(buildOptions()).toHaveLength(0);
+    expect(options()).toHaveLength(3);
+    await typed(input, "sol ring", [SOL_RING]);
+    expect(buildOptions()).toHaveLength(0);
+  });
+
+  it("a top row that carries buildBlocked (a banned commander) gets none, though the next row could lead", async () => {
+    const { input } = renderInForm(HEADER);
+    await typed(input, "golos", [GOLOS, ATRAXA]);
+    expect(buildOptions()).toHaveLength(0);
+    expect(listed().map(([, href]) => href)).toEqual([
+      "/cards/id-golos-tireless-pilgrim",
+      "/cards/id-atraxa-praetors-voice",
+      null,
+    ]);
+  });
+
+  it("without the prop, a top row that is a legal leader adds no entry (the five other boxes)", async () => {
+    const { input } = renderInForm({ ...HEADER, buildEntry: undefined });
+    await typed(input, "atraxa", [ATRAXA, GRAND]);
+    expect(buildOptions()).toHaveLength(0);
+    expect(options()).toHaveLength(3);
+  });
+
+  it("a game the prop leaves out gets none", async () => {
+    const { input } = renderInForm({ ...HEADER, buildEntry: { optcg: { withKey: true } } });
+    await typed(input, "atraxa", [ATRAXA]);
+    expect(buildOptions()).toHaveLength(0);
+  });
+
+  it("with the prop and onPick (pick mode), none either, even where the rows have somewhere to go", async () => {
+    const onPick = vi.fn();
+    render(
+      <NameSuggest
+        game="mtg"
+        scope="cards"
+        detail="type"
+        aria-label="Search a Magic card"
+        onPick={onPick}
+        rowHref={HEADER.rowHref}
+        buildEntry={HEADER.buildEntry}
+      />,
+    );
+    const input = screen.getByRole("combobox", { name: "Search a Magic card" });
+    await typed(input, "atraxa", [ATRAXA, GRAND]);
+    expect(options().map((o) => o.tagName)).toEqual(["DIV", "DIV"]);
+    expect(buildOptions()).toHaveLength(0);
+  });
+
+  it("with the key, the words carry the row's printed id, and the link is the row's game", async () => {
+    const { input } = renderInForm({ ...HEADER, game: "optcg" });
+    await typed(input, "luffy", [LUFFY]);
+    const entry = screen.getByRole("option", { name: "Build with Monkey.D.Luffy (OP01-003)" });
+    expect(entry.getAttribute("href")).toBe("/decks/new?game=optcg&leader=OP01-003");
+    // Magic, on the same prop, names the card alone.
+    cleanup();
+    const magic = renderInForm(HEADER);
+    await typed(magic.input, "atraxa", [ATRAXA]);
+    expect(buildOptions().map((o) => o.textContent)).toEqual([ATRAXA_BUILD]);
+  });
+
+  it("arrow down twice and Enter follows the entry, and the box keeps its text while the entry is highlighted", async () => {
+    const { followed, stop } = recordFollows();
+    try {
+      const onValueChange = vi.fn();
+      const { input } = renderInForm({ ...HEADER, onValueChange });
+      await typed(input, "atraxa", [ATRAXA, GRAND]);
+      onValueChange.mockClear();
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      expect(options()[0].hasAttribute("data-highlighted")).toBe(true);
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      const entry = options()[1];
+      expect(entry.hasAttribute("data-highlighted")).toBe(true);
+      expect(input.getAttribute("aria-activedescendant")).toBe(entry.id);
+      expect(input.value).toBe("atraxa");
+      const notPrevented = fireEvent.keyDown(input, { key: "Enter" });
+      expect(notPrevented).toBe(false); // a pick, not a form submit
+      expect(followed).toEqual([ATRAXA_HREF]);
+      expect(input.value).toBe("atraxa");
+      expect(onValueChange).not.toHaveBeenCalled();
+      expect(listbox()).toBeNull();
+    } finally {
+      stop();
+    }
+  });
+
+  it("a plain click on the entry follows it and closes the popup; a new-tab click keeps it open", async () => {
+    const { followed, stop } = recordFollows();
+    try {
+      const { input } = renderInForm(HEADER);
+      await typed(input, "atraxa", [ATRAXA]);
+      fireEvent.click(buildOptions()[0], { metaKey: true });
+      expect(listbox()).not.toBeNull();
+      fireEvent.click(buildOptions()[0]);
+      expect(followed).toEqual([ATRAXA_HREF, ATRAXA_HREF]);
+      expect(listbox()).toBeNull();
+      expect(input.value).toBe("atraxa");
+    } finally {
+      stop();
+    }
+  });
+
+  it("Enter with nothing highlighted is still left to the browser, entry or no entry", async () => {
+    const { input } = renderInForm(HEADER);
+    await typed(input, "atraxa", [ATRAXA]);
+    expect(buildOptions()).toHaveLength(1);
+    expect(options().some((o) => o.hasAttribute("data-highlighted"))).toBe(false);
+    const notPrevented = fireEvent.keyDown(input, { key: "Enter" });
+    expect(notPrevented).toBe(true); // the form submits the typed text
+    expect(listbox()).toBeNull();
+    expect(input.value).toBe("atraxa");
+  });
+
+  it("never among the examples: they stand alone until the first answer lands", async () => {
+    const EXAMPLES = [{ text: "Atraxa", href: "/cards?q=Atraxa", detail: "Magic" }];
+    const { input } = renderInForm({ ...HEADER, examples: EXAMPLES });
+    act(() => input.focus());
+    expect(listed()).toEqual([["A", "/cards?q=Atraxa", "AtraxaMagic"]]);
+    typeText(input, "atraxa");
+    await debounce();
+    expect(listed()).toEqual([["A", "/cards?q=Atraxa", "AtraxaMagic"]]); // the ask is in flight
+    await answer([ATRAXA]);
+    expect(buildOptions().map((o) => o.textContent)).toEqual([ATRAXA_BUILD]);
+  });
+
+  it("the same top row under a longer text keeps its entry; a new top row moves it", async () => {
+    const { input } = renderInForm(HEADER);
+    await typed(input, "atr", [ATRAXA, GRAND]);
+    expect(buildOptions().map((o) => o.textContent)).toEqual([ATRAXA_BUILD]);
+    await typed(input, "atraxa g", [GRAND, ATRAXA]);
+    expect(listed().map(([, , words]) => words)).toEqual([
+      expect.stringContaining("Atraxa, Grand Unifier"),
+      "Build with Atraxa, Grand Unifier",
+      expect.stringContaining("Atraxa, Praetors' Voice"),
+      "Show every card matching “atraxa g”↵",
+    ]);
+  });
+
+  it("an answer that lands under a highlight keeps the highlight's position: on the second position that is the entry (pinned as it is, LATER.md)", async () => {
+    // Typing clears the highlight; an answer landing does not, and Base UI gives no way
+    // to clear it from outside. So: rows shown, a longer text typed, the arrow keys
+    // pressed while its answer is in flight, and then the answer lands.
+    const { followed, stop } = recordFollows();
+    try {
+      const { input } = renderInForm(HEADER);
+      await typed(input, "so", [SOL_RING, row("Solemn Simulacrum", { isLeader: false })]);
+      typeText(input, "atraxa");
+      expect(options().some((o) => o.hasAttribute("data-highlighted"))).toBe(false);
+      await debounce(); // the ask is out; the old rows still show
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      expect(options()[1].textContent).toContain("Solemn Simulacrum");
+      expect(options()[1].hasAttribute("data-highlighted")).toBe(true);
+
+      await answer([ATRAXA, GRAND]);
+      const highlighted = options().filter((o) => o.hasAttribute("data-highlighted"));
+      expect(highlighted.map((o) => o.textContent)).toEqual([ATRAXA_BUILD]);
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(followed).toEqual([ATRAXA_HREF]);
+    } finally {
+      stop();
+    }
   });
 });

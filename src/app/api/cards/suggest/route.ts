@@ -7,6 +7,17 @@
  * (src/lib/search/name-match.ts) — the statements live in
  * src/lib/search/suggest.ts.
  *
+ * COMMANDER-DOOR: a row that is a leader candidate with a current ruling
+ * other than `legal` in the format a new deck opens in (a banned or
+ * not-legal commander) also carries `buildBlocked: true`, a tenth key, and
+ * every other row is the nine above, byte for byte. The header's dropdown
+ * reads it to decide whether its top row gets a "Build with <card name>"
+ * entry; both scopes carry it and the other boxes ignore it. Each
+ * statement selects one more column for it and the statement count does
+ * not change. The answer is kept by the CDN for an hour and served stale
+ * for up to a day, so a new ban reaches the dropdown that much later; the
+ * editor flags a banned leader at once.
+ *
  * Deliberately NOT /api/cards/search with a small limit: a search row
  * carries the card's full rules text and no hub slug, and its order is
  * similarity; the editor's list rides that route's default order and must

@@ -7,6 +7,15 @@
  * `?leader=` apply. 30-minute TTL; cleared on apply and on the banner's
  * Cancel.
  *
+ * More readers since COMMANDER-DOOR. The card page hosts the hub CTA island,
+ * so a pending pick adds "Use for '{deck}'" there too. The two search
+ * surfaces read it to stay quiet: while a pick is pending for a game, the
+ * header search offers no "Build with <card name>" entry for that game
+ * (src/components/search/header-search.tsx) and the /cards grid draws no
+ * build links (src/components/cards/card-search.tsx), because either would
+ * open a new deck while the banner says the player is choosing for a saved
+ * one.
+ *
  * The store follows `src/lib/hub/index-view.ts`'s useSyncExternalStore
  * discipline with one deliberate difference: the SERVER snapshot is null —
  * hub pages are ISR/static and their server HTML must stay byte-identical

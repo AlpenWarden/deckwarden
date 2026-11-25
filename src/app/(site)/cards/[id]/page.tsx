@@ -20,6 +20,21 @@
  * R5b (G3): the accent band above the hero card — the gradient only, no
  * art: the full card IS the art here, a crop above it would be redundant,
  * and 35k card pages must not each pay a Scryfall call.
+ *
+ * COMMANDER-DOOR (the owner's idea 4 of 2026-11-24): a card that can lead a
+ * deck gets the hub's build button, "Build with this commander" (or
+ * "leader"), in a row of its own under the Legality chips. One button:
+ * "Start with a starter shell" stays on the hub. The rule is
+ * src/lib/decks/leader-build.ts's (a leader candidate that is legal in the
+ * format a new deck opens in; no row means legal), and a removed card gets
+ * none, because the new deck's `?leader=` seed refuses removed cards. The
+ * caching intent is unchanged: the button reads what `getCard` already
+ * loaded, so no statement and no session read is added, and the page is
+ * the same for every visitor. Its one personal part, "Use for “<deck>”"
+ * for a player who came from a saved deck's "Browse commanders", is the
+ * island's and appears only after hydration, from sessionStorage. The CDN
+ * keeps the page for up to a day, so a new ban can leave the button up
+ * that long; the editor flags a banned leader at once.
  */
 import { ArrowLeftIcon, ArrowRightIcon } from "lucide-react";
 import type { Metadata } from "next";
@@ -27,6 +42,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { ComboList } from "@/components/combos/combo-list";
+import { HubBuildCta } from "@/components/hub/hub-build-cta";
 import { OptcgPostureLine } from "@/components/optcg-posture-line";
 import { SURFACE_BAND, SurfaceHeader } from "@/components/surface-header";
 import { GAME_ID, GAMES } from "@/db/seed-data";
@@ -34,6 +50,7 @@ import { withPartner } from "@/lib/buy/links";
 import { INLINE_PRINTINGS_MAX, toGalleryPrinting } from "@/lib/cards/printings";
 import { isTokenCard } from "@/lib/cards/tokens";
 import { COMBOS_SHOWN, loadCombosForCard } from "@/lib/combos/queries";
+import { leaderCanBuild, leaderFormat } from "@/lib/decks/leader-build";
 import { getAdapter } from "@/lib/games/registry";
 import type { CardData } from "@/lib/games/types";
 import { breadcrumbJsonLd, JsonLd } from "@/lib/seo/jsonld";
@@ -108,6 +125,15 @@ export default async function CardPage({ params }: PageProps<"/cards/[id]">) {
 
   const statLine = adapter.display.statLine?.(card) ?? null;
   const statusByFormat = new Map(legalityRows.map((l) => [l.formatId, l.status]));
+  // The build action (COMMANDER-DOOR): the shared rule, read off the row of
+  // the format a new deck opens in. No such row among the game's formats
+  // means no button; that row with no legality row for the card means legal.
+  const buildFormat = leaderFormat(gameCode);
+  const buildFormatRow = buildFormat && formatRows.find((f) => f.id === buildFormat.id);
+  const canBuild =
+    buildFormatRow !== undefined &&
+    !identity.isRemoved &&
+    leaderCanBuild(identity.isLeaderCandidate, statusByFormat.get(buildFormatRow.id));
   // Slim rows for the gallery (W5): ≤ 100 into the HTML (default first — the
   // page sort above), no image URLs on the wire; "Show all" fetches the rest.
   const galleryRows = printings.slice(0, INLINE_PRINTINGS_MAX).map(toGalleryPrinting);
@@ -203,6 +229,17 @@ export default async function CardPage({ params }: PageProps<"/cards/[id]">) {
                 );
               })}
             </ul>
+            {canBuild && (
+              // A row of its own, in the hubs' wrapper: the island returns a
+              // bare fragment of buttons. Never inside the chips' list.
+              <div data-slot="card-build" className="mt-4 flex flex-wrap items-center gap-3">
+                <HubBuildCta
+                  game={gameCode}
+                  leaderKey={identity.externalKey}
+                  label={`Build with this ${adapter.display.leaderNoun.toLowerCase()}`}
+                />
+              </div>
+            )}
 
             <PrintingsTable />
 

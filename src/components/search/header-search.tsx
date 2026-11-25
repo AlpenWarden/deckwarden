@@ -58,6 +58,21 @@
  * search. A failed ask leaves the box as it was, and the next focus asks
  * again. Still nothing on page load: the header renders the same HTML on
  * every page, every day.
+ *
+ * COMMANDER-DOOR (the owner's idea 4 of 2026-11-24): when the top
+ * suggestion is a legal commander (or One Piece leader), the entry under it
+ * reads "Build with <card name>" and opens a new deck with that card in
+ * place; NameSuggest draws it, this file says where it may show
+ * (`buildEntry`). Not on an editor path, the game picker included: the
+ * new-deck page reads `?leader=` once per mount, so the link would open no
+ * commander there, and the header reads the path alone, so it cannot tell
+ * the picker from a draft (LATER.md has the row). Not for a game while a
+ * commander pick is pending for it (a saved deck's "Browse commanders",
+ * src/lib/decks/leader-pick-intent.ts): the entry would open a new deck
+ * while the banner says the player is choosing for a saved one. The pick
+ * is read per game, never by the page's game, because the rows shown may be
+ * the other game's. It reads null on the server, so the header's HTML is
+ * what it was. One Piece's words carry the card number (BUILD_ENTRY).
  */
 import { SearchIcon } from "lucide-react";
 import { usePathname } from "next/navigation";
@@ -77,6 +92,7 @@ import type { SwitchGame } from "@/components/game-switch";
 import { NameSuggest, type NameExample } from "@/components/search/name-suggest";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
+import { usePickIntent } from "@/lib/decks/leader-pick-intent";
 import type { SearchExample } from "@/lib/search/examples";
 import { nameKey } from "@/lib/search/name-key";
 import { cn } from "@/lib/utils";
@@ -93,6 +109,19 @@ const OTHER_GAME: Record<SwitchGame, SwitchGame> = { mtg: "optcg", optcg: "mtg" 
  * labels live beside the adapter registry, which the header must not ship.
  */
 const GAME_NAMES: Record<SwitchGame, string> = { mtg: "Magic", optcg: "One Piece" };
+
+/**
+ * COMMANDER-DOOR: each game's build entry, and whether its words carry the
+ * card's printed id. One Piece's leaders share names (17 are Monkey.D.Luffy),
+ * so its entry reads "Build with Monkey.D.Luffy (OP01-003)"; a Magic name is
+ * one card. The adapters hold the same fact as `display.idBadge`, and the
+ * header must not ship them (GAME_NAMES above): header-search.test.tsx pins
+ * this constant against the registry.
+ */
+export const BUILD_ENTRY: Record<SwitchGame, { withKey: boolean }> = {
+  mtg: { withKey: false },
+  optcg: { withKey: true },
+};
 
 /**
  * The input's look: ui/input.tsx's recipe (the edge token, the focus ring,
@@ -207,6 +236,20 @@ export function HeaderSearch() {
     [examples, game],
   );
 
+  // COMMANDER-DOOR: where the top row may get its build entry. A game is
+  // left out while a pick is pending for it, and nothing is offered on an
+  // editor path. Null on the server and until hydration, where it changes
+  // nothing: the entry needs an answer, and an answer needs a typed name.
+  const magicPick = usePickIntent("mtg") !== null;
+  const onePiecePick = usePickIntent("optcg") !== null;
+  const buildEntry = useMemo(() => {
+    if (onEditor) return undefined;
+    return {
+      ...(magicPick ? {} : { mtg: BUILD_ENTRY.mtg }),
+      ...(onePiecePick ? {} : { optcg: BUILD_ENTRY.optcg }),
+    };
+  }, [onEditor, magicPick, onePiecePick]);
+
   /** The tap that opens the row focuses its input in the same task (iOS keyboard). */
   const openRow = () => {
     flushSync(() => setOpen(true));
@@ -285,6 +328,7 @@ export function HeaderSearch() {
             fallback={{ game: OTHER_GAME[game], names: GAME_NAMES }}
             onAnswer={setAnswered}
             examples={shownExamples}
+            buildEntry={buildEntry}
           />
           {!onEditor && (
             <Kbd

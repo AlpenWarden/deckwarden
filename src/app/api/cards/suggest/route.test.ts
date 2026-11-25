@@ -6,13 +6,22 @@
  * trigram pass; none below two characters) and the row mapping are what the
  * route really does. The ranking's semantics are name-match.test.ts's; the
  * live acceptance table ran against the database (WAVE3.md X2 ship note).
+ *
+ * COMMANDER-DOOR: every statement selects one more column, last: the card's
+ * ruling in the format a new deck opens in. No test here executes SQL, so
+ * the column is pinned by its text and by the value bound for the format;
+ * what it answers on real data was checked against the rule on the dev
+ * database (REDESIGN.md, "A build button where a commander is found"). The
+ * older cases feed rows of ten values and so read the column as absent.
  */
 import { drizzle } from "drizzle-orm/postgres-js";
 import { NextRequest, NextResponse } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as schema from "@/db/schema";
+import { FORMAT_ID } from "@/db/seed-data";
 import { TOKEN_DOC } from "@/lib/cards/tokens";
+import { buildBlockedSql } from "@/lib/search/suggest";
 
 interface Statement {
   sql: string;
@@ -255,5 +264,145 @@ describe("GET /api/cards/suggest", () => {
       expect(res.status).toBe(400);
     }
     expect(statements).toHaveLength(0);
+  });
+});
+
+describe("GET /api/cards/suggest — the ruling column (COMMANDER-DOOR)", () => {
+  /** A row with the column's value after the ten the older cases feed. */
+  const ruled = (r: Parameters<typeof row>[0], blocked: boolean): unknown[] => [...row(r), blocked];
+
+  /** The value bound where the column names its format. */
+  function boundFormat(s: Statement): unknown {
+    const place = s.sql.match(/l\.format_id = \$(\d+)/);
+    expect(place).not.toBeNull();
+    return s.params[Number(place![1]) - 1];
+  }
+
+  /** The column's own text: from its EXISTS to the select list's end. */
+  function column(s: Statement): string {
+    const start = s.sql.indexOf("EXISTS (");
+    expect(start).toBeGreaterThan(-1);
+    return s.sql.slice(start, s.sql.indexOf(' from "card_identities"'));
+  }
+
+  const NINE = [
+    "id",
+    "name",
+    "slug",
+    "isLeader",
+    "typeLine",
+    "colorsMask",
+    "ciMask",
+    "externalKey",
+    "image",
+  ];
+
+  it("all three statements select it last: current, unconditional, any status but legal, in the game's own format", async () => {
+    answers = [[], []]; // a name pass that finds nothing, then the near misses
+    await get("game=mtg&scope=cards&q=urzas+saga");
+    await get("game=optcg&scope=cards&q=op01-02"); // the card-number pass
+    await get("game=optcg&scope=cards&q=luffy"); // finds nothing here, so its near misses run too
+    expect(statements).toHaveLength(5);
+    const [name, nearMisses, idPass, opName, opNearMisses] = statements;
+
+    for (const s of statements) {
+      // Last in the select list, straight after the printing's two columns.
+      expect(s.sql).toMatch(/"card_printings"\."image_override", EXISTS \(/);
+      const text = column(s).replace(/\s+/g, " ");
+      expect(text).toBe(
+        'EXISTS ( SELECT 1 FROM "legalities" l WHERE l.card_identity_id = "card_identities"."id" ' +
+          `AND l.format_id = ${s.sql.match(/l\.format_id = (\$\d+)/)![1]} ` +
+          "AND l.effective_to IS NULL AND l.condition IS NULL AND l.status <> 'legal')",
+      );
+      // A column, never a condition: the WHERE names no ruling.
+      expect(s.sql.slice(s.sql.indexOf(" where ")).includes("legalities")).toBe(false);
+    }
+    // The game ids are the same two numbers as the format ids, so read the bound place itself.
+    expect(boundFormat(name)).toBe(FORMAT_ID.commander);
+    expect(boundFormat(nearMisses)).toBe(FORMAT_ID.commander);
+    expect(boundFormat(idPass)).toBe(FORMAT_ID.optcgStandard);
+    expect(boundFormat(opName)).toBe(FORMAT_ID.optcgStandard);
+    expect(boundFormat(opNearMisses)).toBe(FORMAT_ID.optcgStandard);
+    expect(FORMAT_ID.commander).not.toBe(FORMAT_ID.optcgStandard);
+    // The two older pins on the statements' text still hold with the column in.
+    expect(name.sql).not.toContain('is_leader_candidate" = ');
+    expect(idPass.sql).not.toContain("CASE");
+  });
+
+  it("the exported column names the card's own id in a statement with no join too", () => {
+    // In a select list with no join drizzle writes that list's columns bare; a bare "id"
+    // inside the subquery would be the ruling's. Met on the dev database, pinned here.
+    for (const [game, formatId] of [
+      ["mtg", FORMAT_ID.commander],
+      ["optcg", FORMAT_ID.optcgStandard],
+    ] as const) {
+      const alone = fakeDb
+        .select({ id: schema.cardIdentities.id, blocked: buildBlockedSql(game) })
+        .from(schema.cardIdentities)
+        .toSQL();
+      expect(alone.sql.startsWith('select "id", EXISTS (')).toBe(true);
+      expect(alone.sql).toContain('l.card_identity_id = "card_identities"."id"');
+      expect(alone.params).toEqual([formatId]);
+    }
+  });
+
+  it("a row keeps exactly its nine keys unless it is a leader candidate that fails the rule", async () => {
+    answers = [
+      [
+        // A legal commander: the column is false.
+        ruled({ id: "atraxa", name: "Atraxa, Praetors' Voice", isLeader: true, slug: "a" }, false),
+        // A card with a ruling that is no leader candidate: the column is true, and says nothing.
+        ruled({ id: "lotus", name: "Black Lotus", typeLine: "Artifact" }, true),
+        ruled({ id: "sol", name: "Sol Ring", typeLine: "Artifact" }, false),
+        // A banned commander.
+        ruled({ id: "golos", name: "Golos, Tireless Pilgrim", isLeader: true, slug: "g" }, true),
+      ],
+    ];
+    const { body } = await get("game=mtg&scope=cards&q=ol");
+    const [atraxa, lotus, sol, golos] = body.results as Record<string, unknown>[];
+    for (const plain of [atraxa, lotus, sol]) {
+      expect(Object.keys(plain)).toEqual(NINE);
+      expect("buildBlocked" in plain).toBe(false);
+    }
+    expect(Object.keys(golos)).toEqual([...NINE, "buildBlocked"]);
+    expect(golos.buildBlocked).toBe(true);
+    expect(golos).toMatchObject({ name: "Golos, Tireless Pilgrim", isLeader: true });
+  });
+
+  it("only a real true blocks: a driver that sent the column as text would block nothing, not everything", async () => {
+    // postgres.js parses the column to a boolean (read on the dev database). Were it ever
+    // to arrive unparsed, "f" is a truthy string: the row must not read as blocked.
+    answers = [[[...row({ id: "atraxa", name: "Atraxa, Praetors' Voice", isLeader: true }), "f"]]];
+    const { body } = await get("game=mtg&scope=cards&q=atraxa");
+    expect(Object.keys(body.results[0])).toEqual(NINE);
+  });
+
+  it("the hub scope's rows carry the member the same way (those boxes ignore it)", async () => {
+    answers = [
+      [
+        ruled({ id: "golos", name: "Golos, Tireless Pilgrim", isLeader: true, slug: "g" }, true),
+        ruled({ id: "gonti", name: "Gonti, Lord of Luxury", isLeader: true, slug: "o" }, false),
+      ],
+    ];
+    const { body } = await get("game=mtg&scope=leaders&q=go");
+    expect(boundFormat(statements[0])).toBe(FORMAT_ID.commander);
+    expect(body.results.map((r: Record<string, unknown>) => Object.keys(r).length)).toEqual([
+      10, 9,
+    ]);
+  });
+
+  it("a One Piece leader banned outright carries it; one with no ruling does not", async () => {
+    answers = [
+      [
+        ruled({ id: "nami", name: "Nami", isLeader: true, externalKey: "OP03-040" }, true),
+        ruled(
+          { id: "luffy", name: "Monkey.D.Luffy", isLeader: true, externalKey: "OP11-040" },
+          false,
+        ),
+      ],
+    ];
+    const { body } = await get("game=optcg&scope=cards&q=op");
+    expect(body.results[0]).toMatchObject({ externalKey: "OP03-040", buildBlocked: true });
+    expect(Object.keys(body.results[1])).toEqual(NINE);
   });
 });

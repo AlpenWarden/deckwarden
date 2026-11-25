@@ -68,6 +68,31 @@
  * or chosen set: clearing the box never brings it back, so it never
  * flashes while a name is edited. On touch each link is a 44 px target
  * whose margins give the extra back, so the line keeps its height.
+ *
+ * COMMANDER-DOOR (the owner's idea 4 of 2026-11-24): a tile whose card can
+ * lead a deck and is legal in the format a new deck opens in gets one link
+ * under its image, "Build with <card name>" (One Piece: with the card
+ * number, "Build with Monkey.D.Luffy (OP01-003)", because its leaders share
+ * names), to a new deck with that card in place. The rule is
+ * src/lib/decks/leader-build.ts's, read off each row's `legality`, so the
+ * grid's request, and only it, carries `format=<code>` after its other
+ * params. Caching intent of that fetch: the route's header is unchanged
+ * (`s-maxage=300, stale-while-revalidate=3600`); the address is a new CDN
+ * key, which starts cold; and an uncached page that has rows costs one
+ * more statement (the legality read, about a quarter of a millisecond in
+ * the database for 60 ids). So a new ban reaches the grid within about an
+ * hour, and the editor flags a banned leader at once. The strip's request
+ * and tiles are as they were: without `format` every row answers
+ * `legality: []`, which the rule would read as legal, so the strip is never
+ * drawn through the grid's tile and gets no links (LATER.md has the row).
+ * No links while a commander pick is pending for this game
+ * (src/lib/decks/leader-pick-intent.ts): a link would open a new deck
+ * while the banner says the player is choosing for a saved one. The link
+ * is a block of its own under the image, never over it: on touch a 44 px
+ * target with no negative margin (a tap on the image's bottom edge still
+ * opens the card), its words in a span that wraps and breaks a long word.
+ * Tab order is image, build, next image: up to 120 stops on a page of 60
+ * commanders. "Load more" pages and set-scoped tiles behave the same.
  */
 import { XIcon } from "lucide-react";
 import Link from "next/link";
@@ -82,6 +107,10 @@ import { Button } from "@/components/ui/button";
 import { Chip } from "@/components/ui/chip";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import type { CardWire } from "@/lib/decks/editor-state";
+import { leaderCanBuild, leaderFormat, unconditionalStatus } from "@/lib/decks/leader-build";
+import { leaderBuildHref, leaderBuildWords } from "@/lib/decks/leader-build-link";
+import { usePickIntent } from "@/lib/decks/leader-pick-intent";
 import { getAdapter } from "@/lib/games/registry";
 import type { SearchExample } from "@/lib/search/examples";
 import { setFieldKey, setPlace, type ReleasedSet } from "@/lib/sets/lines";
@@ -112,15 +141,67 @@ const FIELD_CLASS =
 const EXAMPLE_LINK_CLASS =
   "text-foreground focus-visible:ring-ring/50 rounded-sm font-medium underline underline-offset-4 outline-none hover:no-underline focus-visible:ring-2 pointer-coarse:-my-[14px] pointer-coarse:inline-flex pointer-coarse:min-h-11 pointer-coarse:items-center";
 
-interface SearchResult {
-  id: string;
-  name: string;
-  image: string | null;
-  /** EDHREC rank for Magic (lower = more played); null when unranked. */
-  popularity?: number | null;
-  /** X4a: the printing in the chosen set — present only on a set-scoped answer. */
-  printingId?: string;
+/**
+ * A tile's build link (COMMANDER-DOOR): which of its two forms the grid
+ * draws. "full" shows every word, wrapped (the plan's form); "short" shows
+ * "Build" and keeps the rest for screen readers. One of the two goes once
+ * the owner has seen both.
+ */
+export type TileBuildForm = "full" | "short";
+const TILE_BUILD_FORM: TileBuildForm = "full";
+
+/**
+ * The link's look: the start doors' recipe (new-deck-chooser.tsx) as a
+ * block. On touch it is a 44 px target with no negative margin, so it
+ * never lies over the card's own link or the next row; the 2 px above it
+ * there keep its focus ring, and the image's, off each other.
+ */
+const TILE_BUILD_CLASS =
+  "text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 mt-1.5 block rounded-sm text-sm leading-snug underline underline-offset-4 outline-none focus-visible:ring-2 pointer-coarse:mt-0.5 pointer-coarse:flex pointer-coarse:min-h-11 pointer-coarse:items-center";
+
+/**
+ * "Build with <card name>" under a results tile. Its accessible name is
+ * `words` in both forms: the short form's visible "Build" is the name's
+ * first word, and the rest sits in a hidden span after the space. The
+ * space stands before that span, not inside it: Chrome computes "Build
+ * with …" either way, but an accessible-name reader with no layout (the
+ * tests' own) drops a hidden span's leading space and reads "Buildwith …";
+ * the space ends the line, so it adds no width and no underline. The words
+ * have a span of their own so that on touch (a flex box) a long word breaks
+ * instead of setting the link's width.
+ */
+export function TileBuildLink({
+  href,
+  words,
+  form,
+}: {
+  href: string;
+  words: string;
+  form: TileBuildForm;
+}) {
+  const space = words.indexOf(" ");
+  return (
+    // No prefetch: a page holds up to 60 of these, and one is followed.
+    <Link href={href} prefetch={false} data-slot="tile-build" className={TILE_BUILD_CLASS}>
+      <span className="min-w-0 wrap-break-word">
+        {form === "full" || space === -1 ? (
+          words
+        ) : (
+          <>
+            {words.slice(0, space)} <span className="sr-only">{words.slice(space + 1)}</span>
+          </>
+        )}
+      </span>
+    </Link>
+  );
 }
+
+/**
+ * A results row: the search route's card (the editor's `CardWire`, which
+ * the adapter's `idBadge` takes whole), plus the printing in the chosen set
+ * on a set-scoped answer (X4a).
+ */
+type SearchResult = CardWire & { printingId?: string };
 
 interface SearchResponse {
   results: SearchResult[];
@@ -239,6 +320,18 @@ export function CardSearch({
 
   const colorParam = game === "mtg" ? "ci" : "color";
 
+  // COMMANDER-DOOR: the format the build rule reads (a new deck's; both
+  // games have one, which leader-build.test.ts pins for every adapter), and
+  // the pending pick that silences the links for this game.
+  const adapter = getAdapter(game);
+  const buildFormat = leaderFormat(game);
+  const pick = usePickIntent(game);
+  /** The words of a tile's build link, or null when its card gets none. */
+  const buildWords = (card: SearchResult): string | null =>
+    pick === null && leaderCanBuild(card.isLeaderCandidate, unconditionalStatus(card.legality))
+      ? leaderBuildWords(card.name, adapter.display.idBadge?.(card) ?? null)
+      : null;
+
   /** The grid's request — or, with `mostPlayed`, the set's "Most popular" strip. */
   const buildUrl = (offset: number, mostPlayed = false) => {
     const params = new URLSearchParams({
@@ -260,6 +353,9 @@ export function CardSearch({
     else if (scoped) params.set("sort", "number");
     else if (game === "optcg") params.set("sort", "name");
     if (offset) params.set("offset", String(offset));
+    // COMMANDER-DOOR: the grid's rows carry their ruling in the new-deck
+    // format. Last, and never on the strip's request (the docblock).
+    if (!mostPlayed && buildFormat) params.set("format", buildFormat.code);
     return `/api/cards/search?${params}`;
   };
 
@@ -606,16 +702,26 @@ export function CardSearch({
         </ul>
       ) : (
         <ul className={GRID_CLASS} aria-busy={loading || undefined}>
-          {results.map((card) => (
-            <li key={card.id}>
-              <Link
-                href={tileHref(card)}
-                className="focus-visible:ring-accent-game block rounded-[4.75%/3.5%] outline-none focus-visible:ring-2"
-              >
-                <CardImage src={card.image} alt={card.name} width={488} height={680} frame />
-              </Link>
-            </li>
-          ))}
+          {results.map((card) => {
+            const words = buildWords(card);
+            return (
+              <li key={card.id}>
+                <Link
+                  href={tileHref(card)}
+                  className="focus-visible:ring-accent-game block rounded-[4.75%/3.5%] outline-none focus-visible:ring-2"
+                >
+                  <CardImage src={card.image} alt={card.name} width={488} height={680} frame />
+                </Link>
+                {words !== null && (
+                  <TileBuildLink
+                    href={leaderBuildHref(game, card.externalKey)}
+                    words={words}
+                    form={TILE_BUILD_FORM}
+                  />
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
 

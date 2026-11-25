@@ -4,11 +4,20 @@
  * The hub page's build CTA island (W4, WAVE2.md D3): the server render is
  * EXACTLY today's anchor — "Build with this commander / leader" →
  * /decks/new?game=…&leader=… — because the hub pages are ISR and the smokes
- * grep that markup (hubs-smoke:103-108, seo-smoke:339-343). The pick intent
+ * grep that markup (scripts/hubs-smoke.ts: "hub build CTA seeds the
+ * commander by oracle id (R5b)", the starter-shell anchor and "the door's
+ * words stay out of the pinned build CTA"; scripts/seo-smoke.ts: "OP hub
+ * build CTA latches the leader"). The pick intent
  * is read through useSyncExternalStore with a null server snapshot (the
  * index-view discipline), so a fresh same-game intent adds the primary
  * "Use for '{deck}'" → /decks/<id>/edit?leader=<key> only after hydration.
  * Never `useSearchParams` here — that would flip the ISR pages dynamic.
+ *
+ * A second host since COMMANDER-DOOR: the card page
+ * (src/app/(site)/cards/[id]/page.tsx), for a card that can lead a deck,
+ * with no `autofill` (one button there; the starter shell stays on the
+ * hub). That page is dynamic and kept by the CDN, the same for every
+ * visitor, so the null server snapshot matters there as it does here.
  */
 import Link from "next/link";
 
