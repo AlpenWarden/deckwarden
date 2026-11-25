@@ -34,6 +34,22 @@
  *   where Autofill found no more.
  *
  * The live half is smoke:collection's owned checks.
+ *
+ * AUTOFILL-TOTAL (`totalUsd`), with the pools, the entry facts and the
+ * fillers priced by the test:
+ *
+ * - without it nothing runs: no `deck` in the answer, the fillers read once;
+ * - with it the answer carries the whole deck's figure against the total
+ *   (the commander, the kept cards and every pick), and that figure is the
+ *   list's own; inside the total the picks are the plan's;
+ * - over it the list is fitted, or a note says how far over and why, naming
+ *   the commander and the kept cards when they alone are over;
+ * - a card with no known price is counted beside the figure;
+ * - under a total a target is kept where it fits, and the reach notes are
+ *   counted after the fit and name the total;
+ * - `ownedOnly` ignores it, and a total that is no amount is a 400.
+ *
+ * The live half is smoke:autofill's two examples.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -548,5 +564,279 @@ describe("POST /api/decks/autofill — only cards I own (AUTOFILL-OWNED)", () =>
     } finally {
       for (const c of mineChangers) every.delete(c.id);
     }
+  });
+});
+
+describe("POST /api/decks/autofill — a deck total (AUTOFILL-TOTAL)", () => {
+  interface Deck {
+    totalUsd: number;
+    estUsd: number;
+    unpriced: number;
+    keptUsd: number;
+    keptUnpriced: number;
+  }
+  const deckOf = (body: unknown) => (body as { deck?: Deck }).deck;
+  const qtyOf = (picks: { qty: number; tier: string }[], tier?: string) =>
+    picks.filter((p) => tier === undefined || p.tier === tier).reduce((n, p) => n + p.qty, 0);
+  /** The pools with a price per card; anything unnamed keeps the fixture's $1.00. */
+  const price = (usd: (c: MtgCard) => string | null | undefined) => {
+    mocks.gatherSignals.mockImplementation(
+      async (_snapshot: unknown, opts: { scope?: { op: string } }) => ({
+        candidates: (opts.scope?.op === "eq"
+          ? lands.map((c, i) => candidate(c, i + 1))
+          : curvePool.map((c) => candidate(c, popularity.get(c.id)!))
+        ).map((row) => {
+          const set = usd(every.get(row.id)!);
+          return set === undefined ? row : { ...row, cheapestUsd: set };
+        }),
+        combosByCandidate: new Map(),
+        combosTruncated: false,
+      }),
+    );
+  };
+  /** The entry facts with a price per card (the leader's and the kept cards'). */
+  const priceKept = (usd: (c: MtgCard) => string | null | undefined) => {
+    const base = mocks.loadEntryFacts.getMockImplementation()!;
+    mocks.loadEntryFacts.mockImplementation(async (...args: unknown[]) => {
+      const facts = (await base(...args)) as Map<string, { cheapestUsd: string | null }>;
+      for (const [id, fact] of facts) {
+        const set = usd(every.get(id)!);
+        if (set !== undefined) fact.cheapestUsd = set;
+      }
+      return facts;
+    });
+  };
+  /** The fillers' rows at one price, a name or two apart (`over`). */
+  const fillersAt = (usd: string | null, over: Record<string, string> = {}) =>
+    mocks.loadFillerRows.mockResolvedValue(
+      basics.map((c) => ({ ...candidate(c, 1), cheapestUsd: over[c.name] ?? usd })),
+    );
+  const isLand = (c: MtgCard) => c.primaryType === "Land";
+
+  it("without `totalUsd` nothing runs: no `deck` in the answer, and the fillers are read once, as before", async () => {
+    const { body } = await post(BASE);
+    expect("deck" in body).toBe(false);
+    expect(mocks.loadFillerRows).toHaveBeenCalledTimes(1);
+  });
+
+  it("a total the list is already inside: the same picks, the whole deck's figure, and no note", async () => {
+    const plain = await post(BASE);
+    mocks.loadFillerRows.mockClear();
+    const { res, body } = await post({ ...BASE, totalUsd: 500 });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(body.picks).toEqual(plain.body.picks);
+    expect(body.notes).toEqual([]);
+    // Ninety-nine picks and the commander at the fixture's $1.00 each.
+    expect(deckOf(body)).toEqual({
+      totalUsd: 500,
+      estUsd: 100,
+      unpriced: 0,
+      keptUsd: 1,
+      keptUnpriced: 0,
+    });
+    // The same one read of the fillers, moved ahead of the plan: never a second.
+    expect(mocks.loadFillerRows).toHaveBeenCalledTimes(1);
+  });
+
+  it("over the total the list is fitted: the priciest picks give way, the figure is at or under the total, and it is the list's own", async () => {
+    // Twelve ranked lands at $3 with no cheaper ranked land behind them, and
+    // basics at $0.10: $1 + 62 × $1 + 12 × $3 + 25 × $0.10 = $101.50.
+    price((c) => (isLand(c) ? "3.00" : undefined));
+    // Wastes is dearer than a land here, and no white-blue deck is filled
+    // with it: a filler is counted at the dearest the adapter may USE.
+    fillersAt("0.10", { Wastes: "5.00" });
+    const plain = await post(BASE);
+    expect(qtyOf(plain.body.picks, "filler")).toBe(25);
+
+    const { body } = await post({ ...BASE, totalUsd: 80 });
+    // Eight lands give their slots to basics, $2.90 each: $78.30.
+    expect(deckOf(body)).toEqual({
+      totalUsd: 80,
+      estUsd: 78.3,
+      unpriced: 0,
+      keptUsd: 1,
+      keptUnpriced: 0,
+    });
+    expect(qtyOf(body.picks)).toBe(99);
+    expect(qtyOf(body.picks, "filler")).toBe(33);
+    expect(
+      body.picks.filter((p) => isLand(every.get(p.cardId)!) && p.tier !== "filler"),
+    ).toHaveLength(4);
+    expect(body.notes).toEqual([]);
+    // Every other pick is the plan's own.
+    const was = new Set(plain.body.picks.map((p) => p.cardId));
+    expect(body.picks.every((p) => was.has(p.cardId))).toBe(true);
+    // One figure, worked out one way: the answer's picks at their own prices, and the commander.
+    const picksCents = (
+      body.picks as { cardId: string; qty: number; cheapestUsd?: string }[]
+    ).reduce((sum, p) => sum + Math.round(Number(p.cheapestUsd) * 100) * p.qty, 0);
+    expect((picksCents + 100) / 100).toBe(78.3);
+  });
+
+  it("the commander and the kept cards never leave and their cost counts: alone over the total, they are named, and the picks are the cheapest that fit", async () => {
+    // The plan's edge case: a $40 commander, twelve kept cards worth $30 and
+    // a $50 total. The twelve are two spells at $10 and ten copies of Plains
+    // at $1, so copies are what is priced and counted.
+    const keptCards = ["Kept A", "Kept B"].map((n) => named(n, { costValue: 2 }));
+    for (const c of keptCards) every.set(c.id, c);
+    try {
+      price((c) => (isLand(c) ? "3.00" : undefined));
+      fillersAt("0.10");
+      priceKept((c) =>
+        c === leader
+          ? "40.00"
+          : keptCards.includes(c)
+            ? "10.00"
+            : c === basics[0]
+              ? "1.00"
+              : undefined,
+      );
+      const keep = [
+        ...keptCards.map((c) => ({ cardId: c.id, zone: "main", qty: 1 })),
+        { cardId: basics[0].id, zone: "main", qty: 10 },
+      ];
+      const { res, body } = await post({ ...BASE, keep, totalUsd: 50 });
+      expect(res.status).toBe(200);
+      const deck = deckOf(body)!;
+      expect(deck.keptUsd).toBe(70);
+      // Every land slot went to a basic: nothing cheaper is left to take.
+      expect(body.picks.filter((p) => isLand(every.get(p.cardId)!) && p.tier !== "filler")).toEqual(
+        [],
+      );
+      expect(qtyOf(body.picks)).toBe(87);
+      // $70 kept, sixty curve picks at $1, and twenty-seven more basics at $0.10.
+      expect(qtyOf(body.picks, "filler")).toBe(27);
+      expect(deck.estUsd).toBe(132.7);
+      expect(body.notes).toEqual([
+        "Your commander and the 12 cards you kept come to about $70, already over your $50 deck total. Autofill picked the cheapest cards that fit, and the deck comes to about $133.",
+      ]);
+      // The kept cards are in the answer's list, never among its picks.
+      expect(body.picks.some((p) => keptCards.some((c) => c.id === p.cardId))).toBe(false);
+    } finally {
+      for (const c of keptCards) every.delete(c.id);
+    }
+  });
+
+  it("over the total with the commander inside it: how far over, and that nothing cheaper fit", async () => {
+    fillersAt("1.00");
+    const { body } = await post({ ...BASE, totalUsd: 60 });
+    // Every card is $1.00 here: nothing cheaper exists, so the list is the plan's.
+    expect(deckOf(body)?.estUsd).toBe(100);
+    expect(body.notes).toEqual([
+      "With these added the deck comes to about $100, $40 over your $60 deck total. Autofill found no cheaper cards that fit.",
+    ]);
+  });
+
+  it("a card with no known price is never counted as $0: it is left out of the figure and counted beside it", async () => {
+    priceKept((c) => (c === leader ? null : undefined));
+    fillersAt(null);
+    const { body } = await post({ ...BASE, totalUsd: 500 });
+    const deck = deckOf(body)!;
+    expect(deck.keptUnpriced).toBe(1);
+    expect(deck.keptUsd).toBe(0);
+    // The commander and the 25 basics.
+    expect(deck.unpriced).toBe(26);
+    expect(deck.estUsd).toBe(74);
+  });
+
+  it("under a total, a target is kept where it fits and the notes are counted after the fit: the short line names the total", async () => {
+    // Only a count of Game Changers shows Bracket 4 here: Cradle among the
+    // lands and three spells far down the rank, at mana values whose buckets
+    // have cards to spare (a card leaves only for one of its own group), all
+    // at $50; every other card is $1.
+    const dear = [0, 6, 7].map((cv) =>
+      named(`Dear Changer ${cv}`, { costValue: cv, attrs: { game_changer: true } }),
+    );
+    for (const c of dear) every.set(c.id, c);
+    mocks.gatherSignals.mockImplementation(
+      async (_snapshot: unknown, opts: { scope?: { op: string } }) => ({
+        candidates: (opts.scope?.op === "eq"
+          ? lands.map((c, i) => candidate(c, i + 1))
+          : [
+              ...[...plains, staple].map((c) => candidate(c, popularity.get(c.id)!)),
+              ...dear.map((c, i) => candidate(c, 6000 + i)),
+            ]
+        ).map((row) =>
+          every.get(row.id)!.attrs.game_changer === true ? { ...row, cheapestUsd: "50.00" } : row,
+        ),
+        combosByCandidate: new Map(),
+        combosTruncated: false,
+      }),
+    );
+    try {
+      const goals = { v: 1, targetLevel: 4 };
+      const free = await post({ ...BASE, goals });
+      expect(flaggedIn(free.body.picks, "game_changer")).toBe(4);
+      // The plan sampled some of the spells and the build-up brought the rest.
+      const brought = free.body.picks.filter((p) => p.tier === "reach").length;
+      expect(brought).toBeGreaterThan(0);
+      const built = `Added ${brought} Game Changer${brought === 1 ? "" : "s"} to show your Bracket 4 target (Wizards' list)`;
+      expect(free.body.notes).toEqual([built]);
+
+      // Roomy enough for all four ($1 + 4 × $50 + 95 × $1 = $296): the
+      // target-4 list, pick for pick, with its note as it was.
+      const roomy = await post({ ...BASE, goals, totalUsd: 500 });
+      expect(roomy.body.picks).toEqual(free.body.picks);
+      expect(roomy.body.notes).toEqual([built]);
+      expect(deckOf(roomy.body)?.estUsd).toBe(296);
+
+      // $160 has room for one of them: $1 + $50 + 98 × $1 = $149. The three
+      // spells rank lowest and go first; Cradle stays, so the note no longer
+      // claims a card the build-up brought.
+      const one = await post({ ...BASE, goals, totalUsd: 160 });
+      expect(deckOf(one.body)?.estUsd).toBe(149);
+      expect(flaggedIn(one.body.picks, "game_changer")).toBe(1);
+      expect(one.body.picks.some((p) => p.tier === "reach")).toBe(false);
+      expect(one.body.notes).toEqual([
+        "Still 3 Game Changers short of Bracket 4. Autofill had no more to bring in under your $160 deck total (Wizards' list)",
+      ]);
+      // $120 has room for none.
+      const none = await post({ ...BASE, goals, totalUsd: 120 });
+      expect(deckOf(none.body)?.estUsd).toBe(100);
+      expect(flaggedIn(none.body.picks, "game_changer")).toBe(0);
+      expect(none.body.notes).toEqual([
+        "Still 4 Game Changers short of Bracket 4. Autofill had no more to bring in under your $120 deck total (Wizards' list)",
+      ]);
+      // With a per-card budget too, both are named.
+      const both = await post({ ...BASE, goals, totalUsd: 120, budgetUsd: 5 });
+      expect(both.body.notes).toEqual([
+        "Still 4 Game Changers short of Bracket 4. Autofill had no more to bring in under the $5-a-card budget and your $120 deck total (Wizards' list)",
+      ]);
+    } finally {
+      for (const c of dear) every.delete(c.id);
+    }
+  });
+
+  it("what the target kept out is still counted against a list planned with no total: the budget's removals are never blamed on the target", async () => {
+    price((c) => (isLand(c) ? "3.00" : undefined));
+    fillersAt("0.10");
+    const goals = { v: 1, targetLevel: 2 };
+    const untotalled = await post({ ...BASE, goals });
+    const fitted = await post({ ...BASE, goals, totalUsd: 80 });
+    expect(deckOf(fitted.body)!.estUsd).toBeLessThanOrEqual(80);
+    expect(untotalled.body.notes.length).toBeGreaterThan(0);
+    expect(fitted.body.notes).toEqual(untotalled.body.notes);
+  });
+
+  it("with `ownedOnly` the total is ignored, as the per-card budget is (the owner's decision 5)", async () => {
+    mocks.getSessionUserId.mockResolvedValue("11111111-1111-4111-8111-111111111111");
+    mocks.hasCollection.mockResolvedValue(true);
+    const owned = await post({ ...BASE, ownedOnly: true });
+    const { res, body } = await post({ ...BASE, ownedOnly: true, totalUsd: 5 });
+    expect(res.status).toBe(200);
+    expect("deck" in body).toBe(false);
+    expect(body.picks).toEqual(owned.body.picks);
+    expect(body.notes).toEqual(owned.body.notes);
+  });
+
+  it("a total that is no amount of money answers 400 before any read", async () => {
+    for (const totalUsd of [0, -5, 100_001, "50", null]) {
+      const { res } = await post({ ...BASE, totalUsd });
+      expect(res.status).toBe(400);
+    }
+    expect(mocks.loadEntryFacts).not.toHaveBeenCalled();
+    expect(mocks.gatherSignals).not.toHaveBeenCalled();
+    expect(mocks.loadFillerRows).not.toHaveBeenCalled();
   });
 });

@@ -9,6 +9,7 @@
  *   where a target shows.
  * - `autofillTargetToast`: the toast's second line when Add moved the
  *   target, in TARGET-CHANGES' titles, and that its Undo is the list's alone.
+ *   `autofillTargetTitle` is the title by itself.
  * - `autofillAfter`: the after-line over the read of the list Add would
  *   build. Measured before it was worded (REDESIGN.md, AUTOFILL-TARGET, step
  *   0: 1,710 shells): a shell never reads above its target; at targets 1 and
@@ -72,23 +73,36 @@ export function autofillTargetNote(
   return `${what} ${BRACKET_COPY.autofillTargetShows(linkPreviews)}`;
 }
 
+/**
+ * What Add did to the deck's target, in TARGET-CHANGES' titles; null when it
+ * left it. AUTOFILL-TOTAL: the toast may say what happened to the deck's
+ * total beside it (../recommend/total-copy.ts' `autofillSavedToast`), so the
+ * title stands alone here.
+ */
+export function autofillTargetTitle(
+  brackets: Levels,
+  from: number | null,
+  to: number | null,
+): string | null {
+  if (from === to) return null;
+  return to === null
+    ? BRACKET_COPY.targetCleared
+    : from === null
+      ? BRACKET_COPY.targetSet(levelLabel(brackets, to))
+      : BRACKET_COPY.targetChanged(
+          levelNumberLabel(brackets, from),
+          levelNumberLabel(brackets, to),
+        );
+}
+
 /** The toast's second line when Add moved the deck's target; null when it didn't. */
 export function autofillTargetToast(
   brackets: Levels,
   from: number | null,
   to: number | null,
 ): string | null {
-  if (from === to) return null;
-  const title =
-    to === null
-      ? BRACKET_COPY.targetCleared
-      : from === null
-        ? BRACKET_COPY.targetSet(levelLabel(brackets, to))
-        : BRACKET_COPY.targetChanged(
-            levelNumberLabel(brackets, from),
-            levelNumberLabel(brackets, to),
-          );
-  return `${title}. ${BRACKET_COPY.autofillUndoKeeps}`;
+  const title = autofillTargetTitle(brackets, from, to);
+  return title === null ? null : `${title}. ${BRACKET_COPY.autofillUndoKeeps}`;
 }
 
 export type AutofillAfter =

@@ -17,6 +17,12 @@
  *   built up to. A shell short of it takes the best-ranked Game Changers in
  *   for its weakest sampled picks, group for group; one that already shows
  *   it is untouched, pick for pick; nothing is sampled.
+ * - AUTOFILL-TOTAL (the owner's decision 17 of 2026-11-25): under a deck
+ *   total the target is kept wherever it fits. The cards it needs leave
+ *   last, and only for a cheaper card that counts; where both cannot hold
+ *   the total wins and the shell says what it is short; a card that counts
+ *   comes back in under the total, the rest making room; the ceiling holds
+ *   through every swap; nothing is sampled.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -49,7 +55,13 @@ import type {
   CompleteCombo,
   RecommendMeta,
 } from "@/lib/games/types";
-import { buildShell, locksStaples, type ShellInput, type ShellPick } from "./autofill";
+import {
+  buildShell,
+  locksStaples,
+  type ShellDraft,
+  type ShellInput,
+  type ShellPick,
+} from "./autofill";
 import type { TournamentSignal } from "./rank";
 import { shellGoals } from "./shell-goals";
 import type { Recommendation } from "./types";
@@ -708,6 +720,376 @@ describe("AUTOFILL-REACH — a target that is set is built up to (the owner's ca
       const once = buildShell(bare({ seed, goals: goalsFor(4) }));
       expect(windows).toEqual(ceilingWindows);
       expect(buildShell(bare({ seed, goals: goalsFor(4) }))).toEqual(once);
+    }
+    expect(random).not.toHaveBeenCalled();
+  });
+});
+
+describe("AUTOFILL-TOTAL — a target under a deck total (the owner's decision 17: the total wins, and the target is kept wherever it fits)", () => {
+  const cardsOf = (picks: readonly ShellPick[]) => picks.map((p) => byId.get(p.cardId)!);
+  const quiet = (c: MtgCard) =>
+    c.attrs.mld === undefined && c.attrs.extra_turn !== true && !c.name.startsWith("Half");
+  /** The pools with their prices set by card: `usd(card)`, or the fixture's $1.00. */
+  const priced = (
+    list: readonly Recommendation[],
+    usd: (c: MtgCard) => string | null | undefined,
+  ) =>
+    list.map((r) => {
+      const price = usd(byId.get(r.cardId)!);
+      return price === undefined ? r : { ...r, cheapestUsd: price };
+    });
+  const cents = (usd: string | null) => (usd === null ? 0 : Math.round(Number(usd) * 100));
+  const FILLER_USD = 0.1;
+  /** What the fit counts: every pick at its price, and the fillers the base still needs. */
+  const costOf = (draft: ShellDraft) =>
+    (draft.picks.reduce((sum, p) => sum + cents(p.cheapestUsd), 0) +
+      draft.fillerNeed * Math.round(FILLER_USD * 100)) /
+    100;
+  const fit = (totalUsd: number) => ({ fit: { totalUsd, keptUsd: 0, fillerUsd: FILLER_USD } });
+
+  // Game Changers at $20, the plain cards at $2 for the five best-ranked of a
+  // bucket and $0.25 for the rest; the lands likewise. Only a count of Game
+  // Changers raises the read here (the REACH tests' `rich` pools).
+  const plainUsd = (c: MtgCard) => {
+    if (isGc(c)) return "20.00";
+    const rank = Number(c.name.split(/[- ]/).pop());
+    return rank < (c.primaryType === "Land" ? 3 : 5) ? "2.00" : "0.25";
+  };
+  const richPool = priced(
+    recs.filter((r) => quiet(byId.get(r.cardId)!)),
+    plainUsd,
+  );
+  const richLands = priced(
+    landRecs.filter((r) => quiet(byId.get(r.cardId)!)),
+    plainUsd,
+  );
+  const rich = (over: Partial<ShellInput> = {}) =>
+    shellInput({ pool: richPool, basePool: richLands, ...over });
+
+  it("a total the list is already inside changes nothing: the goals-only shell, pick for pick, with its build-up as it was", () => {
+    for (const seed of SEEDS.slice(0, 12)) {
+      for (const target of [2, 3, 4]) {
+        const plain = buildShell(rich({ seed, goals: goalsFor(target) }));
+        const roomy = buildShell(rich({ seed, goals: goalsFor(target), ...fit(10_000) }));
+        expect(roomy.fit).toEqual({ swapped: 0, toFillers: 0 });
+        expect({ ...roomy, fit: undefined }).toEqual(plain);
+      }
+    }
+  });
+
+  it("the cards the target needs leave last: under a total that has room for them, the list lands inside it and still shows its target", () => {
+    let fitted = 0;
+    for (const seed of SEEDS) {
+      const plain = buildShell(rich({ seed, goals: goalsFor(4) }));
+      // Four Game Changers are $80; the other sixteen slots cost $4.30 at their cheapest.
+      const draft = buildShell(rich({ seed, goals: goalsFor(4), ...fit(100) }));
+      expect(costOf(draft)).toBeLessThanOrEqual(100);
+      expect(draft.picks.length + draft.fillerNeed).toBe(SLOTS);
+      // Game Changers past the four it needs are the priciest picks and go first; the four stay.
+      expect(count(cardsOf(draft.picks), isGc)).toBe(4);
+      expect(goalsFor(4).missing!(draft.picks.map((p) => p.cardId))).toBeNull();
+      expect(draft.reach?.short ?? 0).toBe(0);
+      if (costOf(plain) > 100) fitted += 1;
+    }
+    expect(fitted).toBeGreaterThan(0);
+  });
+
+  it("the total wins where both cannot hold: the target's cards give way too, priciest first, and the shell says what it is short", () => {
+    for (const seed of SEEDS) {
+      // Four Game Changers alone are $80, and $60 is the total: two is the
+      // most that fit ($40, and at least $4 of everything else).
+      const draft = buildShell(rich({ seed, goals: goalsFor(4), ...fit(60) }));
+      expect(costOf(draft)).toBeLessThanOrEqual(60);
+      expect(count(cardsOf(draft.picks), isGc)).toBe(2);
+      expect(draft.reach?.short).toBe(2);
+      // It never claims a card the list no longer holds: what it counts as
+      // brought in is in the list, marked, and a Game Changer.
+      const marked = draft.picks.filter((p) => p.tier === "reach");
+      expect(draft.reach?.added).toBe(marked.length);
+      expect(cardsOf(marked).every(isGc)).toBe(true);
+    }
+  });
+
+  // The REACH tests' `bare` shell: 4 lands + [3, 4, 3], the Game Changers at
+  // the bottom of the rank and none among the lands, so the plan holds none
+  // and the build-up brings in the best-ranked: Changer 0a, at mana value 0.
+  const SMALL = 14;
+  const lowChangers = recs
+    .filter((r) => quiet(byId.get(r.cardId)!))
+    .map((r) => (isGc(byId.get(r.cardId)!) ? { ...r, score: 0.01 } : r))
+    .sort((a, b) => b.score - a.score);
+  const plainLands = landRecs.filter(
+    (r) => quiet(byId.get(r.cardId)!) && !isGc(byId.get(r.cardId)!),
+  );
+  /** Plain cards at $1, the two lowest-ranked of each bucket (outside every window) at $0.10. */
+  const bareUsd = (changers: Record<string, string>) => (c: MtgCard) =>
+    isGc(c) ? changers[c.name] : /-[89]$/.test(c.name) ? "0.10" : undefined;
+  const bare = (changers: Record<string, string>, over: Partial<ShellInput> = {}) =>
+    shellInput({
+      slots: SMALL,
+      pool: priced(
+        lowChangers.filter((r) => !isGc(byId.get(r.cardId)!) || r.name in changers),
+        bareUsd(changers),
+      ),
+      basePool: plainLands,
+      ...over,
+    });
+  const held = (draft: ShellDraft, name: string) => draft.picks.find((p) => p.name === name);
+
+  it("a card the target needs leaves only for a cheaper card that counts: the stand-in keeps the build-up's mark", () => {
+    const changers = { "Changer 0a": "30.00", "Changer 0b": "3.00" };
+    for (const seed of SEEDS.slice(0, 12)) {
+      const plain = buildShell(bare(changers, { seed, goals: goalsFor(3) }));
+      expect(held(plain, "Changer 0a")?.tier).toBe("reach");
+      expect(costOf(plain)).toBe(43);
+      // $43 against $20: Changer 0a is the priciest pick and the one card
+      // that shows Bracket 3, so only Changer 0b may stand in for it.
+      const draft = buildShell(bare(changers, { seed, goals: goalsFor(3), ...fit(20) }));
+      expect(draft.fit).toEqual({ swapped: 1, toFillers: 0 });
+      expect(costOf(draft)).toBe(16);
+      expect(held(draft, "Changer 0a")).toBeUndefined();
+      expect(held(draft, "Changer 0b")).toMatchObject({ tier: "reach", group: "curve-0" });
+      expect(draft.reach).toEqual({ added: 1, short: 0 });
+      // Every other pick is the planned one.
+      const was = new Set(plain.picks.map((p) => p.cardId));
+      expect(draft.picks.filter((p) => !was.has(p.cardId)).map((p) => p.name)).toEqual([
+        "Changer 0b",
+      ]);
+    }
+  });
+
+  it("with no cheaper card that counts in its group, everything else gives way first; then it leaves, and a cheaper one comes back in from another group", () => {
+    // Changer 0a ($30) is what the build-up brings in; the only other one is
+    // Changer 1a ($4), at mana value 1.
+    const changers = { "Changer 0a": "30.00", "Changer 1a": "4.00" };
+    for (const seed of SEEDS.slice(0, 12)) {
+      // $43 against $15. The $1 picks give way first (six to the $0.10 cards,
+      // the four lands to fillers): $34. Changer 0a still cannot stay, so the
+      // total wins: $5. Then the build-up, under the total: Changer 0a is
+      // $30 over again, Changer 1a fits.
+      const draft = buildShell(bare(changers, { seed, goals: goalsFor(3), ...fit(15) }));
+      expect(costOf(draft)).toBeLessThanOrEqual(15);
+      expect(held(draft, "Changer 0a")).toBeUndefined();
+      expect(held(draft, "Changer 1a")).toMatchObject({ tier: "reach", group: "curve-1" });
+      expect(draft.reach).toEqual({ added: 1, short: 0 });
+      expect(goalsFor(3).missing!(draft.picks.map((p) => p.cardId))).toBeNull();
+      expect(draft.picks.length + draft.fillerNeed).toBe(SMALL);
+      expect(draft.fit?.toFillers).toBe(4);
+    }
+  });
+
+  it("the build-up makes room under the total: a card that counts comes in and the rest gives way for it, or the try is undone", () => {
+    const changers = { "Changer 0a": "30.00", "Changer 1a": "4.00" };
+    for (const seed of SEEDS.slice(0, 12)) {
+      // As above, the list is $5.00 once Changer 0a has gone. Changer 1a
+      // comes in for the weakest pick at mana value 1 (a $0.10 card): $8.90,
+      // over $8.50. The cheapest list that holds it is $8.00, so the fit
+      // runs once more with the target kept, and lands there.
+      const draft = buildShell(bare(changers, { seed, goals: goalsFor(3), ...fit(8.5) }));
+      expect(costOf(draft)).toBe(8);
+      expect(held(draft, "Changer 1a")?.tier).toBe("reach");
+      expect(draft.reach).toEqual({ added: 1, short: 0 });
+
+      // At $7.90 no list holds it: the try is undone, the list is the $5.00
+      // one, and the shell says it is one short.
+      const short = buildShell(bare(changers, { seed, goals: goalsFor(3), ...fit(7.9) }));
+      expect(costOf(short)).toBe(5);
+      expect(count(cardsOf(short.picks), isGc)).toBe(0);
+      expect(short.reach).toEqual({ added: 0, short: 1 });
+    }
+  });
+
+  it("a card that holds the target by another road is not traded for one that merely counts: the list would be shorter of its target", () => {
+    // Land denial alone shows Bracket 4. Ruin 1 ($30, a measured staple, so
+    // the plan takes it) is the one card that does here. Changer 1a ($1)
+    // shares its mana value and counts, but one Game Changer shows Bracket 3.
+    const ruin = recs.find((r) => r.name === "Ruin 1")!;
+    const withRuin = priced(
+      [
+        ...lowChangers.filter((r) => !isGc(byId.get(r.cardId)!) || r.name === "Changer 1a"),
+        { ...ruin, score: 0.5 },
+      ].sort((a, b) => b.score - a.score),
+      (c) =>
+        c.name === "Ruin 1"
+          ? "30.00"
+          : isGc(c)
+            ? "1.00"
+            : /-[89]$/.test(c.name)
+              ? "0.10"
+              : undefined,
+    );
+    const asked = (totalUsd: number, seed: number) =>
+      buildShell(
+        shellInput({
+          seed,
+          slots: SMALL,
+          pool: withRuin,
+          basePool: plainLands,
+          tournamentContext: { commanderNames: ["Test Commander"], lists: 10, since: null },
+          tournamentsByCandidate: new Map<string, TournamentSignal>([
+            [ruin.cardId, { lists: 9, top4: 4 }],
+          ]),
+          goals: goalsFor(4),
+          ...fit(totalUsd),
+        }),
+      );
+    for (const seed of SEEDS.slice(0, 12)) {
+      // $43 against $40: Ruin 1 is the priciest pick and what shows the
+      // target. Changer 1a in its place would leave the list three short,
+      // so it stays, and four of the $1 picks give way.
+      const kept = asked(40, seed);
+      expect(held(kept, "Ruin 1")?.tier).toBe("locked");
+      expect(held(kept, "Changer 1a")).toBeUndefined();
+      expect(goalsFor(4).missing!(kept.picks.map((p) => p.cardId))).toBeNull();
+      expect(costOf(kept)).toBeLessThanOrEqual(40);
+      expect(kept.reach).toBeUndefined();
+
+      // $20 cannot hold it ($34 with everything else at its cheapest): the
+      // total wins, and Changer 1a is what the build-up can still bring.
+      const gone = asked(20, seed);
+      expect(held(gone, "Ruin 1")).toBeUndefined();
+      expect(held(gone, "Changer 1a")?.tier).toBe("reach");
+      expect(costOf(gone)).toBeLessThanOrEqual(20);
+      expect(gone.reach).toEqual({ added: 1, short: 3 });
+    }
+  });
+
+  it("a card the target needs is never traded for a cheaper card that shows the target by another road: only one that counts stands in", () => {
+    // Four Game Changers and no more, so each is needed at a target of 4.
+    // Changer 0a is $30. The one cheaper card that would keep the list at
+    // Bracket 4 in its place is Ruin 0, mass land denial: it does not count.
+    const changers = {
+      "Changer 0a": "30.00",
+      "Changer 0b": "1.00",
+      "Changer 1a": "1.00",
+      "Changer 2a": "1.00",
+    };
+    const ruin = recs.find((r) => r.name === "Ruin 0")!;
+    const base = bare(changers);
+    const withRuin = [...base.pool, { ...ruin, score: 0.005, cheapestUsd: "0.50" }];
+    for (const seed of SEEDS.slice(0, 12)) {
+      const plain = buildShell({ ...base, pool: withRuin, seed, goals: goalsFor(4) });
+      expect(count(cardsOf(plain.picks), isGc)).toBe(4);
+      expect(held(plain, "Ruin 0")).toBeUndefined();
+      // $43 against $20: Changer 0a cannot stay, and nothing that counts is
+      // cheaper. The total wins: it leaves for a plain card, and the list is
+      // one short. Land denial is never how Autofill keeps a target.
+      const draft = buildShell({ ...base, pool: withRuin, seed, goals: goalsFor(4), ...fit(20) });
+      expect(held(draft, "Ruin 0")).toBeUndefined();
+      expect(held(draft, "Changer 0a")).toBeUndefined();
+      expect(count(cardsOf(draft.picks), isGc)).toBe(3);
+      expect(count(cardsOf(draft.picks), isMld)).toBe(0);
+      expect(costOf(draft)).toBeLessThanOrEqual(20);
+      expect(draft.reach).toEqual({ added: 3, short: 1 });
+    }
+  });
+
+  it("under a total, a card with no known price never comes in for the target", () => {
+    // Changer 0a ($30) has to go; the only other card that counts has no price.
+    const changers: Record<string, string | null> = { "Changer 0a": "30.00", "Changer 1a": null };
+    for (const seed of SEEDS.slice(0, 12)) {
+      const draft = buildShell(
+        bare(changers as Record<string, string>, { seed, goals: goalsFor(3), ...fit(15) }),
+      );
+      expect(costOf(draft)).toBeLessThanOrEqual(15);
+      expect(count(cardsOf(draft.picks), isGc)).toBe(0);
+      expect(draft.reach).toEqual({ added: 0, short: 1 });
+    }
+  });
+
+  it("a land the target needs never gives its slot to a basic while the target is kept", () => {
+    // Cradle ($20) is the one Game Changer here, among the ranked lands: at a
+    // target of 3 the list needs it. No ranked land that counts is cheaper,
+    // and a basic is $0.10.
+    const cradle = landRecs.find((r) => r.name === "Cradle")!;
+    const lands = [{ ...cradle, cheapestUsd: "20.00" }, ...plainLands];
+    const input = (seed: number, over: Partial<ShellInput> = {}) =>
+      shellInput({
+        seed,
+        slots: SMALL,
+        pool: priced(
+          lowChangers.filter((r) => !isGc(byId.get(r.cardId)!)),
+          (c) => (/-[89]$/.test(c.name) ? "0.10" : undefined),
+        ),
+        basePool: lands,
+        goals: goalsFor(3),
+        ...over,
+      });
+    for (const seed of SEEDS.slice(0, 12)) {
+      const plain = buildShell(input(seed));
+      expect(held(plain, "Cradle")?.tier).toBe("sampled");
+      expect(costOf(plain)).toBe(33);
+      // $33 against $25: every other pick gives way before Cradle would.
+      const draft = buildShell(input(seed, fit(25)));
+      expect(costOf(draft)).toBeLessThanOrEqual(25);
+      // The planned pick itself: it never left and came back.
+      expect(held(draft, "Cradle")?.tier).toBe("sampled");
+      expect(goalsFor(3).missing!(draft.picks.map((p) => p.cardId))).toBeNull();
+      expect(draft.picks.length + draft.fillerNeed).toBe(SMALL);
+    }
+  });
+
+  it("a deck that cannot reach its total anyway gets no dearer for the target: a card that counts comes in only at no extra cost", () => {
+    const changers = { "Changer 0a": "30.00", "Changer 1a": "4.00" };
+    for (const seed of SEEDS.slice(0, 6)) {
+      // $1 is out of reach: the cheapest list is $5.00 (mana value 0 has two
+      // $0.10 cards for its three slots), and it stays that. Changer 1a
+      // would put it at $8.90.
+      const draft = buildShell(bare(changers, { seed, goals: goalsFor(3), ...fit(1) }));
+      expect(costOf(draft)).toBe(5);
+      expect(count(cardsOf(draft.picks), isGc)).toBe(0);
+      expect(draft.reach).toEqual({ added: 0, short: 1 });
+    }
+  });
+
+  it("the ceiling holds through the fit: a card above the target never comes in, however cheap and well ranked", () => {
+    // The fixture's own pools, flagged cards on top of every bucket: at $0.10
+    // they are the best-ranked cheaper card for every $5 pick.
+    const cheapFlags = (c: MtgCard) =>
+      flagged(c) || c.name.startsWith("Half") || c.primaryType === "Land" ? "0.10" : "5.00";
+    const pool2 = priced(recs, cheapFlags);
+    const lands2 = priced(landRecs, cheapFlags);
+    let swaps = 0;
+    for (const seed of SEEDS) {
+      for (const target of [1, 2, 3]) {
+        const goals = goalsFor(target);
+        const draft = buildShell(
+          shellInput({ seed, pool: pool2, basePool: lands2, goals, ...fit(10) }),
+        );
+        const cards = cardsOf(draft.picks);
+        expect(count(cards, isMld)).toBe(0);
+        expect(count(cards, isGc)).toBeLessThanOrEqual(target === 3 ? 3 : 0);
+        expect(count(cards, isTurn)).toBeLessThanOrEqual(target === 1 ? 0 : 1);
+        // A two-card combo is above Brackets 1 and 2 (the Y6b pins above).
+        if (target < 3) expect(completesPair(cards)).toBe(false);
+        // The planner's own check, asked of every pick against the rest of the list.
+        const ids = draft.picks.map((p) => p.cardId);
+        for (const id of ids) {
+          expect(
+            goals.conflicts(
+              id,
+              ids.filter((other) => other !== id),
+            ),
+          ).toEqual([]);
+        }
+        swaps += draft.fit?.swapped ?? 0;
+      }
+    }
+    // The fit did run: cheaper cards that fit the target came in.
+    expect(swaps).toBeGreaterThan(0);
+  });
+
+  it("nothing is sampled: the same windows as without a total, a seed still means one list, and Math.random never runs", () => {
+    const changers = { "Changer 0a": "30.00", "Changer 1a": "4.00" };
+    const random = vi.spyOn(Math, "random");
+    for (const seed of SEEDS.slice(0, 10)) {
+      windows.length = 0;
+      buildShell(bare(changers, { seed, goals: goalsFor(3) }));
+      const plainWindows = windows.map((w) => [...w]);
+      windows.length = 0;
+      const once = buildShell(bare(changers, { seed, goals: goalsFor(3), ...fit(8.5) }));
+      expect(windows).toEqual(plainWindows);
+      expect(buildShell(bare(changers, { seed, goals: goalsFor(3), ...fit(8.5) }))).toEqual(once);
     }
     expect(random).not.toHaveBeenCalled();
   });

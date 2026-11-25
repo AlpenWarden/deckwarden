@@ -55,6 +55,24 @@
  * `owned: { applied: true }`, and only then. `cards` still holds the
  * leaders and the kept cards, which need not be owned.
  *
+ * A deck total (AUTOFILL-TOTAL, the owner's idea 5 of 2026-11-24):
+ * `totalUsd` is a budget for the whole deck, and the list is fitted under
+ * it: the leaders, the kept cards and every pick, at their cheapest
+ * printings. It is its own field, never part of `goals` (the deck's goals
+ * reach every other route through `suggestionGoals`, which leaves the total
+ * out on purpose). With it the planner swaps its priciest picks for the
+ * best-ranked cheaper cards of the same group until the deck is at or under
+ * the total (autofill.ts' fit step); the leaders and the kept cards never
+ * leave, so their prices are handed to it, and so is a filler's price,
+ * which is why the fillers are read before the plan here and after it
+ * otherwise (the same one statement). A target is kept wherever the total
+ * allows and gives way where it does not (the owner's decision 17): the
+ * reach notes are counted after the fit and name the total. The answer
+ * gains `deck`: the whole deck's figure against the total, worked out once,
+ * for the sheet's footer; where the deck is still over, a note says how far
+ * and why. Ignored with `ownedOnly` (decision 5), like the per-card budget.
+ * With no `totalUsd` nothing above runs and the answer has no `deck`.
+ *
  * Caching intent: force-dynamic + no-store — output depends on the body
  * and (for omitted seeds) a server roll, and with `ownedOnly` on who is
  * asking. Rate-limited per IP as the app's costliest read; W9b's reroll
@@ -83,7 +101,9 @@ import {
   locksStaples,
   type FillerPick,
   type ShellInput,
+  type ShellTotalInput,
 } from "@/lib/recommend/autofill";
+import { TOTAL_MAX_USD } from "@/lib/recommend/budget";
 import { gatherSignals, readCard, type RecommendSnapshot } from "@/lib/recommend/engine";
 import { loadEntryFacts, loadFillerRows, loadTournamentSignals } from "@/lib/recommend/queries";
 import { rankCandidates } from "@/lib/recommend/rank";
@@ -123,6 +143,8 @@ const BODY = z.object({
   goals: z.unknown().optional(),
   /** AUTOFILL-OWNED: only cards the asking player owns. Only `true` acts. */
   ownedOnly: z.boolean().optional(),
+  /** AUTOFILL-TOTAL: a budget for the whole deck, in dollars (the stored total's own bounds, goals.ts). */
+  totalUsd: z.number().positive().max(TOTAL_MAX_USD).optional(),
 });
 
 export async function POST(request: NextRequest) {
@@ -188,8 +210,10 @@ export async function POST(request: NextRequest) {
   // other ask hands them the options it always has.
   const ownedFilter = ownedBy !== undefined ? { ownedBy } : {};
   const fromCollection = ownedBy !== undefined;
-  // A price limit says nothing about a card the player already has (decision 5).
+  // A price limit says nothing about a card the player already has (decision 5):
+  // neither the per-card budget nor the deck total applies to their own cards.
   const perCardUsd = fromCollection ? undefined : budgetUsd;
+  const totalUsd = fromCollection ? undefined : body.totalUsd;
 
   // Server-authoritative facts for every id the client sent (with the
   // bracket flags the goals check reads, where the game declares them).
@@ -334,11 +358,60 @@ export async function POST(request: NextRequest) {
     zone: mainZone.id,
     seed,
   };
-  const draft = buildShell({ ...shellInput, goals: goalsCheck, lockStaples });
+
+  // A deck total (AUTOFILL-TOTAL): what the fit step cannot see for itself.
+  // The leaders and the kept cards never leave, so their cost is fixed: the
+  // facts read above holds each one's cheapest printing, and one with no
+  // known price is counted beside the figure, never as $0. The fillers'
+  // rows are read here, ahead of the plan, for their price: the dearest the
+  // adapter may use for this identity (with no cost texts it spreads the
+  // slots over every filler that fits), so the fit never counts them low.
+  let fillerRows: Awaited<ReturnType<typeof loadFillerRows>> | null = null;
+  let deckTotal: ShellTotalInput | undefined;
+  let fillerUsd: number | null = null;
+  if (totalUsd !== undefined) {
+    let keptCents = 0;
+    let keptUnpriced = 0;
+    for (const e of entries) {
+      const price = facts.get(e.cardId)!.cheapestUsd;
+      if (price === null) keptUnpriced += e.qty;
+      else keptCents += Math.round(Number(price) * 100) * e.qty;
+    }
+    deckTotal = {
+      totalUsd,
+      keptUsd: keptCents / 100,
+      keptUnpriced,
+      leaderNoun: adapter.display.leaderNoun,
+      leaders: leaderIds.length,
+      keptCards: keep.reduce((n, k) => n + k.qty, 0),
+    };
+    fillerRows = await loadFillerRows(GAME_ID[game], seededFormat.id, autofill.base.fillerNames);
+    const usable = new Set(
+      autofill.base
+        .fillers({ ciMask, n: autofill.base.fillerNames.length, costTexts: [] })
+        .map((f) => f.name),
+    );
+    const prices = fillerRows
+      .filter((r) => usable.has(r.name) && r.cheapestUsd !== null)
+      .map((r) => Number(r.cheapestUsd));
+    fillerUsd = prices.length > 0 ? Math.max(...prices) : null;
+  }
+
+  const draft = buildShell({
+    ...shellInput,
+    goals: goalsCheck,
+    lockStaples,
+    ...(deckTotal
+      ? { fit: { totalUsd: deckTotal.totalUsd, keptUsd: deckTotal.keptUsd, fillerUsd } }
+      : {}),
+  });
   // What the target kept out: the shell the same seed plans with no goals,
   // walked against the check — one note per rule, in the adapter's words.
+  // That shell is planned with no total either (AUTOFILL-TOTAL), so what the
+  // budget took out is never blamed on the target.
   // Then what building up to the target brought in, or is still short
-  // (AUTOFILL-REACH): the planner's counts, worded by the adapter.
+  // (AUTOFILL-REACH): the planner's counts, worded by the adapter. With a
+  // total they are counted after the fit, and the short line names it.
   const goalNotes =
     brackets && goalsCheck && targetLevel !== null
       ? [
@@ -352,6 +425,7 @@ export async function POST(request: NextRequest) {
                   ...draft.reach,
                   budgetUsd: perCardUsd,
                   ...(fromCollection ? { fromCollection } : {}),
+                  ...(totalUsd !== undefined ? { totalUsd } : {}),
                 },
                 targetLevel,
               )
@@ -359,8 +433,9 @@ export async function POST(request: NextRequest) {
         ]
       : [];
 
-  // Fillers (adapter basics) + the wire read the response needs anyway.
-  const fillerRows =
+  // Fillers (adapter basics) + the wire read the response needs anyway. With
+  // a deck total the rows were read ahead of the plan (above).
+  fillerRows ??=
     draft.fillerNeed > 0
       ? await loadFillerRows(GAME_ID[game], seededFormat.id, autofill.base.fillerNames)
       : [];
@@ -411,6 +486,7 @@ export async function POST(request: NextRequest) {
     zone: mainZone.id,
     budgetUsd: perCardUsd,
     ...(fromCollection ? { fromCollection } : {}),
+    ...(deckTotal ? { total: deckTotal } : {}),
   });
   // The fillers are assumed, never checked against the collection (the
   // owner's decision 4): the adapter's line says so, first among the notes,
@@ -456,5 +532,7 @@ export async function POST(request: NextRequest) {
     cards: wires.filter((w) => usedIds.has(w.id)),
     // Said only when asked: any other answer is the shape it always was.
     ...(fromCollection ? { owned: { applied: true } } : {}),
+    // AUTOFILL-TOTAL: the whole deck against its total, and only with one.
+    ...(shell.deck ? { deck: shell.deck } : {}),
   });
 }

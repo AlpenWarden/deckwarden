@@ -1242,6 +1242,14 @@ export function mtgShellNotes(skipped: Readonly<Record<string, number>>, target:
  * collection holds more of them and the kept cards left no pick to replace.
  * No per-card budget applies to owned cards, so that clause never rides
  * with it.
+ *
+ * AUTOFILL-TOTAL (the owner's decisions 9 and 17 of 2026-11-24): with
+ * `totalUsd` the list was fitted under a deck total, and the total wins over
+ * the target. The count of what came in is taken after the fit, so it never
+ * names a Game Changer the list no longer holds; and where the list is short,
+ * the line names the total, beside a per-card budget when both narrowed it.
+ * Autofill tried again under the total before saying so: a Game Changer came
+ * back in wherever the deck stayed at or under it.
  */
 export function mtgReachNotes(
   reach: Readonly<{
@@ -1249,6 +1257,7 @@ export function mtgReachNotes(
     short: number;
     budgetUsd?: number;
     fromCollection?: boolean;
+    totalUsd?: number;
   }>,
   target: number,
 ): string[] {
@@ -1267,11 +1276,17 @@ export function mtgReachNotes(
   }
   if (reach.short > 0) {
     const cards = `${reach.short} ${plural(reach.short, "Game Changer", "Game Changers")}`;
+    const limits = [
+      ...(reach.budgetUsd === undefined ? [] : [`the $${reach.budgetUsd}-a-card budget`]),
+      ...(reach.totalUsd === undefined
+        ? []
+        : [`your $${reach.totalUsd.toLocaleString("en-US")} deck total`]),
+    ];
     const limit = owned
       ? " from your collection"
-      : reach.budgetUsd === undefined
+      : limits.length === 0
         ? ""
-        : ` under the $${reach.budgetUsd}-a-card budget`;
+        : ` under ${limits.join(" and ")}`;
     notes.push(
       `Still ${cards} short of Bracket ${shows}. Autofill had no more to bring in${limit} (${SOURCE_SHORT.gameChangers})`,
     );

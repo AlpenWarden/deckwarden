@@ -1016,7 +1016,9 @@ export interface BracketsMeta<A = Record<string, unknown>> {
    * where it had no more to bring (`budgetUsd`: the sheet's per-card budget,
    * when one narrowed the candidates; `fromCollection`, AUTOFILL-OWNED: the
    * candidates were only cards the player owns, so what came in came from
-   * their collection and what is short is what it does not hold). Each line
+   * their collection and what is short is what it does not hold; `totalUsd`,
+   * AUTOFILL-TOTAL: the list was fitted under a deck total, which wins over
+   * the target, so what is short is what did not fit under it). Each line
    * names its source; a zero says nothing. Optional, with `toward`: without
    * it the shell says nothing about reaching.
    */
@@ -1026,6 +1028,7 @@ export interface BracketsMeta<A = Record<string, unknown>> {
       short: number;
       budgetUsd?: number;
       fromCollection?: boolean;
+      totalUsd?: number;
     }>,
     targetLevel: number,
   ): string[];

@@ -21,6 +21,13 @@
  * with the flag and without the per-card budget, Budget switched off with
  * its reason, the footer's count in the estimate's place, the route's two
  * refusals, and what Add hands over.
+ * AUTOFILL-TOTAL: the Deck total control beside Budget (the Fit sheet's
+ * field, starting at the deck's total), one ask per total with `totalUsd`
+ * and nothing else moved, the footer's figure for the whole deck from the
+ * route's own numbers, the line that says what Add will save, the control
+ * switched off with "Only cards I own", and what Add hands over. Y8's pin
+ * ("a total reads on the goals line and never rides the body") is rewritten
+ * on purpose, in place.
  */
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -524,16 +531,40 @@ describe("AutofillSheet — the deck's goals (Y6b)", () => {
     expect(goalsLine()).toBeNull();
   });
 
-  it("Y8: a total reads its running estimate on the line, and never rides the body", async () => {
-    render(
-      sheet({
-        goals: { v: 1, budget: { totalUsd: 150 } },
-        estimate: { usd: 212.4, unpriced: 0 },
-      }),
-    );
+  // AUTOFILL-TOTAL rewrote this pin on purpose. Y8's read: "a total reads its
+  // running estimate on the line, and never rides the body". Since the sheet
+  // has the Deck total control, the line no longer names the total and the
+  // body carries it, as `totalUsd` beside the goals and never inside them.
+  it("AUTOFILL-TOTAL: a deck's total no longer reads on the goals line (the control says it), and it rides the body as `totalUsd`, never inside the goals", async () => {
+    const { unmount } = render(sheet({ goals: { v: 1, budget: { totalUsd: 150 } } }));
     await screen.findByText("Lands · 12");
-    expect(goalsLine()?.textContent).toBe("Your goals: est. $212 of your $150");
+    // A total alone leaves no line.
+    expect(goalsLine()).toBeNull();
+    expect(bodies()[0]).toEqual({
+      game: "mtg",
+      format: "commander",
+      leaderIds: [atraxa.id],
+      keep: [],
+      totalUsd: 150,
+    });
     expect("goals" in bodies()[0]).toBe(false);
+    unmount();
+
+    // Beside a per-card budget the line reads the budget alone, and the
+    // goals ride as every snapshot body sends them: without the total.
+    fetchMock.mockClear();
+    render(sheet({ goals: { v: 1, budget: { perCardUsd: 5, totalUsd: 150 } } }));
+    await screen.findByText("Lands · 12");
+    expect(goalsLine()?.textContent).toBe("Your goals: ≤ $5 a card");
+    expect(bodies()[0]).toEqual({
+      game: "mtg",
+      format: "commander",
+      leaderIds: [atraxa.id],
+      keep: [],
+      budgetUsd: 5,
+      goals: { v: 1, budget: { perCardUsd: 5 } },
+      totalUsd: 150,
+    });
   });
 
   it("goals with neither a target nor a budget: no line, and nothing in the body changes", async () => {
@@ -1740,5 +1771,362 @@ describe("AutofillSheet — only cards I own (AUTOFILL-OWNED)", () => {
     ];
     expect(every.filter((s) => /[—–·]/.test(s))).toEqual([]);
     expect(every.filter((s) => !s.endsWith("."))).toEqual([]);
+  });
+});
+
+// --------------------------------------------------------------- AUTOFILL-TOTAL
+describe("AutofillSheet — Deck total (AUTOFILL-TOTAL)", () => {
+  /** What the route answers an ask with a total: the same picks, and the whole deck's figure. */
+  const fitted = (totalUsd: number, over: Record<string, unknown> = {}) => ({
+    ...shell,
+    notes: [],
+    // Atraxa at $18.50 as the route priced her; the three picks come to $1.76.
+    deck: { totalUsd, estUsd: 20.26, unpriced: 0, keptUsd: 18.5, keptUnpriced: 0 },
+    ...over,
+  });
+  let answer: (totalUsd: number) => unknown = (totalUsd) => fitted(totalUsd);
+  function totalRoutes(input: RequestInfo | URL, init?: RequestInit) {
+    if (String(input) === "/api/decks/autofill") {
+      const body = JSON.parse(init!.body as string) as { totalUsd?: number; ownedOnly?: boolean };
+      if (body.ownedOnly) return ok({ ...shell, owned: { applied: true } });
+      return ok(body.totalUsd === undefined ? shell : answer(body.totalUsd));
+    }
+    return routes(input);
+  }
+
+  const form = () => document.querySelector<HTMLFormElement>("[data-slot=deck-total]")!;
+  const field = () => within(form()).getByLabelText("Deck total") as HTMLInputElement;
+  const chips = () =>
+    (within(form()).getAllByRole("button") as HTMLButtonElement[]).filter(
+      (b) => b.getAttribute("type") !== "submit",
+    );
+  const chip = (name: string) => within(form()).getByRole("button", { name }) as HTMLButtonElement;
+  const pressedChips = () =>
+    chips()
+      .filter((b) => b.getAttribute("aria-pressed") === "true")
+      .map((b) => b.textContent);
+  const totalNote = () => document.querySelector<HTMLElement>("[data-slot=autofill-total-note]");
+  const estimate = () => document.querySelector<HTMLElement>("[data-slot=autofill-estimate]");
+  const type = (text: string) => fireEvent.change(field(), { target: { value: text } });
+  async function asked(n: number) {
+    await waitFor(() => expect(bodies()).toHaveLength(n));
+    await screen.findByText("Lands · 12");
+  }
+  const idle = () => new Promise((resolve) => setTimeout(resolve, 60));
+
+  beforeEach(() => {
+    answer = (totalUsd) => fitted(totalUsd);
+    fetchMock.mockImplementation(totalRoutes);
+  });
+
+  it("the control: the Fit sheet's field beside Budget, at no total: Not set pressed, the four presets, nothing sent and nothing said", async () => {
+    render(sheet());
+    await asked(1);
+    expect(field().value).toBe("");
+    expect(chips().map((b) => b.textContent)).toEqual(["Not set", "$50", "$100", "$150", "$250"]);
+    expect(pressedChips()).toEqual(["Not set"]);
+    expect(within(form()).getByRole("button", { name: "Set" }).getAttribute("type")).toBe("submit");
+    // It sits in the controls as the row's last item: the row the sheet had
+    // (Budget, the boxes, Reroll) comes first, and the control takes the line
+    // under it.
+    const controls = document.querySelector<HTMLElement>("[data-slot=autofill-controls]")!;
+    expect(controls.contains(form())).toBe(true);
+    for (const before of [
+      screen.getByRole("group", { name: "Budget" }),
+      screen.getByRole("checkbox", { name: "Only cards I own" }),
+      screen.getByRole("button", { name: "Reroll" }),
+    ]) {
+      expect(controls.contains(before)).toBe(true);
+      expect(
+        before.compareDocumentPosition(form()) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    }
+    // No total: today's body, the picks' own estimate, and no line about saving one.
+    expect(bodies()[0]).toEqual({
+      game: "mtg",
+      format: "commander",
+      leaderIds: [atraxa.id],
+      keep: [],
+    });
+    expect(estimate()?.textContent).toBe("Est. total $2 (cheapest printings)");
+    expect(totalNote()).toBeNull();
+  });
+
+  it("a preset asks ONCE with `totalUsd` and nothing else moved; the same preset again asks nothing; Not set sends the opening body again, byte for byte", async () => {
+    render(sheet({ entries: [leaderEntry, keptEntry] }));
+    await asked(1);
+    fireEvent.click(chip("$100"));
+    await asked(2);
+    expect(bodies()[1]).toEqual({
+      game: "mtg",
+      format: "commander",
+      leaderIds: [atraxa.id],
+      keep: [{ cardId: signet.id, zone: "main", qty: 1 }],
+      totalUsd: 100,
+    });
+    expect("seed" in bodies()[1]).toBe(false);
+    expect(pressedChips()).toEqual(["$100"]);
+    expect(field().value).toBe("100");
+    await idle();
+    expect(bodies()).toHaveLength(2);
+
+    // The same total again is no new ask.
+    fireEvent.click(chip("$100"));
+    await idle();
+    expect(bodies()).toHaveLength(2);
+
+    fireEvent.click(chip("$250"));
+    await asked(3);
+    expect(bodies()[2].totalUsd).toBe(250);
+
+    fireEvent.click(chip("Not set"));
+    await asked(4);
+    expect(rawBodies()[3]).toBe(rawBodies()[0]);
+    expect(pressedChips()).toEqual(["Not set"]);
+    expect(field().value).toBe("");
+  });
+
+  it("typing commits nothing; Set or Enter does, in whole dollars; anything else is refused with one line and nothing is asked", async () => {
+    render(sheet());
+    await asked(1);
+    type("75");
+    await idle();
+    expect(bodies()).toHaveLength(1);
+
+    fireEvent.click(within(form()).getByRole("button", { name: "Set" }));
+    await asked(2);
+    expect(bodies()[1].totalUsd).toBe(75);
+    // A typed total is no preset: none reads pressed, and the box holds it.
+    expect(pressedChips()).toEqual([]);
+    expect(field().value).toBe("75");
+
+    // Enter submits the form; "$1,200" is read as 1200.
+    type("$1,200");
+    fireEvent.submit(form());
+    await asked(3);
+    expect(bodies()[2].totalUsd).toBe(1200);
+    expect(field().value).toBe("1200");
+
+    for (const bad of ["", "0", "-5", "12.50", "lots", "100001"]) {
+      type(bad);
+      fireEvent.submit(form());
+      expect(screen.getByRole("alert").textContent).toBe(
+        "Enter a whole number of dollars, at least $1.",
+      );
+      expect(field().getAttribute("aria-invalid")).toBe("true");
+    }
+    await idle();
+    expect(bodies()).toHaveLength(3);
+    // Typing again takes the line away.
+    type("90");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("the footer reads the whole deck against the total, from the route's own figure, and follows the checks", async () => {
+    render(sheet());
+    await asked(1);
+    fireEvent.click(chip("$100"));
+    await asked(2);
+    // The commander as the route priced her, and the three picks: $20.26.
+    expect(estimate()?.textContent).toBe("Deck total: est. $20 of your $100");
+    // Unchecking the eleven Wastes ($1.10) takes them out of the figure.
+    fireEvent.click(screen.getByRole("checkbox", { name: "Include Wastes × 11" }));
+    expect(estimate()?.textContent).toBe("Deck total: est. $19 of your $100");
+    // Nothing checked, nothing to add: no figure.
+    fireEvent.click(screen.getByRole("checkbox", { name: "Include Lands" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Include Lands" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Include Mana value 2" }));
+    expect(screen.getByRole("button", { name: "Add 0 cards" })).toBeTruthy();
+    expect(estimate()?.textContent).toBe("");
+  });
+
+  it("a list that cannot reach its total: the route's note reads verbatim, and the footer is the same figure", async () => {
+    const note =
+      "With these added the deck comes to about $131, $31 over your $100 deck total. Autofill found no cheaper cards that fit.";
+    answer = (totalUsd) =>
+      fitted(totalUsd, {
+        notes: [note],
+        deck: { totalUsd, estUsd: 131.2, unpriced: 0, keptUsd: 129.44, keptUnpriced: 0 },
+      });
+    render(sheet());
+    await asked(1);
+    fireEvent.click(chip("$100"));
+    await asked(2);
+    expect(screen.getByText(note)).toBeTruthy();
+    expect(estimate()?.textContent).toBe("Deck total: est. $131 of your $100");
+  });
+
+  it("a figure that would read as the total itself shows its cents, and cards with no known price are counted beside it", async () => {
+    answer = (totalUsd) =>
+      fitted(totalUsd, {
+        picks: [...shell.picks.slice(0, 2), { ...shell.picks[2], cheapestUsd: null }],
+        deck: { totalUsd, estUsd: 100.4, unpriced: 2, keptUsd: 99.07, keptUnpriced: 1 },
+      });
+    render(sheet());
+    await asked(1);
+    fireEvent.click(chip("$100"));
+    await asked(2);
+    // $99.07 kept, $0.23 and $1.10 of picks; the kept card and the Signet have no price.
+    expect(estimate()?.textContent).toBe("Deck total: est. $100.40 of your $100 (+2 unpriced)");
+  });
+
+  it("a deck that already has a total opens on it: the ONE opening ask carries it, and the control reads it", async () => {
+    render(sheet({ goals: { v: 1, targetLevel: 3, budget: { totalUsd: 150 } } }));
+    await asked(1);
+    expect(bodies()[0]).toEqual({
+      game: "mtg",
+      format: "commander",
+      leaderIds: [atraxa.id],
+      keep: [],
+      // The goals as every snapshot body sends them: without the total.
+      goals: { v: 1, targetLevel: 3 },
+      totalUsd: 150,
+    });
+    expect(pressedChips()).toEqual(["$150"]);
+    expect(field().value).toBe("150");
+    expect(estimate()?.textContent).toBe("Deck total: est. $20 of your $150");
+    // The deck's own total: nothing to announce.
+    expect(totalNote()).toBeNull();
+    await idle();
+    expect(bodies()).toHaveLength(1);
+  });
+
+  it("the line under the controls: what Add will save, only when it would change the deck's total", async () => {
+    const { unmount } = render(sheet());
+    await asked(1);
+    fireEvent.click(chip("$100"));
+    await asked(2);
+    expect(totalNote()?.textContent).toBe(
+      "Adding these cards saves $100 as this deck's total. Only you see a deck's total.",
+    );
+    fireEvent.click(chip("Not set"));
+    await asked(3);
+    expect(totalNote()).toBeNull();
+    unmount();
+
+    fetchMock.mockClear();
+    render(sheet({ goals: { v: 1, budget: { totalUsd: 150 } } }));
+    await asked(1);
+    expect(totalNote()).toBeNull();
+    fireEvent.click(chip("$50"));
+    await asked(2);
+    expect(totalNote()?.textContent).toBe(
+      "Adding these cards changes this deck's total from $150 to $50. Only you see a deck's total.",
+    );
+    fireEvent.click(chip("Not set"));
+    await asked(3);
+    expect(totalNote()?.textContent).toBe("Adding these cards removes this deck's total.");
+    fireEvent.click(chip("$150"));
+    await asked(4);
+    expect(totalNote()).toBeNull();
+  });
+
+  it("Add hands the total over with the list: whole dollars, or null for none", async () => {
+    const onApply = vi.fn();
+    const { unmount } = render(sheet({ onApply }));
+    await asked(1);
+    fireEvent.click(screen.getByRole("button", { name: "Add 13 cards" }));
+    expect((onApply.mock.calls[0][0] as AutofillApply).total).toBeNull();
+    unmount();
+
+    fetchMock.mockClear();
+    render(sheet({ onApply }));
+    await asked(1);
+    fireEvent.click(chip("$100"));
+    await asked(2);
+    fireEvent.click(screen.getByRole("button", { name: "Add 13 cards" }));
+    const apply = onApply.mock.calls[1][0] as AutofillApply;
+    expect(apply.total).toBe(100);
+    expect(apply.added).toBe(13);
+  });
+
+  it("a target pick, a budget pick and Reroll keep the total: each asks once, still with it, and none sends a seed", async () => {
+    render(sheet());
+    await asked(1);
+    fireEvent.click(chip("$100"));
+    await asked(2);
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Your target" })).getByRole("button", { name: "3" }),
+    );
+    await asked(3);
+    fireEvent.click(screen.getByRole("button", { name: "≤ $5 a card" }));
+    await asked(4);
+    fireEvent.click(screen.getByRole("button", { name: "Reroll" }));
+    await asked(5);
+    expect(bodies().map((b) => b.totalUsd)).toEqual([undefined, 100, 100, 100, 100]);
+    expect(bodies()[4]).toEqual({
+      game: "mtg",
+      format: "commander",
+      leaderIds: [atraxa.id],
+      keep: [],
+      budgetUsd: 5,
+      goals: { v: 1, targetLevel: 3 },
+      totalUsd: 100,
+    });
+    expect(bodies().every((b) => !("seed" in b))).toBe(true);
+  });
+
+  it("with Only cards I own ticked the control is off, its value still in view: no total is sent, the reason is the box's line, and Add hands none over", async () => {
+    const onApply = vi.fn();
+    render(sheet({ collection: "available", onApply }));
+    await asked(1);
+    fireEvent.click(chip("$100"));
+    await asked(2);
+    expect(bodies()[1].totalUsd).toBe(100);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Only cards I own" }));
+    await asked(3);
+    expect("totalUsd" in bodies()[2]).toBe(false);
+    expect(bodies()[2].ownedOnly).toBe(true);
+    // Off: the field, Set and every chip disabled, the total still shown.
+    expect(field().disabled).toBe(true);
+    expect(field().value).toBe("100");
+    expect(pressedChips()).toEqual(["$100"]);
+    expect(
+      (within(form()).getAllByRole("button") as HTMLButtonElement[]).every((b) => b.disabled),
+    ).toBe(true);
+    // The box's line says why, and the field names it as its reason.
+    const ownedNote = document.querySelector<HTMLElement>("[data-slot=autofill-owned-note]")!;
+    expect(ownedNote.textContent).toBe(OWNED_COPY.budgetOff);
+    expect(field().getAttribute("aria-describedby")).toBe(ownedNote.id);
+    // Nothing will be saved, so nothing is announced, and the footer counts the collection's cards.
+    expect(totalNote()).toBeNull();
+    expect(estimate()?.textContent).toBe(collectionCountLine(2, 13));
+    fireEvent.click(screen.getByRole("button", { name: "Add 13 cards" }));
+    expect("total" in (onApply.mock.calls[0][0] as AutofillApply)).toBe(false);
+
+    // Unticked, the total is back in force: one ask, with it.
+    fireEvent.click(screen.getByRole("checkbox", { name: "Only cards I own" }));
+    await asked(4);
+    expect(bodies()[3].totalUsd).toBe(100);
+    expect(field().disabled).toBe(false);
+    expect(estimate()?.textContent).toBe("Deck total: est. $20 of your $100");
+  });
+
+  it("opening, setting a total and Cancel write nothing: only the shell's POST and the facts GET are ever asked", async () => {
+    const onApply = vi.fn();
+    const onClose = vi.fn();
+    render(sheet({ onApply, onClose }));
+    await asked(1);
+    fireEvent.click(chip("$50"));
+    await asked(2);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onApply).not.toHaveBeenCalled();
+    const asks = fetchMock.mock.calls.map(([url, init]) => [
+      (init as RequestInit | undefined)?.method ?? "GET",
+      String(url).split("?")[0],
+    ]);
+    expect(new Set(asks.map(([method, url]) => `${method} ${url}`))).toEqual(
+      new Set(["POST /api/decks/autofill", "GET /api/combos/complete"]),
+    );
+  });
+
+  it("on a phone the control sits in the Drawer's controls, with the touch height every chip has", async () => {
+    render(sheet({ phone: true }));
+    await asked(1);
+    expect(screen.getByRole("dialog").contains(form())).toBe(true);
+    for (const b of chips()) expect(b.className).toContain("pointer-coarse:min-h-11");
+    expect(field().className).toContain("pointer-coarse:min-h-11");
   });
 });

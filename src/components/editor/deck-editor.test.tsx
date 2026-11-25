@@ -1824,6 +1824,130 @@ describe("DeckEditor — Autofill review sheet + doors (W9b/W9c)", () => {
     expect(goalsPatches()).toBe(0);
   });
 
+  // -------------------------------------------------- AUTOFILL-TOTAL (draft) --
+  const totalForm = () =>
+    autofillDialog()!.querySelector<HTMLFormElement>("[data-slot=deck-total]")!;
+  const pressedTotal = () =>
+    within(totalForm())
+      .getAllByRole("button")
+      .filter((b) => b.getAttribute("aria-pressed") === "true")
+      .map((b) => b.textContent);
+  const totalsAsked = () =>
+    fetchMock.mock.calls
+      .filter(([url, init]) => String(url) === "/api/decks/autofill" && init?.method === "POST")
+      .map(
+        ([, init]) =>
+          (JSON.parse((init as RequestInit).body as string) as { totalUsd?: number }).totalUsd,
+      );
+  /** A preset of Deck total in the sheet, and the list it asks for. */
+  async function pickTotal(label: string, asks: number) {
+    fireEvent.click(within(totalForm()).getByRole("button", { name: label }));
+    await pollFor(() =>
+      autofillPosts() === asks ? screen.queryByRole("button", { name: "Add 12 cards" }) : null,
+    );
+  }
+  const createGoals = () =>
+    (
+      JSON.parse(
+        fetchMock.mock.calls.find(
+          ([url, init]) => url === "/api/decks" && init?.method === "POST",
+        )![1]!.body as string,
+      ) as { goals?: unknown }
+    ).goals;
+
+  it("AUTOFILL-TOTAL: a total then Add on a draft is ONE create that carries the total and ONE PUT; the toast says so; Undo takes the cards back and leaves the total", async () => {
+    await openDraftSheet();
+    expect(pressedTotal()).toEqual(["Not set"]);
+    await pickTotal("$100", 2);
+    // The total rides its own field; the goals are as they were (none).
+    expect(totalsAsked()).toEqual([undefined, 100]);
+    expect(autofillBodies().map((b) => b.goals)).toEqual([undefined, undefined]);
+    expect(document.querySelector("[data-slot=autofill-total-note]")?.textContent).toBe(
+      "Adding these cards saves $100 as this deck's total. Only you see a deck's total.",
+    );
+    // A total is the sheet's own until Add: nothing dirtied, nothing minted.
+    expect(posts()).toBe(0);
+    expect(saveStatus()).toBe("saved");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add 12 cards" }));
+    const toastEl = (await pollFor(() => screen.queryByText("Added 12 cards"))).closest(
+      '[data-slot="toast"]',
+    ) as HTMLElement;
+    expect(toastEl.querySelector("[data-slot=toast-description]")?.textContent).toBe(
+      "Deck total set: $100. Undo takes the cards back, not the total.",
+    );
+    await settle(1500);
+    await act(async () => {});
+    expect(posts()).toBe(1);
+    expect(createGoals()).toEqual({ v: 1, budget: { totalUsd: 100 } });
+    expect(puts()).toBe(1);
+    expect(lastPutEntries()).toHaveLength(3);
+    // The create carried the total: no goals PATCH follows it.
+    expect(goalsPatches()).toBe(0);
+
+    // Undo is the list's alone: the leader-only list saves back, the total stays.
+    fireEvent.click(within(toastEl).getByRole("button", { name: "Undo" }));
+    await settle(1500);
+    await act(async () => {});
+    expect(puts()).toBe(2);
+    expect(lastPutEntries()).toHaveLength(1);
+    expect(posts()).toBe(1);
+    expect(goalsPatches()).toBe(0);
+    // Still the deck's total: the sheet opens on it, asks with it, and has nothing to announce.
+    fireEvent.click(
+      await pollFor(() => screen.queryByRole("button", { name: "Autofill a starter shell" })),
+    );
+    await pollFor(() => screen.queryByRole("button", { name: "Add 12 cards" }));
+    expect(pressedTotal()).toEqual(["$100"]);
+    expect(totalsAsked().at(-1)).toBe(100);
+    expect(document.querySelector("[data-slot=autofill-total-note]")).toBeNull();
+  });
+
+  it("AUTOFILL-TOTAL: a target and a total picked together are ONE goals edit, and the toast names both and what Undo leaves", async () => {
+    await openDraftSheet();
+    await pickTarget("3", 2);
+    await pickTotal("$150", 3);
+    expect(autofillBodies().at(-1)?.goals).toEqual({ v: 1, targetLevel: 3 });
+    expect(totalsAsked().at(-1)).toBe(150);
+
+    fireEvent.click(screen.getByRole("button", { name: "Add 12 cards" }));
+    const toastEl = (await pollFor(() => screen.queryByText("Added 12 cards"))).closest(
+      '[data-slot="toast"]',
+    ) as HTMLElement;
+    expect(toastEl.querySelector("[data-slot=toast-description]")?.textContent).toBe(
+      "Target set: Bracket 3 (Upgraded). Deck total set: $150. Undo takes the cards back, not the target or the total.",
+    );
+    await settle(1500);
+    await act(async () => {});
+    expect(posts()).toBe(1);
+    expect(createGoals()).toEqual({ v: 1, targetLevel: 3, budget: { totalUsd: 150 } });
+    expect(puts()).toBe(1);
+    expect(goalsPatches()).toBe(0);
+  });
+
+  it("AUTOFILL-TOTAL: a total set and cleared again, then Cancel, writes nothing and is not kept", async () => {
+    await openDraftSheet();
+    await pickTotal("$50", 2);
+    await pickTotal("Not set", 3);
+    expect(totalsAsked()).toEqual([undefined, 50, undefined]);
+    await pickTotal("$250", 4);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await settle(1500);
+    await act(async () => {});
+    expect(posts()).toBe(0);
+    expect(puts()).toBe(0);
+    expect(goalsPatches()).toBe(0);
+    expect(saveStatus()).toBe("saved");
+    // The sheet forgot it: it opens on the deck's total, which is still none.
+    fireEvent.click(screen.getByRole("button", { name: "Autofill a starter shell" }));
+    await pollFor(() =>
+      autofillPosts() === 5 ? screen.queryByRole("button", { name: "Add 12 cards" }) : null,
+    );
+    expect(pressedTotal()).toEqual(["Not set"]);
+    expect(totalsAsked().at(-1)).toBeUndefined();
+  });
+  // ---------------------------------------------- end AUTOFILL-TOTAL (draft) --
+
   it("One Piece: no autofill door — the empty state keeps only Add cards (adapter-gated)", async () => {
     fetchMock.mockImplementation(autofillRoute);
     stubViewport(1440);
@@ -5535,6 +5659,139 @@ describe("DeckEditor — Fit my budget (Y8, WAVE4 D9)", () => {
     expect(puts()).toBe(0);
     expect(altCalls()).toHaveLength(0);
   });
+
+  // -------------------------------------------------- AUTOFILL-TOTAL (saved) --
+  it("AUTOFILL-TOTAL: on a saved deck the sheet opens on the deck's total; Add with another saves it in ONE goals PATCH beside the ONE PUT; Undo leaves it; after a reload the goals line reads against it and Fit my budget opens on it", async () => {
+    const pebble = rock("Pebble", 1);
+    const shell = {
+      game: "mtg",
+      format: "commander",
+      seed: 7,
+      picks: [
+        {
+          cardId: pebble.id,
+          name: "Pebble",
+          zone: "main",
+          qty: 1,
+          group: "curve-2",
+          tier: "fit",
+          score: 0.5,
+          cheapestUsd: "1.00",
+          evidence: [
+            {
+              source: "edhrec_rank",
+              why: "A Commander staple in EDHREC decklists",
+              with: [],
+              howOften: null,
+              confidence: "medium",
+            },
+          ],
+        },
+      ],
+      groups: [{ id: "curve-2", label: "Mana value 2", picks: 1 }],
+      notes: [],
+      totals: { picks: 1, estUsd: 1, unpriced: 0 },
+      issues: [],
+      cards: [...LIST.map((row) => row.card), pebble],
+    };
+    const asked: { totalUsd?: number; goals?: unknown }[] = [];
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/decks/autofill") {
+        const body = JSON.parse(init!.body as string) as { totalUsd?: number; goals?: unknown };
+        asked.push(body);
+        return {
+          ...ok(
+            body.totalUsd === undefined
+              ? shell
+              : {
+                  ...shell,
+                  // The list as it stands, $118, as the route would price it.
+                  deck: {
+                    totalUsd: body.totalUsd,
+                    estUsd: 119,
+                    unpriced: 0,
+                    keptUsd: 118,
+                    keptUnpriced: 0,
+                  },
+                },
+          ),
+          headers: new Headers(),
+        };
+      }
+      return fitRoute(input, init);
+    });
+    deckGoals = { v: 1, budget: { totalUsd: 200 } };
+    stubViewport(1440);
+    const first = render(<DeckEditor deckId="deck-1" />);
+    openMenu(await pollFor(() => screen.queryByRole("button", { name: "More" })));
+    const menu = await pollFor(() => screen.queryByRole("menu", { name: "More" }));
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Autofill…" }));
+    const sheetEl = await pollFor(() =>
+      screen.queryByRole("dialog", { name: "Autofill a starter shell" }),
+    );
+    await pollFor(() => within(sheetEl).queryByRole("button", { name: "Add 1 card" }));
+    // The ONE opening ask carries the deck's total, apart from its goals.
+    expect(asked).toHaveLength(1);
+    expect(asked[0].totalUsd).toBe(200);
+    expect(asked[0].goals).toBeUndefined();
+    const form = sheetEl.querySelector<HTMLFormElement>("[data-slot=deck-total]")!;
+    expect((within(form).getByLabelText("Deck total") as HTMLInputElement).value).toBe("200");
+    expect(sheetEl.querySelector("[data-slot=autofill-estimate]")?.textContent).toBe(
+      "Deck total: est. $119 of your $200",
+    );
+    expect(sheetEl.querySelector("[data-slot=autofill-total-note]")).toBeNull();
+
+    fireEvent.click(within(form).getByRole("button", { name: "$150" }));
+    await pollFor(() =>
+      asked.length === 2 ? within(sheetEl).queryByRole("button", { name: "Add 1 card" }) : null,
+    );
+    expect(sheetEl.querySelector("[data-slot=autofill-total-note]")?.textContent).toBe(
+      "Adding these cards changes this deck's total from $200 to $150. Only you see a deck's total.",
+    );
+    // Opening and picking wrote nothing.
+    await settle(1500);
+    await act(async () => {});
+    expect(puts()).toBe(0);
+    expect(patchBodies()).toEqual([]);
+
+    fireEvent.click(within(sheetEl).getByRole("button", { name: "Add 1 card" }));
+    const toastEl = (await pollFor(() => screen.queryByText("Added 1 card"))).closest(
+      '[data-slot="toast"]',
+    ) as HTMLElement;
+    expect(toastEl.querySelector("[data-slot=toast-description]")?.textContent).toBe(
+      "Deck total changed from $200 to $150. Undo takes the cards back, not the total.",
+    );
+    await settle(1500);
+    await act(async () => {});
+    expect(puts()).toBe(1);
+    expect(lastPutEntries()).toHaveLength(ORIGINAL.length + 1);
+    expect(patchBodies()).toEqual([{ goals: { budget: { totalUsd: 150 }, v: 1 } }]);
+
+    // Undo takes the cards back: one more PUT, the list as it was, and no second PATCH.
+    fireEvent.click(within(toastEl).getByRole("button", { name: "Undo" }));
+    await settle(1500);
+    await act(async () => {});
+    expect(puts()).toBe(2);
+    expect(lastPutEntries()).toEqual(ORIGINAL);
+    expect(patchBodies()).toHaveLength(1);
+
+    // The reload: the deck as that PATCH saved it.
+    deckGoals = (patchBodies()[0] as { goals: unknown }).goals;
+    first.unmount();
+    render(<DeckEditor deckId="deck-1" />);
+    fireEvent.click(await pollFor(() => screen.queryByRole("tab", { name: "Suggestions" })));
+    const goalsLine = await pollFor(() =>
+      document.querySelector<HTMLElement>("[data-slot=goals-line]"),
+    );
+    expect(goalsLine.textContent).toBe("Your goals: est. $118 of your $150 Change");
+    openMenu(screen.getByRole("button", { name: "More" }));
+    const again = await pollFor(() => screen.queryByRole("menu", { name: "More" }));
+    fireEvent.click(within(again).getByRole("menuitem", { name: "Fit my budget…" }));
+    const fitEl = await pollFor(fitSheet);
+    expect(fitEl.textContent).toContain("Deck total $150");
+    expect(fitEl.textContent).toContain("Already within your budget: est. $118 of your $150.");
+  });
+  // ---------------------------------------------- end AUTOFILL-TOTAL (saved) --
 
   it("One Piece declares no swap: no Fit my budget in More", async () => {
     stubViewport(1440);

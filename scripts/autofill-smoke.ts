@@ -37,8 +37,20 @@
  * group for group, the note counts it, and the shell's own read has its
  * floor at 4; a target of 5 takes the same four and never names Bracket 5.
  *
- * Budget: 18 autofill POSTs — under the 20/min deckAutofill bucket. Never
- * retry into a 429; `pnpm counters:reset` if a manual battery preceded this.
+ * AUTOFILL-TOTAL adds a deck total, with the two examples its measurement
+ * recorded on the dev branch (2026-11-25, 57 commander sets at five seeds):
+ * Etali, Primal Storm at seed 424242 with $100 lands at or under it, the
+ * whole deck priced from the answer's own cards, every group as full as
+ * without a total and every card that came in marked; Sheoldred, the
+ * Apocalypse cannot (the commander alone costs more than $100 there), and
+ * the note says so, naming the commander and what the deck comes to. Prices
+ * move: where an example stops being one, its check says so and the example
+ * wants replacing.
+ *
+ * Budget: 20 autofill POSTs — all of the 20/min deckAutofill bucket, so any
+ * other Autofill ask waits a minute. Never retry into a 429. The bucket is
+ * rate_limits' own: `pnpm counters:reset` clears deck-create counters, not
+ * this one (LATER row 516).
  */
 import { BASE } from "./smoke/guard"; // first import: a non-local BASE_URL exits 1 here
 
@@ -71,7 +83,15 @@ interface ShellResponse {
   notes: string[];
   totals: { picks: number; estUsd: number | null; unpriced: number };
   issues: { code?: string; severity: string; message: string; cardIds?: string[] }[];
-  cards: { id: string; name: string }[];
+  cards: { id: string; name: string; cheapestUsd?: number | null }[];
+  /** AUTOFILL-TOTAL: the whole deck against its total, only when one was sent. */
+  deck?: {
+    totalUsd: number;
+    estUsd: number;
+    unpriced: number;
+    keptUsd: number;
+    keptUnpriced: number;
+  };
 }
 
 async function autofill(body: unknown): Promise<{
@@ -423,6 +443,92 @@ async function main() {
       ) &&
       e5.json.notes.every((n) => !/Bracket 5/.test(n)),
     e5.json.notes,
+  );
+
+  // -------------------------------------------------------- AUTOFILL-TOTAL
+  // A deck total (the owner's idea 5 of 2026-11-24): the list is fitted
+  // under it, or a note says how far over it is and why. The whole deck is
+  // priced here from the answer's own cards, the commander included, and
+  // set beside the answer's own figure: one number, worked out one way.
+  console.log("\nA deck total: fitted under it, or said how far over (AUTOFILL-TOTAL) — 2 POSTs:");
+  /** The deck's cost in cents from the answer alone: the commanders' wires and every pick. */
+  const deckCents = (r: ShellResponse, leaderIds: string[]) => {
+    let cents = 0;
+    for (const id of leaderIds) {
+      const price = r.cards.find((c) => c.id === id)?.cheapestUsd ?? null;
+      if (price !== null) cents += Math.round(price * 100);
+    }
+    for (const pk of r.picks) {
+      if (pk.cheapestUsd !== null) cents += Math.round(Number(pk.cheapestUsd) * 100) * pk.qty;
+    }
+    return cents;
+  };
+  const fitted = await autofill({ ...etaliBody, totalUsd: 100 });
+  const fittedCents = fitted.status === 200 ? deckCents(fitted.json, [etali.id]) : NaN;
+  check(
+    `Etali at $100: 99 picks, no validation error, and the whole deck costs $${(fittedCents / 100).toFixed(2)}, at or under the total`,
+    fitted.status === 200 &&
+      qty(fitted.json) === 99 &&
+      fitted.json.issues.every((i) => i.severity !== "error") &&
+      fittedCents <= 100_00,
+    fitted.json.error ?? { cents: fittedCents, picks: qty(fitted.json) },
+  );
+  check(
+    "…the answer's own figure is that number, against that total, and no note speaks of the total",
+    fitted.json.deck !== undefined &&
+      Math.round(fitted.json.deck.estUsd * 100) === fittedCents &&
+      fitted.json.deck.totalUsd === 100 &&
+      fitted.json.notes.every((n) => !/deck total/.test(n)),
+    { deck: fitted.json.deck, notes: fitted.json.notes },
+  );
+  const plainCents = deckCents(e0.json, [etali.id]);
+  const cameInCheaper = fitted.json.picks.filter((pk) => pk.tier === "fit");
+  const plainIds = new Set(e0.json.picks.map((pk) => pk.cardId));
+  check(
+    `…the same seed with no total costs $${(plainCents / 100).toFixed(2)} and carries no figure: the fit brought in ${cameInCheaper.length} cards, each marked, and every other ranked pick is that list's`,
+    plainCents > 100_00 &&
+      e0.json.deck === undefined &&
+      cameInCheaper.length > 0 &&
+      fitted.json.picks
+        .filter((pk) => pk.tier !== "fit" && pk.tier !== "filler")
+        .every((pk) => plainIds.has(pk.cardId)),
+    { plainCents, cameIn: cameInCheaper.length },
+  );
+  check(
+    "…every group holds what it held without a total",
+    JSON.stringify(fitted.json.groups) === JSON.stringify(e0.json.groups),
+    { fitted: fitted.json.groups, plain: e0.json.groups },
+  );
+  const sheoldred = await findCard("Sheoldred, the Apocalypse");
+  const tooDear = await autofill({
+    game: "mtg",
+    format: "commander",
+    leaderIds: [sheoldred.id],
+    seed: 424_242,
+    totalUsd: 100,
+  });
+  const overCents = tooDear.status === 200 ? deckCents(tooDear.json, [sheoldred.id]) : NaN;
+  const commanderUsd = tooDear.json.cards?.find((c) => c.id === sheoldred.id)?.cheapestUsd ?? null;
+  check(
+    `Sheoldred at $100 cannot: the commander alone is $${commanderUsd}, and the whole deck costs $${(overCents / 100).toFixed(2)} (the example holds while the commander costs more than the total)`,
+    tooDear.status === 200 &&
+      qty(tooDear.json) === 99 &&
+      commanderUsd !== null &&
+      commanderUsd > 100 &&
+      overCents > 100_00 &&
+      tooDear.json.deck !== undefined &&
+      Math.round(tooDear.json.deck.estUsd * 100) === overCents,
+    tooDear.json.error ?? { commanderUsd, overCents, deck: tooDear.json.deck },
+  );
+  const overNote = tooDear.json.notes?.find((n) => /deck total/.test(n));
+  check(
+    `…and one note says so, naming the commander and what the deck comes to: "${overNote}"`,
+    overNote !== undefined &&
+      /^Your commander comes to about \$\d[\d,.]*, already over your \$100 deck total\. Autofill picked the cheapest cards that fit, and the deck comes to about \$\d[\d,.]*\.$/.test(
+        overNote,
+      ) &&
+      overNote.includes(`about $${Math.round(overCents / 100).toLocaleString("en-US")}.`),
+    tooDear.json.notes,
   );
 
   // ------------------------------------------------------------------- W9c

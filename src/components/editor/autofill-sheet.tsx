@@ -43,10 +43,11 @@
  * answers; spread only when there are any, so a deck without goals sends
  * today's exact body), and the route keeps the shell inside the target. The
  * budget control starts from the deck's per-card goal, as Suggestions' does;
- * a pick of the sheet's own wins for as long as it's open (the budget is
- * one-shot — no "Save as this deck's budget" here). With a budget, the goals
- * line reads above the controls, without its Change: the Why sheet is
- * another dialog. The notes say what the target kept out, and what
+ * a pick of the sheet's own wins for as long as it's open (the per-card
+ * budget is one-shot — no "Save as this deck's budget" here). With a
+ * per-card budget, the goals line reads above the controls, without its
+ * Change: the Why sheet is another dialog. The notes say what the target
+ * kept out, and what
  * building up to it brought in or is still short (AUTOFILL-REACH: the
  * route's doing, this sheet sends the same body).
  *
@@ -76,6 +77,30 @@
  *   a failure. Add never waits for it.
  * - The goals line stops naming the target (the choice does); its budget
  *   part stays.
+ *
+ * Deck total (AUTOFILL-TOTAL, the owner's idea 5 of 2026-11-24: "a spot to
+ * type your total budget to keep the deck in that range"; it reverses, for
+ * the total alone, Y6b's one-shot sheet, Y8's "the total is set only in the
+ * Fit sheet" and "no route reads the total"): in the controls with Budget,
+ * on the line under its row, the Fit sheet's own field
+ * (./deck-total-field.tsx: whole dollars typed and set, or a preset),
+ * starting at the deck's saved total.
+ * - A total asks the route again with `totalUsd`, its own field in the body:
+ *   the goals still go through `suggestionGoals`, which leaves the total
+ *   out, so no total sends today's body byte for byte. The route fits the
+ *   list under it and says so (`deck`).
+ * - The footer then reads the whole deck against the total, in the Fit
+ *   sheet's phrase ("Deck total: est. $97 of your $100"): the commander and
+ *   the kept cards as the route priced them, plus the checked picks, so it
+ *   follows the checkboxes and is the one figure the route's note reads.
+ * - The total is the sheet's own until Add, like the target: Add hands it
+ *   over (`total`) and the editor saves it on the deck when it differs (the
+ *   owner's decision 16). Under the controls, one line says so, and only
+ *   then.
+ * - Off while "Only cards I own" is ticked (decision 5), its value still in
+ *   view: nothing is sent, and Add hands no total over.
+ * - The goals line stops naming the total (the control does); a per-card
+ *   budget still reads there.
  *
  * Only cards I own (AUTOFILL-OWNED, the owner's ask of 2026-11-24): a
  * checkbox in the controls row, in Suggestions' toggle's own words
@@ -128,6 +153,7 @@ import { CardNamePreview } from "@/components/deck/card-name-preview";
 import { GoalsLine } from "@/components/deck/goals-line";
 import { Segmented } from "@/components/deck/segmented";
 import { useBracketFacts } from "@/components/deck/use-bracket-facts";
+import { DeckTotalField } from "@/components/editor/deck-total-field";
 import { ImportCollectionHint, ONLY_OWNED_LABEL } from "@/components/editor/owned-copy";
 import { sourceMeta } from "@/components/editor/recommendations-panel";
 import { Button } from "@/components/ui/button";
@@ -152,14 +178,14 @@ import {
   type EditorCard,
   type EditorEntry,
 } from "@/lib/decks/editor-state";
-import { suggestionGoals, withTarget, type DeckGoals } from "@/lib/decks/goals";
+import { suggestionGoals, withTarget, withTotal, type DeckGoals } from "@/lib/decks/goals";
 import { isPlayableZone, playableEntries } from "@/lib/decks/playable";
 import { addMorePhrase, deckProgress } from "@/lib/decks/progress";
 import { toDeckSnapshot } from "@/lib/decks/validation";
 import type { FormatDef, GameAdapter, ValidationIssue } from "@/lib/games/types";
 import type { ShellGroup, ShellPick } from "@/lib/recommend/autofill";
-import type { FitEstimate } from "@/lib/recommend/fit";
-import { BUDGET_OPTIONS, tierOf, type BudgetTier } from "@/lib/recommend/budget";
+import { BUDGET_OPTIONS, TOTAL_PRESETS_USD, tierOf, type BudgetTier } from "@/lib/recommend/budget";
+import { autofillTotalNote, deckTotalLine, TOTAL_COPY } from "@/lib/recommend/total-copy";
 import type { RecommendationEvidence } from "@/lib/recommend/types";
 import { cn } from "@/lib/utils";
 
@@ -178,6 +204,12 @@ export interface AutofillApply {
    * when it differs. Absent for a game without `brackets` (no choice shown).
    */
   target?: number | null;
+  /**
+   * AUTOFILL-TOTAL: the sheet's Deck total when Add was pressed, whole
+   * dollars or null for none; the editor saves it as the deck's total when
+   * it differs. Absent while the control is off ("Only cards I own").
+   */
+  total?: number | null;
   /**
    * AUTOFILL-OWNED: the added cards the route built from the player's
    * collection (every checked pick but the fillers), so the editor can mark
@@ -205,6 +237,18 @@ interface ShellResponse {
   cards: CardWire[];
   /** AUTOFILL-OWNED: present, and applied, only when the list was built from the player's cards. */
   owned?: { applied: boolean };
+  /**
+   * AUTOFILL-TOTAL: present only when the list was fitted under a deck
+   * total: the total, and what the commander and the kept cards cost as the
+   * route priced them (cards with no known price counted apart).
+   */
+  deck?: {
+    totalUsd: number;
+    estUsd: number;
+    unpriced: number;
+    keptUsd: number;
+    keptUnpriced: number;
+  };
 }
 
 type SheetState =
@@ -225,7 +269,11 @@ const RETRY_WAIT_REASON = "Too many requests. Retry works again after the wait."
 
 /** AUTOFILL-OWNED: the sheet's own sentences (pinned in its test). */
 export const OWNED_COPY = {
-  /** Under the controls while the box is ticked: why Budget is off. */
+  /**
+   * Under the controls while the box is ticked: why Budget is off, and, since
+   * AUTOFILL-TOTAL, Deck total beside it (both controls name this line as
+   * their reason; its second sentence is the reason for both).
+   */
   budgetOff: "Budget is off. Price limits don't apply to cards you own.",
   /** The editor's collection check did not answer. */
   checkFailed: "Couldn't check your collection.",
@@ -259,7 +307,6 @@ export function AutofillSheet({
   phone,
   pinned,
   goals = null,
-  estimate = null,
   linkPreviews = true,
   upgradeDoor = false,
   collection = "unavailable",
@@ -276,10 +323,8 @@ export function AutofillSheet({
   phone: boolean;
   /** The combo this sheet is built around (X3): its pieces are always kept. */
   pinned?: ComboPin;
-  /** The deck's goals (Y6b): the shell keeps inside the target; the budget starts from them. */
+  /** The deck's goals (Y6b): the shell keeps inside the target; the budget and the total start from them. */
   goals?: DeckGoals | null;
-  /** Y8: the deck's estimate — the goals line reads it beside a total. */
-  estimate?: FitEstimate | null;
   /** AUTOFILL-TARGET: whether the deck's link previews draw a target (never for a private deck), as the Why sheet takes it. */
   linkPreviews?: boolean;
   /** AUTOFILL-TARGET: whether the editor can open Upgrade toward once the cards are in (it names the door for a shell short of its target). */
@@ -348,6 +393,12 @@ export function AutofillSheet({
   // disabled while it checks): the opening request waits for the answer.
   const awaitingCollection = ownedTicked && collection === "checking";
   const ownedNoteId = useId();
+  // Deck total (AUTOFILL-TOTAL): the sheet's own, starting at the deck's. It
+  // rides the request as `totalUsd` and nothing else; the deck's total moves
+  // only on Add. Off with "Only cards I own" (decision 5): then none is sent.
+  const deckTotal = goals?.budget?.totalUsd ?? null;
+  const [total, setTotal] = useState<number | null>(deckTotal);
+  const sentTotal = ownedOnly ? null : total;
   const [nonce, setNonce] = useState(0);
   const [sheet, setSheet] = useState<SheetState>({ state: "loading" });
   /** Unchecked pick keys (default: everything checked) and expanded evidence keys. */
@@ -390,6 +441,9 @@ export function AutofillSheet({
             // the body by a byte.
             ...(budget !== "all" && !ownedOnly ? { budgetUsd: Number(budget) } : {}),
             ...(sentGoals ? { goals: sentGoals } : {}),
+            // AUTOFILL-TOTAL: its own field, beside the goals and never in
+            // them; with none, the body is what it was.
+            ...(sentTotal !== null ? { totalUsd: sentTotal } : {}),
             ...(ownedOnly ? { ownedOnly: true } : {}),
           }),
         });
@@ -441,6 +495,7 @@ export function AutofillSheet({
     ownedOnly,
     awaitingCollection,
     sentGoals,
+    sentTotal,
     nonce,
   ]);
 
@@ -473,6 +528,22 @@ export function AutofillSheet({
     (n, p) => n + (p.tier === "filler" ? 0 : p.qty),
     0,
   );
+  // AUTOFILL-TOTAL: the list on screen was fitted under a total (the route's
+  // word, `deck`), and what the whole deck would cost with the checked picks
+  // added: the commander and the kept cards at the route's own figure, the
+  // picks at the prices it sent. Cents, so it is the route's number exactly
+  // while every pick is checked.
+  const deckFigure = useMemo(() => {
+    const deck = shell?.deck;
+    if (!deck) return null;
+    let cents = Math.round(deck.keptUsd * 100);
+    let unpriced = deck.keptUnpriced;
+    for (const p of checkedPicks) {
+      if (p.cheapestUsd === null) unpriced += p.qty;
+      else cents += Math.round(Number(p.cheapestUsd) * 100) * p.qty;
+    }
+    return { totalUsd: deck.totalUsd, estimate: { usd: cents / 100, unpriced } };
+  }, [shell, checkedPicks]);
 
   /** "41 from Topdeck.gg, 21 from EDHREC, 37 from Land template" — adapter labels (U9: one dot a line). */
   const sourceLine = useMemo(() => {
@@ -537,11 +608,24 @@ export function AutofillSheet({
       cards: shell.cards,
       added: addedCount,
       ...(brackets ? { target } : {}),
+      // AUTOFILL-TOTAL: the total the control holds, unless the control is off.
+      ...(ownedOnly ? {} : { total }),
       ...(ownedApplied
         ? { owned: checkedPicks.filter((p) => p.tier !== "filler").map((p) => p.cardId) }
         : {}),
     });
-  }, [shell, nextList, addedCount, brackets, target, ownedApplied, checkedPicks, onApply]);
+  }, [
+    shell,
+    nextList,
+    addedCount,
+    brackets,
+    target,
+    ownedOnly,
+    total,
+    ownedApplied,
+    checkedPicks,
+    onApply,
+  ]);
 
   // The after-line's read (AUTOFILL-TARGET): that list as the editor will
   // hold it (merged), its combo facts by the editor's own hook (one GET per
@@ -605,6 +689,9 @@ export function AutofillSheet({
   const targetNote = brackets
     ? autofillTargetNote(brackets, deckTarget, target, linkPreviews)
     : null;
+  // Under the controls: what Add will do to the deck's total, only when it
+  // would change it, and never while the control is off.
+  const totalNote = ownedOnly ? null : autofillTotalNote(deckTotal, total);
 
   const leaderNames = leaders
     .map((e) => cards.get(e.cardId)?.name)
@@ -650,11 +737,12 @@ export function AutofillSheet({
           )}
         </p>
 
-        {/* The deck's budget goals (Y6b): read-only here — the Why sheet is
-            another dialog. The target is the choice below (AUTOFILL-TARGET),
-            so the line never names it: no `brackets`, the budget alone. */}
-        {(goals?.budget?.perCardUsd !== undefined || goals?.budget?.totalUsd !== undefined) && (
-          <GoalsLine brackets={undefined} goals={goals} estimate={estimate} />
+        {/* The deck's per-card budget (Y6b): read-only here — the Why sheet
+            is another dialog. The target is the choice below (AUTOFILL-TARGET)
+            and the total the control under Budget (AUTOFILL-TOTAL), so the
+            line names neither: no `brackets`, and the goals without a total. */}
+        {goals?.budget?.perCardUsd !== undefined && (
+          <GoalsLine brackets={undefined} goals={withTotal(goals, null)} />
         )}
 
         {/* Your target (AUTOFILL-TARGET): the Why sheet's own choice, the
@@ -681,10 +769,11 @@ export function AutofillSheet({
           </div>
         )}
 
-        {/* Controls: budget chips · keep checkbox · only cards I own · Reroll
-            (D8; AUTOFILL-OWNED). The line under them is the owned box's: why
-            it is off, or, ticked, why Budget is. It sits under the row, so no
-            control moves when it comes and goes. */}
+        {/* Controls: budget chips · keep checkbox · only cards I own · Reroll ·
+            deck total (D8; AUTOFILL-OWNED; AUTOFILL-TOTAL). The lines under
+            them are the owned box's (why it is off, or, ticked, why Budget and
+            Deck total are) and the total's (what Add will save). They sit
+            under the row, so no control moves when they come and go. */}
         <div data-slot="autofill-controls" className="space-y-1">
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
             <Segmented
@@ -729,6 +818,23 @@ export function AutofillSheet({
               <RotateCcwIcon aria-hidden />
               Reroll
             </Button>
+            {/* Deck total (AUTOFILL-TOTAL): the Fit sheet's field, with a
+                chip that clears it. Its form wraps inside its own box. It is
+                the row's last item: too wide to share Budget's line, it takes
+                the line under the row the sheet had, which stays as it was
+                (placed after Budget it sent Reroll to a third line). */}
+            <div data-slot="autofill-total" className="min-w-0 space-y-1">
+              <DeckTotalField
+                quiet
+                committed={total}
+                presets={TOTAL_PRESETS_USD}
+                submitLabel={TOTAL_COPY.set}
+                onCommit={setTotal}
+                notSet={{ label: TOTAL_COPY.notSet, onClear: () => setTotal(null) }}
+                disabled={ownedOnly}
+                describedBy={ownedOnly ? ownedNoteId : undefined}
+              />
+            </div>
           </div>
           {ownedNote && (
             <p
@@ -737,6 +843,11 @@ export function AutofillSheet({
               className="text-muted-foreground text-xs"
             >
               {ownedNote}
+            </p>
+          )}
+          {totalNote && (
+            <p data-slot="autofill-total-note" className="text-muted-foreground text-xs">
+              {totalNote}
             </p>
           )}
         </div>
@@ -859,10 +970,14 @@ export function AutofillSheet({
                   />
                 )}
                 {/* The price estimate; with the list built from the player's
-                    cards (AUTOFILL-OWNED), the count of those in its place. */}
-                <p className="text-muted-foreground text-xs">
+                    cards (AUTOFILL-OWNED), the count of those in its place;
+                    with the list fitted under a total (AUTOFILL-TOTAL), the
+                    whole deck against it. */}
+                <p data-slot="autofill-estimate" className="text-muted-foreground text-xs">
                   {ownedApplied ? (
                     addedCount > 0 && collectionCountLine(fromCollectionCount, addedCount)
+                  ) : deckFigure ? (
+                    addedCount > 0 && deckTotalLine(deckFigure.totalUsd, deckFigure.estimate)
                   ) : (
                     <>
                       {addedCount > 0 &&

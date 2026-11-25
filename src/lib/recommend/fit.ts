@@ -37,6 +37,7 @@
 import { deckOwnership, formatUsd } from "@/lib/collection/ownership";
 import { swapCard, type EditorEntry } from "@/lib/decks/editor-state";
 import type { CardData, FormatDef, SwapMeta } from "@/lib/games/types";
+import { usdBeside } from "./budget";
 
 /** Cards asked about per open, at most — under a third of the alternatives bucket (30/min). */
 export const FIT_ASK_LIMIT = 9;
@@ -73,17 +74,6 @@ export function totalPhrase(totalUsd: number, estimate: FitEstimate | null): str
   if (!estimate) return `${formatUsd(totalUsd)} total`;
   const head = `est. ${usdBeside(estimate.usd, totalUsd)} of your ${formatUsd(totalUsd)}`;
   return estimate.unpriced > 0 ? `${head} (+${estimate.unpriced} unpriced)` : head;
-}
-
-/**
- * Whole dollars, as everywhere — except when that would read as the total
- * itself while the cents say otherwise ($150.40 of your $150 is over).
- */
-function usdBeside(usd: number, totalUsd: number): string {
-  const whole = formatUsd(usd);
-  return whole === formatUsd(totalUsd) && cents(usd) !== cents(totalUsd)
-    ? `$${usd.toFixed(2)}`
-    : whole;
 }
 
 /** A card the sheet may ask about. */

@@ -133,6 +133,43 @@ describe("mtgReachNotes — what building up to the target brought in, and what 
       mtgReachNotes({ added: 1, short: 1, budgetUsd: 5 }, 3),
     );
   });
+
+  it("under a deck total (AUTOFILL-TOTAL): the short line names the total, beside a per-card budget when both narrowed the list", () => {
+    // The total wins over the target: what is short is what did not fit under it.
+    expect(mtgReachNotes({ added: 0, short: 3, totalUsd: 100 }, 4)).toEqual([
+      "Still 3 Game Changers short of Bracket 4. Autofill had no more to bring in under your $100 deck total (Wizards' list)",
+    ]);
+    expect(mtgReachNotes({ added: 0, short: 1, totalUsd: 50 }, 3)).toEqual([
+      "Still 1 Game Changer short of Bracket 3. Autofill had no more to bring in under your $50 deck total (Wizards' list)",
+    ]);
+    expect(mtgReachNotes({ added: 0, short: 2, budgetUsd: 1, totalUsd: 1500 }, 4)).toEqual([
+      "Still 2 Game Changers short of Bracket 4. Autofill had no more to bring in under the $1-a-card budget and your $1,500 deck total (Wizards' list)",
+    ]);
+    // What came in reads as it always has: the count is the planner's, taken after the fit.
+    expect(mtgReachNotes({ added: 2, short: 1, totalUsd: 150 }, 5)).toEqual([
+      "Added 2 Game Changers to show Bracket 4, the most a list of cards can show (Wizards' list)",
+      "Still 1 Game Changer short of Bracket 4. Autofill had no more to bring in under your $150 deck total (Wizards' list)",
+    ]);
+    expect(mtgReachNotes({ added: 1, short: 0, totalUsd: 150 }, 3)).toEqual(
+      mtgReachNotes({ added: 1, short: 0 }, 3),
+    );
+    // No total is the wording above, to the letter.
+    expect(mtgReachNotes({ added: 0, short: 1, budgetUsd: 5, totalUsd: undefined }, 3)).toEqual(
+      mtgReachNotes({ added: 0, short: 1, budgetUsd: 5 }, 3),
+    );
+    // A list built from the collection takes no total (the owner's decision 5): the collection is what is named.
+    expect(mtgReachNotes({ added: 0, short: 1, fromCollection: true, totalUsd: 100 }, 3)).toEqual(
+      mtgReachNotes({ added: 0, short: 1, fromCollection: true }, 3),
+    );
+    // U9's marks and the source, as every reach note.
+    const lines = [3, 4, 5].flatMap((t) =>
+      mtgReachNotes({ added: 1, short: 2, budgetUsd: 5, totalUsd: 250 }, t),
+    );
+    expect(lines).toHaveLength(6);
+    expect(lines.filter((s) => /[—–·]/.test(s))).toEqual([]);
+    expect(lines.filter((s) => !s.endsWith("(Wizards' list)"))).toEqual([]);
+    expect(lines.filter((s) => /approv|\d\+|est\./i.test(s))).toEqual([]);
+  });
 });
 
 const commander = card({ name: "Test Commander", isLeaderCandidate: true });

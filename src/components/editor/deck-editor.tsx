@@ -221,7 +221,7 @@ import { ModalFinalFocus } from "@/components/ui/modal";
 import { Tabs, TabsContent, TabsIndicator, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast, Toaster } from "@/components/ui/toast";
 import { authClient } from "@/lib/auth-client";
-import { autofillTargetToast } from "@/lib/brackets/autofill-target";
+import { autofillTargetTitle } from "@/lib/brackets/autofill-target";
 import { factsIds } from "@/lib/brackets/facts";
 import { targetFitDoor } from "@/lib/brackets/target-fit";
 import { deckOwnership } from "@/lib/collection/ownership";
@@ -284,6 +284,7 @@ import {
 import { toDeckSnapshot } from "@/lib/decks/validation";
 import { getAdapter } from "@/lib/games/registry";
 import { deckEstimate, FIT_COPY } from "@/lib/recommend/fit";
+import { autofillSavedToast, autofillTotalTitle } from "@/lib/recommend/total-copy";
 import { useAppearance } from "@/lib/theme/appearance";
 import { cn } from "@/lib/utils";
 import type {
@@ -2108,11 +2109,24 @@ export function DeckEditor({
   // create carries it, a saved deck sends its goals PATCH beside the PUT.
   // The toast says both, and that the Undo restores the list and leaves the
   // target (the Fit sheet's total, the owner's call 4 of 2026-11-15).
+  // AUTOFILL-TOTAL (the owner's decision 16): the sheet's Deck total is
+  // saved the same way, in the same goals edit, so a target and a total
+  // moved together are still ONE create or ONE PATCH; the toast names what
+  // was saved, and that the Undo leaves it.
   const handleAutofillApply = useCallback(
-    ({ entries: next, cards: wires, added, target, owned: fromCollection }: AutofillApply) => {
+    ({
+      entries: next,
+      cards: wires,
+      added,
+      target,
+      total,
+      owned: fromCollection,
+    }: AutofillApply) => {
       const brackets = adapter?.brackets;
       const from = goalsRef.current?.targetLevel ?? null;
       const moved = brackets !== undefined && target !== undefined && target !== from;
+      const fromTotal = goalsRef.current?.budget?.totalUsd ?? null;
+      const totalMoved = total !== undefined && total !== fromTotal;
       // AUTOFILL-OWNED: picks the route built from the player's collection
       // are owned by construction, so they are marked in the render the list
       // lands in. The owned lookup still asks about every new card (the
@@ -2128,9 +2142,17 @@ export function DeckEditor({
         next,
         wires,
         `Added ${added} card${added === 1 ? "" : "s"}`,
-        moved ? (autofillTargetToast(brackets, from, target) ?? undefined) : undefined,
+        autofillSavedToast(
+          moved ? autofillTargetTitle(brackets, from, target) : null,
+          totalMoved ? autofillTotalTitle(fromTotal, total) : null,
+        ) ?? undefined,
       );
-      if (moved) handleGoalsChange(withTarget(goalsRef.current, target));
+      if (moved || totalMoved) {
+        let saved = goalsRef.current;
+        if (moved) saved = withTarget(saved, target);
+        if (totalMoved) saved = withTotal(saved, total);
+        handleGoalsChange(saved);
+      }
       closeAutofill();
     },
     [adapter, applyListSwap, handleGoalsChange, closeAutofill],
@@ -2875,7 +2897,6 @@ export function DeckEditor({
               phone={tier === "phone"}
               pinned={autofillPin ?? undefined}
               goals={goals}
-              estimate={estimate}
               // AUTOFILL-TARGET: the Why sheet's own rule for where a target
               // shows, and whether Upgrade toward is a door here.
               linkPreviews={share?.visibility !== "private"}

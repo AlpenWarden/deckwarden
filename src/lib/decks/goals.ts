@@ -19,9 +19,11 @@
  * - `exceptions` — the table's exceptions, the owner's words (≤ 200).
  * - `budget` — owner-only on every wire. Y6a's controls: Suggestions start
  *   from its per-card tier and "Save as this deck's budget" writes it
- *   (`withBudget`). Y8's total (`withTotal`) is the Fit sheet's: the deck's
- *   whole cost at its cheapest printings. No route reads it — the snapshot
- *   bodies leave it out (`suggestionGoals`).
+ *   (`withBudget`). Y8's total (`withTotal`) is the deck's whole cost at its
+ *   cheapest printings: set in the Fit sheet and, since AUTOFILL-TOTAL, in
+ *   the Autofill sheet, whose Add saves it. No route reads it from the
+ *   goals — the snapshot bodies leave it out (`suggestionGoals`); Autofill's
+ *   route takes the sheet's total as a field of its own (`totalUsd`).
  *
  * Game-agnostic: the range and the question keys come off the adapter's
  * `brackets` declaration, so a game without one (One Piece) takes no
@@ -224,8 +226,8 @@ export function withBudget(goals: DeckGoals | null, perCardUsd: number | null): 
 }
 
 /**
- * The deck total (Y8, the Fit sheet): whole dollars, null removes it. The
- * per-card budget stays as it is.
+ * The deck total (Y8, the Fit sheet; AUTOFILL-TOTAL, the Autofill sheet's
+ * Add): whole dollars, null removes it. The per-card budget stays as it is.
  */
 export function withTotal(goals: DeckGoals | null, totalUsd: number | null): DeckGoals | null {
   const next: DeckGoals = { ...(goals ?? { v: 1 }) };
@@ -240,8 +242,10 @@ export function withTotal(goals: DeckGoals | null, totalUsd: number | null): Dec
  * What a draft's Suggestions send (Y6a, POST /api/recommendations): the
  * goals the check reads — the target, the per-card budget, the answers
  * (they move the line) — never the exceptions line, and never the deck
- * total (Y8): no route reads it, so a new total never asks Suggestions,
- * Autofill or Swap Lab again. Every snapshot body takes its goals here.
+ * total (Y8): no route reads it from the goals, so a new total never asks
+ * Suggestions or Swap Lab again. Every snapshot body takes its goals here,
+ * the Autofill sheet's too: its Deck total rides beside them as the route's
+ * own `totalUsd` (AUTOFILL-TOTAL), so this helper is as it was.
  */
 export function suggestionGoals(goals: DeckGoals | null): DeckGoals | null {
   if (!goals) return null;

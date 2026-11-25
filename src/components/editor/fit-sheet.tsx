@@ -6,9 +6,11 @@
  * full-height bottom Drawer on phones, the wide Modal from md (the
  * AutofillSheet shell), so the hotkeys stand down.
  *
- * - **The total is set here**, and only here: "Deck total" — a whole-dollar
- *   field with presets (budget.ts' TOTAL_PRESETS_USD). Typing commits
- *   nothing; Fit, Enter or a preset does. A committed total is the plan's
+ * - **The total is set here**: "Deck total" — a whole-dollar field with
+ *   presets (budget.ts' TOTAL_PRESETS_USD; the field itself is
+ *   ./deck-total-field.tsx, which the Autofill sheet shows too since
+ *   AUTOFILL-TOTAL). Typing commits nothing; Fit, Enter or a preset does. A
+ *   committed total is the plan's
  *   target, not yet the deck's: Apply saves it with the swaps (one edit),
  *   and "Save $150 as this deck's total" saves it alone when nothing needs
  *   to change — so opening and reviewing never write (a draft mints its row
@@ -41,12 +43,10 @@
 import { GaugeIcon, XIcon } from "lucide-react";
 import {
   useEffect,
-  useId,
   useMemo,
   useRef,
   useState,
   type ComponentProps,
-  type FormEvent,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -57,11 +57,11 @@ import type {
   AlternativeRow,
   AlternativesResponse,
 } from "@/components/editor/alternatives-section";
+import { DeckTotalField } from "@/components/editor/deck-total-field";
 import { sourceMeta } from "@/components/editor/recommendations-panel";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Drawer, DrawerClose, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
-import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { RollingNumbers } from "@/components/ui/rolling-numbers";
 import type { BracketFactsState } from "@/lib/brackets/facts";
@@ -70,7 +70,7 @@ import type { CardWire, EditorCard, EditorEntry } from "@/lib/decks/editor-state
 import { suggestionGoals, withTotal, type DeckGoals } from "@/lib/decks/goals";
 import { snapshotBody } from "@/lib/decks/panel-view";
 import type { CompleteCombo, FormatDef, GameAdapter } from "@/lib/games/types";
-import { TOTAL_MAX_USD, TOTAL_PRESETS_USD } from "@/lib/recommend/budget";
+import { TOTAL_PRESETS_USD } from "@/lib/recommend/budget";
 import {
   FIT_ASK_LIMIT,
   FIT_BATCH,
@@ -144,8 +144,6 @@ export function FitSheet({
   const savedTotal = goals?.budget?.totalUsd ?? null;
   const [committed, setCommitted] = useState<number | null>(savedTotal);
   const [editing, setEditing] = useState(savedTotal === null);
-  const [field, setField] = useState(savedTotal === null ? "" : String(savedTotal));
-  const [fieldError, setFieldError] = useState(false);
   const [asked, setAsked] = useState<readonly string[]>([]);
   const [results, setResults] = useState<ReadonlyMap<string, Answer>>(() => new Map());
   const [overrides, setOverrides] = useState<ReadonlyMap<string, string | null>>(() => new Map());
@@ -153,7 +151,6 @@ export function FitSheet({
   // Cards whose answer landed: a re-run of the ask effect never asks them again.
   const settledRef = useRef<Set<string>>(new Set());
   const fieldRef = useRef<HTMLInputElement>(null);
-  const fieldId = useId();
 
   const comboPieceIds = useMemo(
     () => (combos ? new Set(combos.flatMap((c) => c.cardPieces)) : null),
@@ -273,23 +270,11 @@ export function FitSheet({
 
   const commit = (usd: number) => {
     setCommitted(usd);
-    setField(String(usd));
     setEditing(false);
-    setFieldError(false);
-  };
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    const usd = Number(field.replace(/[$,\s]/g, ""));
-    if (!Number.isInteger(usd) || usd < 1 || usd > TOTAL_MAX_USD) {
-      setFieldError(true);
-      return;
-    }
-    commit(usd);
   };
   const removeTotal = () => {
     onSaveTotal(null);
     setCommitted(null);
-    setField("");
     setEditing(true);
   };
 
@@ -361,47 +346,13 @@ export function FitSheet({
 
       <section aria-label={FIT_COPY.totalLabel} className="space-y-1">
         {editing || committed === null ? (
-          <form onSubmit={submit} className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
-            <label htmlFor={fieldId} className="text-sm font-medium">
-              {FIT_COPY.totalLabel}
-            </label>
-            <span className="flex items-center gap-1">
-              <span aria-hidden className="text-muted-foreground text-sm">
-                $
-              </span>
-              <Input
-                ref={fieldRef}
-                id={fieldId}
-                inputMode="numeric"
-                autoComplete="off"
-                value={field}
-                aria-invalid={fieldError || undefined}
-                onChange={(e) => {
-                  setField(e.target.value);
-                  setFieldError(false);
-                }}
-                className="h-8 w-24 tabular-nums"
-              />
-            </span>
-            <Button type="submit" size="sm">
-              {FIT_COPY.fit}
-            </Button>
-            <span className="flex flex-wrap gap-1">
-              {TOTAL_PRESETS_USD.map((usd) => (
-                <Button
-                  key={usd}
-                  type="button"
-                  size="xs"
-                  variant="outline"
-                  aria-pressed={committed === usd}
-                  onClick={() => commit(usd)}
-                  className="pointer-coarse:min-h-11"
-                >
-                  {formatUsd(usd)}
-                </Button>
-              ))}
-            </span>
-          </form>
+          <DeckTotalField
+            committed={committed}
+            presets={TOTAL_PRESETS_USD}
+            submitLabel={FIT_COPY.fit}
+            onCommit={commit}
+            inputRef={fieldRef}
+          />
         ) : (
           <p className="text-sm">
             <span className="font-medium">{FIT_COPY.totalLabel}</span> {formatUsd(committed)}
@@ -413,11 +364,6 @@ export function FitSheet({
             >
               {FIT_COPY.change}
             </button>
-          </p>
-        )}
-        {fieldError && (
-          <p role="alert" className="text-destructive text-xs">
-            {FIT_COPY.invalidTotal}
           </p>
         )}
         <p className="text-muted-foreground text-xs">{FIT_COPY.now(estimate)}</p>
