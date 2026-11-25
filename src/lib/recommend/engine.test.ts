@@ -14,6 +14,10 @@
  * list's own texts, then handed to the gather (a pool per theme, the
  * strongest few, and each candidate row's text) and to the ranker. A list
  * read for no theme spends no pool statement and asks for no text.
+ *
+ * OWNED-FILTER — the owned hook: the player's id reaches the filter of every
+ * statement that selects candidates, through both entry points (Suggestions'
+ * and the gather Autofill calls), and no caller without one names a player.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -45,7 +49,7 @@ vi.mock("./queries", () => ({
 }));
 vi.mock("@/lib/combos/queries", () => ({ loadCompleteCombos: mocks.loadCompleteCombos }));
 
-const { recommendForSnapshot, POOL_LIMIT } = await import("./engine");
+const { gatherSignals, recommendForSnapshot, POOL_LIMIT } = await import("./engine");
 const { THEME_POOL_LIMIT, THEME_POOL_THEMES } = await import("./themes");
 const { mtgAdapter } = await import("@/lib/games/mtg/adapter");
 
@@ -358,5 +362,65 @@ describe("recommendForSnapshot — the list's themes (COMMANDER-FIT)", () => {
       "Goblin",
       "Bird",
     ]);
+  });
+});
+
+describe("the owned hook — the player reaches every candidate statement (OWNED-FILTER)", () => {
+  const PLAYER = "00000000-0000-4000-8000-0000000000aa";
+  /** A combo piece outside every pool: the gather rechecks it through the filter. */
+  const COMBO_ONLY = "60000000-0000-4000-8000-000000000001";
+  /** A commander whose rules text names its own type, so the list has a theme and a theme pool. */
+  const HIVEMIND = {
+    id: LEADER,
+    name: "Test Hivemind",
+    text: "Legendary Creature — Sliver",
+    rules: "Slivers you control have flying.",
+  };
+  /** Every loader that takes the filter: the four statements that select candidates. */
+  const candidateLoaders = () => [
+    mocks.loadCandidatePool,
+    mocks.loadTournamentCandidates,
+    mocks.loadCandidateRows,
+    mocks.loadThemeCandidates,
+  ];
+
+  beforeEach(() => {
+    mocks.loadComboSignals.mockResolvedValue({
+      byCandidate: new Map([[COMBO_ONLY, []]]),
+      truncated: false,
+    });
+    mocks.loadThemeRows.mockResolvedValue([HIVEMIND]);
+  });
+
+  it("Suggestions: the popularity pool, the tournament candidates, the combo recheck and the theme pool each get the player", async () => {
+    await recommendForSnapshot(snapshot(false), { ownedBy: PLAYER });
+    for (const loader of candidateLoaders()) {
+      expect(loader).toHaveBeenCalledTimes(1);
+      expect(loader.mock.calls[0][0].ownedBy).toBe(PLAYER);
+    }
+  });
+
+  it("the gather Autofill calls: the same, whatever its scope and pool sizes", async () => {
+    await gatherSignals(snapshot(false), {
+      poolLimit: 600,
+      tournamentPoolLimit: 200,
+      scope: { column: "primary_type", op: "ne", value: "Land" },
+      ownedBy: PLAYER,
+    });
+    // No themes here (they are Suggestions' alone): three statements, each with the player.
+    for (const loader of candidateLoaders().slice(0, 3)) {
+      expect(loader).toHaveBeenCalledTimes(1);
+      expect(loader.mock.calls[0][0].ownedBy).toBe(PLAYER);
+    }
+    expect(mocks.loadThemeCandidates).not.toHaveBeenCalled();
+  });
+
+  it("no player given: no statement's filter names one", async () => {
+    await recommendForSnapshot(snapshot(false));
+    await gatherSignals(snapshot(false), { poolLimit: 600 });
+    for (const loader of candidateLoaders()) {
+      expect(loader.mock.calls.length).toBeGreaterThan(0);
+      for (const [filter] of loader.mock.calls) expect(filter.ownedBy).toBeUndefined();
+    }
   });
 });

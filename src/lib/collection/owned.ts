@@ -4,9 +4,12 @@
  * in one query. Consumers: GET /api/decks/[id] (the editor's badges and
  * "you own N/100" line, restricted to the deck's own cards so the payload
  * stays ~100 ids, not the whole collection), POST /api/collection/owned
- * (the editor asking about cards added mid-session), the share page (the
- * signed-in viewer's line), and the recommendations route's opt-in filter
- * (the full set, once per request).
+ * (the editor asking about cards added mid-session) and the share page
+ * (the signed-in viewer's line). Each asks about a deck-sized list. The
+ * recommendation engine's owned filter reads nothing here: it is a subquery
+ * on the same join (src/lib/recommend/queries.ts' `ownedCondition`), and its
+ * route asks `hasCollection` (OWNED-FILTER, 2026-11-24: until then the route
+ * read the whole set through this file, once per request).
  */
 import { and, eq, inArray, sql } from "drizzle-orm";
 
@@ -18,25 +21,16 @@ const { collections, cardPrintings: cp } = schema;
 const CHUNK = 2000;
 
 /**
- * Identity ids the user owns at least one printing of. With `among`, only
- * those identities are checked (deck-sized lists); without it, the whole
- * collection's identities.
+ * Which of `among` (a deck-sized list of identity ids) the user owns at
+ * least one printing of. Never the whole collection: nothing needs it as a
+ * list (OWNED-FILTER).
  */
 export async function ownedIdentityIds(
   userId: string,
-  among?: readonly string[],
+  among: readonly string[],
   db: DbExecutor = getDb(),
 ): Promise<Set<string>> {
   const owned = new Set<string>();
-  if (among === undefined) {
-    const rows = await db
-      .selectDistinct({ identityId: cp.cardIdentityId })
-      .from(collections)
-      .innerJoin(cp, eq(cp.id, collections.printingId))
-      .where(eq(collections.userId, userId));
-    for (const r of rows) owned.add(r.identityId);
-    return owned;
-  }
   const ids = [...new Set(among)];
   for (let i = 0; i < ids.length; i += CHUNK) {
     const rows = await db

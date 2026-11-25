@@ -104,8 +104,11 @@ export interface RecommendOptions {
   limit?: number;
   /** Budget filter: only cards with a known price ≤ this (USD). */
   maxPriceUsd?: number;
-  /** Collections hook — see CandidateFilter; set by the route's opt-in `?owned=1` (P3.7). */
-  ownedCardIds?: ReadonlySet<string>;
+  /**
+   * Collections hook — see CandidateFilter: the player whose collection
+   * restricts the pool; set by the route's opt-in `?owned=1` (P3.7).
+   */
+  ownedBy?: string;
   /**
    * The deck's goals as this request may apply them (Y6a): the owner's
    * (target, budget, answers), a visitor's public subset (the target only —
@@ -183,7 +186,8 @@ export interface RecommendSnapshot {
  */
 export interface GatherOptions {
   maxPriceUsd?: number;
-  ownedCardIds?: ReadonlySet<string>;
+  /** Collections hook — see CandidateFilter: the player whose collection restricts the pools. */
+  ownedBy?: string;
   /** Popularity-pool size; default POOL_LIMIT. */
   poolLimit?: number;
   /** Tournament-candidate pool size; default TOURNAMENT_POOL_LIMIT. */
@@ -248,7 +252,7 @@ export async function gatherSignals(
     deckCiMask: snapshot.ciMask,
     excludeCardIds: [...new Set([...deckCardIds, ...(opts.excludeCardIds ?? [])])],
     maxPriceUsd: opts.maxPriceUsd,
-    ownedCardIds: opts.ownedCardIds,
+    ownedBy: opts.ownedBy,
     exclude: meta.exclude,
     scope: opts.scope,
     roles: opts.roles,
@@ -453,7 +457,7 @@ export async function recommendForSnapshot(
   const [{ candidates, combosByCandidate, combosTruncated }, completeCombos] = await Promise.all([
     gatherSignals(snapshot, {
       maxPriceUsd: opts.maxPriceUsd,
-      ownedCardIds: opts.ownedCardIds,
+      ownedBy: opts.ownedBy,
       themes,
     }),
     withRead ? loadCompleteCombos(snapshot.entries.map((e) => e.cardId)) : Promise.resolve(null),

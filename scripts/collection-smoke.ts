@@ -5,7 +5,9 @@
  * the owned set on GET /api/decks/[id] and POST /api/collection/owned, the
  * share page's "You own N/M" line (signed-in viewer only), and the
  * recommendations route's opt-in `?owned=1` in all three states (applied /
- * no-collection / signed-out). Runs against a live server + real DB —
+ * no-collection / signed-out), and once more for a collection at the cap
+ * (OWNED-FILTER: the filter is a subquery keyed by the player, so the cap
+ * costs no list of ids). Runs against a live server + real DB —
  * deliberately outside `pnpm check`.
  *
  *   pnpm smoke:collection                                  # http://localhost:3000
@@ -648,6 +650,46 @@ async function main() {
       r5.updated === 1 && r5.inserted === 0 && r5.capped === null,
       r5,
     );
+    // The owned filter at the cap (OWNED-FILTER, LATER row 69): the same
+    // answer as for ten rows — applied, every suggestion one of the player's
+    // cards — for a player whose collection is the largest the import keeps.
+    // Carol asks about alice's deck (unlisted, so readable): the collection
+    // is the session's, never the deck owner's.
+    const carolOwned = new Set(
+      (
+        await sql`
+          select distinct p.card_identity_id as id from collections c
+          join card_printings p on p.id = c.printing_id where c.user_id = ${carol.id}`
+      ).map((r) => r.id as string),
+    );
+    const capStarted = Date.now();
+    const recCap = await api("GET", `/api/decks/${deck.id}/recommendations?owned=1`, {
+      cookie: carol.cookie,
+    });
+    const capMs = Date.now() - capStarted;
+    const recCapBody = j<{
+      owned: { requested: boolean; applied: boolean; reason?: string };
+      recommendations: Rec[];
+    }>(recCap.json);
+    check(
+      `?owned=1 at the cap (${limit} rows, ${carolOwned.size} cards) → applied, every suggestion is an owned card, evidence intact (${capMs} ms)`,
+      recCap.status === 200 &&
+        recCapBody.owned?.applied === true &&
+        recCapBody.recommendations.length > 0 &&
+        recCapBody.recommendations.every((r) => carolOwned.has(r.cardId) && r.evidence.length > 0),
+      {
+        status: recCap.status,
+        owned: recCapBody.owned,
+        count: recCapBody.recommendations?.length,
+      },
+    );
+    check(
+      "…and never a card already in the deck, at the cap either",
+      recCapBody.recommendations?.every(
+        (r) => r.cardId !== counterspell.identityId && r.cardId !== remora.identityId,
+      ) === true,
+    );
+
     const wipeAll = await api("DELETE", "/api/collection", { cookie: carol.cookie });
     check(
       `DELETE at the cap → {deleted: ${limit}}`,

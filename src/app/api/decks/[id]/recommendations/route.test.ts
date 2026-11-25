@@ -6,6 +6,11 @@
  * public subset only (the target: the budget and the answers are the
  * owner's, so a visitor's list is never shaped by them) — and the answer
  * carries the engine's `hidden` and `combosTruncated` beside the list.
+ *
+ * `?owned=1` (P3.7, as OWNED-FILTER left it): the route asks only whether
+ * the session's player has a collection and hands the engine the player —
+ * never a set of card ids — and a guest or a player with none gets the hook
+ * off and the reason, never an emptied list.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   recommendForDeck: vi.fn(),
   enforceRateLimit: vi.fn(),
   getSessionUserId: vi.fn(),
+  hasCollection: vi.fn(),
 }));
 
 vi.mock("@/lib/decks/route-helpers", () => ({ requireReadableDeck: mocks.requireReadableDeck }));
@@ -23,7 +29,7 @@ vi.mock("@/lib/recommend/engine", () => ({
   recommendForDeck: mocks.recommendForDeck,
 }));
 vi.mock("@/lib/auth", () => ({ getSessionUserId: mocks.getSessionUserId }));
-vi.mock("@/lib/collection/owned", () => ({ ownedIdentityIds: vi.fn() }));
+vi.mock("@/lib/collection/owned", () => ({ hasCollection: mocks.hasCollection }));
 vi.mock("@/lib/rate-limit", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/rate-limit")>()),
   enforceRateLimit: mocks.enforceRateLimit,
@@ -71,7 +77,7 @@ describe("GET /api/decks/[id]/recommendations — goals (Y6a)", () => {
     expect(mocks.recommendForDeck).toHaveBeenCalledWith(DECK, {
       maxPriceUsd: 5,
       limit: undefined,
-      ownedCardIds: undefined,
+      ownedBy: undefined,
       goals: GOALS,
     });
     expect(body).toEqual({
@@ -107,5 +113,56 @@ describe("GET /api/decks/[id]/recommendations — goals (Y6a)", () => {
     const { res } = await get();
     expect(res.status).toBe(404);
     expect(mocks.recommendForDeck).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/decks/[id]/recommendations — ?owned=1 (P3.7, OWNED-FILTER)", () => {
+  const PLAYER = "00000000-0000-4000-8000-0000000000aa";
+
+  it("a player with a collection: the engine gets the player, the answer says applied", async () => {
+    mocks.requireReadableDeck.mockResolvedValue({ deck: DECK, isOwner: true, userId: PLAYER });
+    mocks.hasCollection.mockResolvedValue(true);
+    const { body } = await get("?owned=1");
+    expect(mocks.hasCollection).toHaveBeenCalledTimes(1);
+    expect(mocks.hasCollection).toHaveBeenCalledWith(PLAYER);
+    expect(mocks.recommendForDeck.mock.calls[0][1].ownedBy).toBe(PLAYER);
+    expect(body.owned).toEqual({ requested: true, applied: true });
+  });
+
+  it("the collection is the session's, not the deck owner's: a visitor's own cards filter a deck they can read", async () => {
+    mocks.requireReadableDeck.mockResolvedValue({ deck: DECK, isOwner: false, userId: PLAYER });
+    mocks.hasCollection.mockResolvedValue(true);
+    await get("?owned=true");
+    expect(mocks.recommendForDeck.mock.calls[0][1].ownedBy).toBe(PLAYER);
+  });
+
+  it("a player with no collection: the hook stays off and the answer says why — never an emptied list", async () => {
+    mocks.requireReadableDeck.mockResolvedValue({ deck: DECK, isOwner: true, userId: PLAYER });
+    mocks.hasCollection.mockResolvedValue(false);
+    const { body } = await get("?owned=1");
+    expect(mocks.recommendForDeck.mock.calls[0][1].ownedBy).toBeUndefined();
+    expect(body.owned).toEqual({ requested: true, applied: false, reason: "no-collection" });
+    expect(body.recommendations).toEqual([REC]);
+  });
+
+  it("signed out: the hook stays off, the reason is signed-out, and the collection is never asked about", async () => {
+    mocks.requireReadableDeck.mockResolvedValue({ deck: DECK, isOwner: false, userId: null });
+    const { body } = await get("?owned=1");
+    expect(mocks.hasCollection).not.toHaveBeenCalled();
+    expect(mocks.recommendForDeck.mock.calls[0][1].ownedBy).toBeUndefined();
+    expect(body.owned).toEqual({ requested: true, applied: false, reason: "signed-out" });
+  });
+
+  it("not asked for: no collection read at all, even for a player who has one", async () => {
+    mocks.requireReadableDeck.mockResolvedValue({ deck: DECK, isOwner: true, userId: PLAYER });
+    mocks.hasCollection.mockResolvedValue(true);
+    for (const query of ["", "?owned=0", "?owned=false"]) {
+      const { body } = await get(query);
+      expect(body.owned).toEqual({ requested: false, applied: false });
+    }
+    expect(mocks.hasCollection).not.toHaveBeenCalled();
+    expect(mocks.recommendForDeck.mock.calls.every(([, opts]) => opts.ownedBy === undefined)).toBe(
+      true,
+    );
   });
 });

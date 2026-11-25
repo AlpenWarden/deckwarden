@@ -22,6 +22,14 @@
  * candidate source — the most played cards carrying a theme's word, through
  * the SAME filter — and `themePath` puts that text on every candidate row,
  * so a staple that carries the word says so too.
+ *
+ * OWNED-FILTER (2026-11-24, LATER row 69): the owned hook is a probe on
+ * `collections`, keyed by the player, where it was a list of every card the
+ * player owns. The list was read whole once per request and sent again
+ * inside every statement, about 0.9 MB each for a collection at the cap;
+ * now one id is bound, the player's (`ownedCondition`). The popularity pool
+ * also spells its color check so that Postgres can count it while the hook
+ * is on (`colorFitCondition`), which is what keeps the probe cheap there.
  */
 import { and, asc, desc, eq, inArray, notInArray, sql, type SQL } from "drizzle-orm";
 
@@ -32,7 +40,15 @@ import type { BracketsMeta, RecommendMeta } from "@/lib/games/types";
 import type { TournamentContext, TournamentSignal } from "./rank";
 import type { CandidateCard, CandidateCombo } from "./types";
 
-const { cardIdentities, commanderCardStats, commanderStats, deckCards, legalities } = schema;
+const {
+  cardIdentities,
+  cardPrintings,
+  collections,
+  commanderCardStats,
+  commanderStats,
+  deckCards,
+  legalities,
+} = schema;
 
 export interface CandidateFilter {
   gameId: number;
@@ -45,12 +61,13 @@ export interface CandidateFilter {
   maxPriceUsd?: number;
   /**
    * Collections hook (wired in P3.7 by the recommendations route's opt-in
-   * `?owned=1`; the signature predates it from P3.1). When set, the pool is
-   * restricted to owned cards (an empty set = empty pool, not "hook off");
-   * undefined = hook off. The ROUTE is what guarantees a guest or a user
-   * with no collection gets undefined, never an empty set.
+   * `?owned=1`): the id of the player whose collection restricts the pool
+   * to cards they own any printing of. A player with no collection row is
+   * an empty pool, not "hook off"; undefined = hook off. The ROUTE is what
+   * guarantees a guest or a player with no collection gets undefined.
+   * OWNED-FILTER: the player, where P3.7 passed the set of their card ids.
    */
-  ownedCardIds?: ReadonlySet<string>;
+  ownedBy?: string;
   /** Adapter's never-advise rules (MTG: basic lands). */
   exclude?: RecommendMeta["exclude"];
   /**
@@ -138,16 +155,92 @@ function rolesCondition(roles: NonNullable<CandidateFilter["roles"]>): SQL {
   return sql`(${sql.join(terms, sql` OR `)})`;
 }
 
-/** Exported for tests: the deterministic filter, one condition list. */
-export function candidateConditions(f: CandidateFilter): SQL[] {
+/**
+ * "The player owns a printing of this card" (P3.7's hook, as OWNED-FILTER
+ * rebuilt it): a probe on `collections` through `card_printings`, for the
+ * row at hand. The one value bound is the player's id, so no list of ids
+ * travels. Owned means any printing in any finish; copies are not counted.
+ *
+ * One shape, on purpose. Every step of the probe is an index lookup
+ * (`cp_by_identity`, then the collection's primary key), so however
+ * Postgres orders the joins the cost has a ceiling: a lookup for each row
+ * it scans, or the player's rows read once. The forms that build the owned
+ * set inside the condition were measured at the cap and dropped. Fenced (a
+ * MATERIALIZED common table expression), the set was rescanned whole for
+ * each of 4,494 rows where the planner expected one: 8.8 s on a theme pool.
+ * As a subquery the planner could only hash, it turned the legality check
+ * into a table scan per row: 2.6 s. Exported for tests.
+ */
+export function ownedCondition(userId: string): SQL {
+  return sql`EXISTS (
+    SELECT 1 FROM ${collections} oc
+    JOIN ${cardPrintings} op ON op.id = oc.printing_id
+    WHERE oc.user_id = ${userId} AND op.card_identity_id = ${cardIdentities.id})`;
+}
+
+/** Past this many colors the list of identities (2^k values) is too long to be worth sending: the bit test stays. */
+const COUNTED_COLORS_MAX = 6;
+
+/**
+ * Every color identity inside `deckCiMask`: its submasks, ascending. A deck
+ * of k colors has 2^k of them (Magic: 32 at most). Exported for tests.
+ */
+export function identitiesWithin(deckCiMask: number): number[] {
+  const within: number[] = [];
+  for (let sub = deckCiMask; ; sub = (sub - 1) & deckCiMask) {
+    within.push(sub);
+    if (sub === 0) break;
+  }
+  return within.reverse();
+}
+
+/**
+ * "The card's color identity fits the deck's", in one of two spellings of
+ * the same test:
+ *
+ * - the bit test, `(ci & ~deckCi) = 0`: every statement's, and the only
+ *   spelling while the owned hook is off;
+ * - `counted`: the list of the identities inside the deck's
+ *   (`identitiesWithin`), for the popularity pool while the owned hook is
+ *   on. Postgres cannot estimate the bit test: it guesses 0.5 %, 144 rows
+ *   where about 24,000 pass for a four-color deck. On that guess it probes
+ *   the collection for every row the pool scans, 0.35 s whatever the
+ *   collection's size. A list of a column's values it counts from the
+ *   column's statistics, and then it starts from the player's cards or
+ *   walks the pool in order: 1 ms for 100 cards, about 40 ms for 2,500 and
+ *   about 90 ms at the cap (the dev branch, 2026-11-24).
+ *
+ * Exported for tests.
+ */
+export function colorFitCondition(deckCiMask: number, counted = false): SQL {
+  const within = counted ? identitiesWithin(deckCiMask) : [];
+  if (counted && within.length <= 2 ** COUNTED_COLORS_MAX) {
+    return inArray(cardIdentities.ciMask, within);
+  }
+  // ::int disambiguates ~ (bitwise NOT) from ~ (regex) on the untyped param.
+  return sql`(${cardIdentities.ciMask} & ~${deckCiMask}::int) = 0`;
+}
+
+/**
+ * Exported for tests: the deterministic filter, one condition list.
+ * `poolScan` says the statement these conditions go in scans the candidate
+ * pool in popularity order (the popularity pool), where the others hold
+ * their rows by a key or a word. It changes one thing, and only while the
+ * owned hook is on: the color check is spelled so Postgres can count it
+ * (`colorFitCondition`). With the hook off the conditions are the same
+ * text whatever it says.
+ */
+export function candidateConditions(
+  f: CandidateFilter,
+  { poolScan = false }: { poolScan?: boolean } = {},
+): SQL[] {
   const conditions: SQL[] = [
     sql`${cardIdentities.gameId} = ${f.gameId}`,
     sql`${cardIdentities.isRemoved} = false`,
     sql`${cardIdentities.isPreview} = false`,
     // Never a token (DECK-TOKENS) — said here, not left to tokens' not_legal rows.
     notTokenSql(cardIdentities.attrs),
-    // ::int disambiguates ~ (bitwise NOT) from ~ (regex) on the untyped param.
-    sql`(${cardIdentities.ciMask} & ~${f.deckCiMask}::int) = 0`,
+    colorFitCondition(f.deckCiMask, poolScan && f.ownedBy !== undefined),
     sql`NOT EXISTS (
       SELECT 1 FROM ${legalities} l
       WHERE l.card_identity_id = ${cardIdentities.id}
@@ -169,11 +262,7 @@ export function candidateConditions(f: CandidateFilter): SQL[] {
     conditions.push(sql`${cardIdentities.cheapestUsd} IS NOT NULL`);
     conditions.push(sql`${cardIdentities.cheapestUsd} <= ${f.maxPriceUsd}`);
   }
-  if (f.ownedCardIds !== undefined) {
-    conditions.push(
-      f.ownedCardIds.size === 0 ? sql`false` : inArray(cardIdentities.id, [...f.ownedCardIds]),
-    );
-  }
+  if (f.ownedBy !== undefined) conditions.push(ownedCondition(f.ownedBy));
   const scopes: readonly CandidateScope[] =
     f.scope === undefined ? [] : Array.isArray(f.scope) ? f.scope : [f.scope as CandidateScope];
   for (const scope of scopes) conditions.push(scopeCondition(scope));
@@ -276,7 +365,12 @@ export async function loadCandidatePool(
   const rows = await getDb()
     .select(candidateProjection(flagPaths, filter.roles?.path, filter.themePath))
     .from(cardIdentities)
-    .where(and(...candidateConditions(filter), sql`${cardIdentities.popularity} IS NOT NULL`))
+    .where(
+      and(
+        ...candidateConditions(filter, { poolScan: true }),
+        sql`${cardIdentities.popularity} IS NOT NULL`,
+      ),
+    )
     .orderBy(...candidatePoolOrder(filter))
     .limit(limit);
   return toCandidates(rows);

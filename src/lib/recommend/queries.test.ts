@@ -1,3 +1,4 @@
+import type { SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
@@ -7,7 +8,10 @@ import {
   attrTextColumn,
   candidateConditions,
   candidatePoolOrder,
+  colorFitCondition,
   flagsColumn,
+  identitiesWithin,
+  ownedCondition,
   roleKeys,
   rolesColumn,
   sharedRolesCount,
@@ -26,6 +30,14 @@ const BASE: CandidateFilter = {
   deckCiMask: 3,
   excludeCardIds: [],
 };
+/** A player's id, as the owned hook takes it. */
+const PLAYER = "00000000-0000-4000-8000-0000000000aa";
+/** Conditions as the statement would carry them: text and parameters. */
+const rendered = (conditions: SQL[]) =>
+  conditions.map((c) => {
+    const q = new PgDialect().sqlToQuery(c);
+    return { sql: q.sql, params: q.params };
+  });
 
 describe("candidateConditions", () => {
   it("never offers a token (DECK-TOKENS): the containment guard is a base condition", () => {
@@ -35,23 +47,87 @@ describe("candidateConditions", () => {
     expect(q.params).toEqual([TOKEN_DOC]);
   });
 
-  it("owned-cards hook is off when undefined (the contract P3.7's ?owned=1 relies on)", () => {
+  it("owned-cards hook is off when undefined (the contract P3.7's ?owned=1 relies on), in a pool scan too", () => {
     const off = candidateConditions(BASE);
-    const alsoOff = candidateConditions({ ...BASE, ownedCardIds: undefined });
+    const alsoOff = candidateConditions({ ...BASE, ownedBy: undefined });
     expect(alsoOff).toHaveLength(off.length);
+    // `poolScan` only matters with the hook on: off, the statement's text is the same.
+    expect(rendered(candidateConditions(BASE, { poolScan: true }))).toEqual(rendered(off));
   });
 
-  it("owned-cards hook restricts when provided — empty set means empty pool, not hook-off", () => {
+  it("owned-cards hook restricts when given a player: one more condition, and the others untouched", () => {
     const off = candidateConditions(BASE);
-    const restricted = candidateConditions({
-      ...BASE,
-      ownedCardIds: new Set(["00000000-0000-0000-0000-000000000001"]),
-    });
-    const emptyOwned = candidateConditions({ ...BASE, ownedCardIds: new Set<string>() });
+    const restricted = candidateConditions({ ...BASE, ownedBy: PLAYER });
     expect(restricted).toHaveLength(off.length + 1);
-    expect(emptyOwned).toHaveLength(off.length + 1);
+    expect(rendered(restricted.slice(0, -1))).toEqual(rendered(off));
   });
 
+  it("the owned hook binds the player's id and nothing else: no list of card ids travels (OWNED-FILTER, LATER row 69)", () => {
+    const q = new PgDialect().sqlToQuery(ownedCondition(PLAYER));
+    expect(q.params).toEqual([PLAYER]);
+    // Owned = any printing of the card: the collection's rows, through their printings.
+    expect(q.sql).toContain('FROM "collections" oc');
+    expect(q.sql).toContain('JOIN "card_printings" op ON op.id = oc.printing_id');
+    expect(q.sql).toContain("oc.user_id = $1");
+  });
+
+  it("the owned hook is one shape, a probe for the row at hand: every step an index lookup, no set built inside the condition", () => {
+    const { sql } = new PgDialect().sqlToQuery(ownedCondition(PLAYER));
+    expect(sql).toMatch(/^EXISTS \(/);
+    expect(sql).toContain('op.card_identity_id = "card_identities"."id"');
+    // The measured dead ends: a fenced set (rescanned per row) and an IN the planner can only hash.
+    expect(sql).not.toContain("MATERIALIZED");
+    expect(sql).not.toMatch(/\bIN \(/);
+  });
+});
+
+describe("the color check, two spellings of one test (OWNED-FILTER)", () => {
+  const popcount = (mask: number) => mask.toString(2).replace(/0/g, "").length;
+
+  it("identitiesWithin lists exactly the identities the bit test passes, ascending, for every deck", () => {
+    for (let deck = 0; deck < 32; deck++) {
+      const within = identitiesWithin(deck);
+      expect(within).toHaveLength(2 ** popcount(deck));
+      expect(within).toEqual([...within].sort((a, b) => a - b));
+      for (let card = 0; card < 32; card++) {
+        expect(within.includes(card)).toBe((card & ~deck) === 0);
+      }
+    }
+    // A colorless deck fits colorless cards alone; a six-color mask has 64 identities.
+    expect(identitiesWithin(0)).toEqual([0]);
+    expect(identitiesWithin(63)).toHaveLength(64);
+  });
+
+  it("the bit test by default; counted, the list of those identities as values Postgres can count", () => {
+    const bits = new PgDialect().sqlToQuery(colorFitCondition(3));
+    expect(bits.sql).toBe('("card_identities"."ci_mask" & ~$1::int) = 0');
+    expect(bits.params).toEqual([3]);
+    const counted = new PgDialect().sqlToQuery(colorFitCondition(3, true));
+    expect(counted.sql).toBe('"card_identities"."ci_mask" in ($1, $2, $3, $4)');
+    expect(counted.params).toEqual([0, 1, 2, 3]);
+  });
+
+  it("past six colors the list would run to hundreds of values: the bit test stays", () => {
+    expect(new PgDialect().sqlToQuery(colorFitCondition(63, true)).params).toHaveLength(64);
+    const wide = new PgDialect().sqlToQuery(colorFitCondition(127, true));
+    expect(wide.sql).toBe('("card_identities"."ci_mask" & ~$1::int) = 0');
+    expect(wide.params).toEqual([127]);
+  });
+
+  it("only the popularity pool counts, and only with the owned hook on: every other statement keeps the bit test", () => {
+    const colors = (conditions: SQL[]) => new PgDialect().sqlToQuery(conditions[4]).sql;
+    const BIT_TEST = '("card_identities"."ci_mask" & ~$1::int) = 0';
+    const owned = { ...BASE, ownedBy: PLAYER };
+    expect(colors(candidateConditions(owned, { poolScan: true }))).toBe(
+      '"card_identities"."ci_mask" in ($1, $2, $3, $4)',
+    );
+    expect(colors(candidateConditions(owned))).toBe(BIT_TEST);
+    expect(colors(candidateConditions(BASE, { poolScan: true }))).toBe(BIT_TEST);
+    expect(colors(candidateConditions(BASE))).toBe(BIT_TEST);
+  });
+});
+
+describe("candidateConditions — the other inputs", () => {
   it("budget and deck-exclusion each add conditions; adapter exclude rules apply per rule", () => {
     const off = candidateConditions(BASE);
     // Budget adds two: price known AND price under budget (unknown price is

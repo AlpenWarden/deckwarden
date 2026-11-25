@@ -12,10 +12,11 @@
  * of Collection Mode). Honest degradation, never an empty pool: a guest, or
  * a user with no collection, gets the hook OFF and the response says why
  * (`owned.applied` / `owned.reason`). The evidence payload is unchanged —
- * owning a card is a filter, not a reason to recommend it. The owned set
- * is materialized once per request (one join) and passed as the IN list
- * the P3.1 contract expects; a very large collection makes that a long
- * parameter list, which is fine on Postgres and noted in LATER.md.
+ * owning a card is a filter, not a reason to recommend it. The route asks
+ * only whether the player has a collection (one row) and hands the engine
+ * the player: the filter is a subquery there, so no list of card ids is
+ * read or sent (OWNED-FILTER, LATER row 69; P3.7 read the whole set once
+ * per request and sent it inside every statement).
  *
  * Goals (Y6a, WAVE4 D7): the deck's own, read from the row this route
  * already loads — the target hides what would put the deck above it (or,
@@ -36,7 +37,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 
 import { noStoreJson } from "@/lib/api/json";
-import { ownedIdentityIds } from "@/lib/collection/owned";
+import { hasCollection } from "@/lib/collection/owned";
 import { MAX_LIMIT, recommendForDeck } from "@/lib/recommend/engine";
 import { clientIp } from "@/lib/decks/access";
 import { publicGoals, readGoals } from "@/lib/decks/goals";
@@ -83,17 +84,15 @@ export async function GET(
 
   const requested = parsed.data.owned === "1" || parsed.data.owned === "true";
   const owned: OwnedFilterMeta = { requested, applied: false };
-  let ownedCardIds: ReadonlySet<string> | undefined;
+  let ownedBy: string | undefined;
   if (requested) {
     if (!userId) {
       owned.reason = "signed-out";
+    } else if (!(await hasCollection(userId))) {
+      owned.reason = "no-collection";
     } else {
-      const set = await ownedIdentityIds(userId);
-      if (set.size === 0) owned.reason = "no-collection";
-      else {
-        ownedCardIds = set;
-        owned.applied = true;
-      }
+      ownedBy = userId;
+      owned.applied = true;
     }
   }
 
@@ -101,7 +100,7 @@ export async function GET(
   const { recommendations, hidden, combosTruncated } = await recommendForDeck(deck, {
     maxPriceUsd: parsed.data.budget,
     limit: parsed.data.limit,
-    ownedCardIds,
+    ownedBy,
     goals: isOwner ? goals : publicGoals(goals),
   });
 
