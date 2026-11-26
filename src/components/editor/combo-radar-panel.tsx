@@ -50,6 +50,12 @@
  * "Added X" with an Undo (the live line keeps failures only), a combo's
  * pieces toast once for the batch with ONE Undo for all of them; "Suggest
  * full list" adds quietly, as before.
+ *
+ * Maybe (MAYBE-LIST, LATER 538): with `onMaybe` a "One card away" row whose
+ * missing piece is in neither list has "Maybe" after its Add ("Swap in…" at
+ * the maximum, where Maybe parks without a swap), over the same resolve as
+ * the add; a parked piece reads "In Maybe" there. The commander rows' "Add N
+ * pieces" has no Maybe: it is a batch, and Maybe parks one card.
  */
 import { ArrowUpRightIcon, GaugeIcon } from "lucide-react";
 import Link from "next/link";
@@ -70,6 +76,7 @@ import {
 } from "@/lib/combos/view";
 import { toEditorCard, type CardWire, type EditorCard } from "@/lib/decks/editor-state";
 import type { DeckGoals } from "@/lib/decks/goals";
+import { MAYBE_COPY } from "@/lib/decks/maybe-copy";
 import { deckStateKey, hasLeader } from "@/lib/decks/panel-view";
 import { playableEntries } from "@/lib/decks/playable";
 import { DECK_TOKEN_HEADER, getDeckToken } from "@/lib/decks/token-store";
@@ -117,6 +124,8 @@ interface ComboRadarPanelProps {
   cards: ReadonlyMap<string, EditorCard>;
   /** Copies already in the deck — flips Add to "In deck ✓" pre-refetch. */
   inDeckQty: ReadonlyMap<string, number>;
+  /** MAYBE-LIST (LATER 538): the cards parked in Maybe — a one-away row's piece reads "In Maybe". */
+  inMaybe?: ReadonlySet<string>;
   saveStatus: "saved" | "dirty" | "saving" | "error";
   /** Tab visibility: no fetching (lazy) and no work while hidden. */
   active: boolean;
@@ -131,6 +140,12 @@ interface ComboRadarPanelProps {
    * quietly (the sheet opening is the feedback). Returns the first error.
    */
   onAddPieces: (cards: readonly EditorCard[], announce: boolean) => string | undefined;
+  /**
+   * MAYBE-LIST (LATER 538): park a one-away row's missing piece in Maybe —
+   * the editor's edit, toasted with its Undo. Absent = no Maybe button (a
+   * format without a Maybe list).
+   */
+  onMaybe?: (card: EditorCard) => string | undefined;
   /** The deck's goals (Y6b): the badges' "above your target" and the answers they count. */
   goals?: DeckGoals | null;
   /**
@@ -155,10 +170,12 @@ export function ComboRadarPanel({
   entries,
   cards,
   inDeckQty,
+  inMaybe,
   saveStatus,
   active,
   onAdd,
   onAddPieces,
+  onMaybe,
   goals = null,
   onOpenAutofill,
   swapIn = false,
@@ -170,8 +187,9 @@ export function ComboRadarPanel({
   const [nonce, setNonce] = useState(0);
   const lastKeyRef = useRef<string | null>(null);
   // Y6b: the editor's toast announces an add; the live line keeps failures.
-  const { pendingAdd, notice, add } = useResolvedAdd(adapter, format, onAdd, {
+  const { pendingAdd, pendingMaybe, notice, add, maybe } = useResolvedAdd(adapter, format, onAdd, {
     announce: false,
+    onMaybe,
   });
 
   const combosMeta = adapter.capabilities.combos;
@@ -477,12 +495,22 @@ export function ComboRadarPanel({
                         badge={badgeOf(combo)}
                         externalUrl={combosMeta.externalUrl}
                         inDeck={(inDeckQty.get(combo.missingPieces[0]?.id ?? "") ?? 0) > 0}
+                        inMaybe={inMaybe?.has(combo.missingPieces[0]?.id ?? "") ?? false}
                         pending={pendingAdd === combo.missingPieces[0]?.id}
+                        pendingMaybe={pendingMaybe === combo.missingPieces[0]?.id}
                         swapIn={swapIn}
                         onAdd={() => {
                           const target = combo.missingPieces[0];
                           if (target) void add({ cardId: target.id, name: target.name });
                         }}
+                        onMaybe={
+                          onMaybe
+                            ? () => {
+                                const target = combo.missingPieces[0];
+                                if (target) void maybe({ cardId: target.id, name: target.name });
+                              }
+                            : undefined
+                        }
                         busy={pendingCombo !== null}
                         suggestPending={pendingCombo === combo.id}
                         onSuggest={
@@ -707,9 +735,12 @@ function OneAwayComboRow({
   badge,
   externalUrl,
   inDeck,
+  inMaybe = false,
   pending,
+  pendingMaybe = false,
   swapIn = false,
   onAdd,
+  onMaybe,
   busy,
   suggestPending,
   onSuggest,
@@ -718,10 +749,15 @@ function OneAwayComboRow({
   badge: RowBadge | null;
   externalUrl: (externalKey: string) => string;
   inDeck: boolean;
+  /** MAYBE-LIST: the missing piece is parked in Maybe — the row reads "In Maybe" for the button. */
+  inMaybe?: boolean;
   pending: boolean;
+  pendingMaybe?: boolean;
   /** Y7b: the deck is full — the add opens the swap-in sheet. */
   swapIn?: boolean;
   onAdd: () => void;
+  /** MAYBE-LIST (LATER 538): park the missing piece in Maybe; absent = no button. */
+  onMaybe?: () => void;
   /** ANY combo row is resolving — one in-flight resolve at a time. */
   busy: boolean;
   /** This row's missing piece is resolving for "Suggest full list". */
@@ -751,6 +787,28 @@ function OneAwayComboRow({
             {pending ? "Adding…" : swapIn ? "Swap in…" : "Add"}
           </Button>
         )}
+        {/* MAYBE-LIST (LATER 538): after the add, at any deck size, as the search
+            row has it; a parked piece says so, and its Add moves it into the deck. */}
+        {onMaybe &&
+          !inDeck &&
+          (inMaybe ? (
+            <span
+              data-slot="in-maybe"
+              className="text-muted-foreground inline-flex shrink-0 items-center text-xs pointer-coarse:min-h-11"
+            >
+              {MAYBE_COPY.inMaybe}
+            </span>
+          ) : (
+            <Button
+              size="xs"
+              variant="secondary"
+              disabled={pendingMaybe}
+              aria-label={MAYBE_COPY.buttonLabel(target.name)}
+              onClick={onMaybe}
+            >
+              {pendingMaybe ? "Adding…" : MAYBE_COPY.button}
+            </Button>
+          ))}
       </div>
       <p className="mt-1 text-xs leading-relaxed">
         <span className="text-muted-foreground">with </span>

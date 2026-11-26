@@ -440,3 +440,95 @@ describe("ComboRadarPanel — badges (Y6b)", () => {
     expect(screen.queryByText("Added Extra")).toBeNull();
   });
 });
+
+describe("ComboRadarPanel — Maybe on One card away (MAYBE-LIST, LATER 538)", () => {
+  const DECK = "deck-1";
+  const oneAway: DeckComboView = {
+    id: 202,
+    externalKey: "3-4",
+    results: ["Infinite hasty tokens"],
+    templates: [],
+    popularity: 700,
+    tag: "R",
+    relevant: true,
+    inDeckPieces: [{ id: commander.id, name: commander.name, externalKey: commander.externalKey }],
+    missingPieces: [
+      { id: pestermite.id, name: pestermite.name, externalKey: pestermite.externalKey },
+    ],
+  };
+  type Maybe = (card: EditorCard) => string | undefined;
+
+  beforeEach(() => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === `/api/decks/${DECK}/combos`) {
+        return ok({ inDeck: [], oneAway: [oneAway], truncated: false });
+      }
+      if (url.startsWith(`/api/cards/${commander.id}/combos`)) return ok({ total: 0, combos: [] });
+      if (url === "/api/cards/resolve") {
+        return ok({ results: [{ match: { ...pestermite, image: null } }] });
+      }
+      return ok({});
+    });
+  });
+
+  const firstLine = async () => {
+    const heading = await screen.findByRole("heading", { name: "One card away" });
+    const row = heading.parentElement!.querySelector("li")!;
+    return [...row.firstElementChild!.children].map((el) => el.textContent);
+  };
+
+  it("without onMaybe (a format with no Maybe list) the row offers none", async () => {
+    renderPanel({ deckId: DECK });
+    expect(await firstLine()).toEqual(["Pestermite", "Add"]);
+    expect(screen.queryByRole("button", { name: "Add Pestermite to Maybe" })).toBeNull();
+  });
+
+  it("a piece in neither list: Maybe after the Add; it parks the piece over ONE resolve, adds nothing and leaves the live line to the editor's toast", async () => {
+    const onMaybe = vi.fn<Maybe>(() => undefined);
+    const { onAdd } = renderPanel({ deckId: DECK, onMaybe });
+    expect(await firstLine()).toEqual(["Pestermite", "Add", "Maybe"]);
+    fireEvent.click(screen.getByRole("button", { name: "Add Pestermite to Maybe" }));
+    await act(async () => {});
+    expect(resolvePosts()).toHaveLength(1);
+    expect(onMaybe).toHaveBeenCalledTimes(1);
+    expect(onMaybe).toHaveBeenCalledWith(expect.objectContaining({ id: pestermite.id }));
+    expect(onAdd).not.toHaveBeenCalled();
+    expect(screen.queryByText("Added Pestermite to Maybe")).toBeNull();
+  });
+
+  it("at the deck's maximum Maybe sits beside Swap in… and parks without a swap", async () => {
+    const onMaybe = vi.fn<Maybe>(() => undefined);
+    const { onAdd } = renderPanel({ deckId: DECK, onMaybe, swapIn: true });
+    expect(await firstLine()).toEqual(["Pestermite", "Swap in…", "Maybe"]);
+    fireEvent.click(screen.getByRole("button", { name: "Add Pestermite to Maybe" }));
+    await act(async () => {});
+    expect(onMaybe).toHaveBeenCalledTimes(1);
+    expect(onAdd).not.toHaveBeenCalled();
+  });
+
+  it("a parked piece reads In Maybe beside its Add; a piece the deck holds offers neither", async () => {
+    const onMaybe = vi.fn<Maybe>(() => undefined);
+    const view = renderPanel({ deckId: DECK, onMaybe, inMaybe: new Set([pestermite.id]) });
+    expect(await firstLine()).toEqual(["Pestermite", "Add", "In Maybe"]);
+    expect(screen.queryByRole("button", { name: "Add Pestermite to Maybe" })).toBeNull();
+    view.view.unmount();
+    renderPanel({
+      deckId: DECK,
+      onMaybe,
+      inDeckQty: new Map([
+        [commander.id, 1],
+        [pestermite.id, 1],
+      ]),
+    });
+    expect(await firstLine()).toEqual(["Pestermite", "In deck ✓"]);
+  });
+
+  it("a refusal lands on the panel's live line", async () => {
+    const onMaybe = vi.fn<Maybe>(() => "Already in Maybe");
+    renderPanel({ deckId: DECK, onMaybe });
+    fireEvent.click(await screen.findByRole("button", { name: "Add Pestermite to Maybe" }));
+    await act(async () => {});
+    expect(screen.getByText("Already in Maybe").className).toContain("text-destructive");
+  });
+});

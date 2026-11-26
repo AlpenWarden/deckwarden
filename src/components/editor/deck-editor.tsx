@@ -228,6 +228,7 @@ import { ShortcutsSheet } from "@/components/editor/shortcuts-sheet";
 import { useAutosave } from "@/components/editor/use-autosave";
 import { useEditorHotkeys } from "@/components/editor/use-editor-hotkeys";
 import { useFirstApproval } from "@/components/editor/use-first-approval";
+import { useKeyboardInset } from "@/components/editor/use-keyboard-inset";
 import { useLeaderArt } from "@/components/editor/use-leader-art";
 import { useTier } from "@/components/editor/use-tier";
 import { Button } from "@/components/ui/button";
@@ -634,6 +635,8 @@ export function DeckEditor({
   // session state — the phone's active pane, the md tools drawer, the phone
   // card sheet. None of it is persisted and none of it touches the deck.
   const tier = useTier();
+  // LATER 551: the toasts stand above an on-screen keyboard (iOS covers them).
+  useKeyboardInset();
   const [activePane, setActivePane] = useState<EditorPane>("deck");
   const [toolsOpen, setToolsOpen] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -2932,7 +2935,8 @@ export function DeckEditor({
   // itself stays layout: only these are edits.
   // MAYBE-LIST: a Maybe entry is never the sheet's entry. A card that sits
   // in Maybe alone gets "Move to deck" ("Swap in…" at the maximum) where
-  // Add would be, and "Remove from Maybe".
+  // Add would be, and "Remove from Maybe"; a card in neither list gets
+  // "Maybe" after its Add (LATER 538).
   const maybeZone = maybeZoneOf(load.format);
   const sheetEntry = preview
     ? (entries.find(
@@ -2967,6 +2971,14 @@ export function DeckEditor({
           const error = handleAdd(card, mainZone.id, 1);
           if (error) toast.add({ title: error, type: "error", timeout: TOAST_MS });
         },
+      };
+    }
+    // LATER 538: a card in neither list can be parked from the sheet too, at
+    // any deck size; the sheet stays open and turns to the Maybe card's actions.
+    if (maybeZone && !sheetEntry && !sheetMaybe) {
+      sheetActions.onMaybe = () => {
+        const error = handleMaybeAdd(card);
+        if (error) toast.add({ title: error, type: "error", timeout: TOAST_MS });
       };
     }
     if (sheetEntry) {
@@ -3102,10 +3114,12 @@ export function DeckEditor({
                 entries={entries}
                 cards={cards}
                 inDeckQty={inDeckQty}
+                inMaybe={inMaybe}
                 saveStatus={autosave.status}
                 active={rightTab === "combos"}
                 onAdd={handleUndoableAdd}
                 onAddPieces={handleComboPiecesAdd}
+                onMaybe={maybeZone ? handleMaybeAdd : undefined}
                 goals={goals}
                 onOpenAutofill={load.adapter.recommend?.autofill ? openComboAutofill : undefined}
                 swapIn={deckFull}
@@ -3465,6 +3479,7 @@ export function DeckEditor({
             <ShortcutsSheet
               mainZoneLabel={mainZone?.label ?? "the deck"}
               leaderNoun={leaderZone ? load.adapter.display.leaderNoun : undefined}
+              maybe={maybeZone !== undefined}
               onClose={() => setDialog(null)}
             />
           )}

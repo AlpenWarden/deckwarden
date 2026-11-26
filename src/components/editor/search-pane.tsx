@@ -48,8 +48,8 @@
  * beside "Swap in…" at the maximum, where it parks a card without a swap.
  * It parks the box's quantity and, like an add, clears the box and takes
  * focus back; a refusal lands on the live line. A parked card's row says
- * "In Maybe" in its meta cell instead. No key: Enter and Ctrl/Cmd+Enter
- * keep their adds.
+ * "In Maybe" in its meta cell instead. Its key is Shift+Enter (LATER 549):
+ * Enter and Ctrl/Cmd+Enter keep their adds, and the hint line names it.
  *
  * FRESH-UI-EDITOR (the Codex editor half, reconciled): the pane has a
  * visible title, "Find a card", in the deck pane's heading class and, like
@@ -60,8 +60,13 @@
  * coarse pointer (where the actions always show), the actions drop to a
  * second line under the name, right-aligned, so they never squeeze it; the
  * name keeps its line with its meta, and the pip column stays where every
- * other row has it. Hover reveals the actions inline as before: a layout
- * that moved under the pointer would change the row under it.
+ * other row has it. Hover on a fine pointer shows an unselected row's
+ * actions in its meta's cell, on the first line (LATER 550, the owner's
+ * pick): the row keeps its 44 px, since a layout that moved under the
+ * pointer would change the row under it, and the name truncates under the
+ * pointer. Hover shows the main add and Maybe only (the owner's second
+ * answer, on measured widths): with the leader's button too, the name kept
+ * 17 px at the maximum. The selected row and touch keep all three.
  *
  * Game knowledge (zone ids/labels, leader noun, pips, subtitles) comes off the
  * adapter — this component never mentions a specific game.
@@ -241,6 +246,10 @@ export function SearchPane({
       const card = results[sel];
       if (!card) return;
       if (e.ctrlKey || e.metaKey) add(card, leaderZone?.id, qty);
+      // LATER 549: Shift+Enter parks the selected card, as its Maybe button
+      // does; for a card the button would not offer, the editor's refusal
+      // ("Already in the deck") lands on the live line.
+      else if (e.shiftKey && onMaybe) maybe(card, qty);
       else addMain(card, qty);
     } else if (e.key === "Escape") {
       dispatch({ type: "clear" });
@@ -287,15 +296,23 @@ export function SearchPane({
           <span>
             <Kbd>Enter</Kbd> {swapping ? "swap in" : "add"}
           </span>
+          {/* LATER 549: the order packs the line into three rows in the 295 px
+              pane with Shift+Enter's item, on a Mac and off it ("Shift", "Ctrl"),
+              at any deck size; the leader's item, the longest, ends it. */}
+          <span>
+            <Kbd>?</Kbd> shortcuts
+          </span>
+          {onMaybe && (
+            <span>
+              <Kbd>{isMac ? "⇧" : "Shift"}</Kbd>+<Kbd>Enter</Kbd> {MAYBE_COPY.keyHint}
+            </span>
+          )}
+          <span>“4 Name” sets quantity</span>
           {leaderZone && (
             <span>
               <Kbd>{isMac ? "⌘" : "Ctrl"}</Kbd>+<Kbd>Enter</Kbd> add as {leaderNoun}
             </span>
           )}
-          <span>“4 Name” sets quantity</span>
-          <span>
-            <Kbd>?</Kbd> shortcuts
-          </span>
         </p>
         <p
           aria-live="polite"
@@ -317,20 +334,22 @@ export function SearchPane({
         {results.map((card, i) => {
           const owned = inDeckQty.get(card.id) ?? 0;
           const thumb = thumbnailUrl(card.image);
+          const selected = i === sel;
           return (
             <li
               key={card.id}
               id={`search-result-${i}`}
               role="option"
-              aria-selected={i === sel}
+              aria-selected={selected}
               className={cn(
-                // The row's grid (FRESH-UI-EDITOR): the thumb, the name, the meta; the
-                // actions take an implicit fourth column when hover shows them inline.
+                // The row's grid (FRESH-UI-EDITOR): the thumb, the name, the meta.
                 // Selected, or on a coarse pointer, the actions take a second row
-                // under the name and its meta (gap-y only then).
+                // under the name and its meta (gap-y only then); hovered on a fine
+                // pointer they take the meta's cell (LATER 550), so the row keeps
+                // its 44 px and nothing below it moves.
                 "group/row grid cursor-pointer grid-cols-[1.625rem_minmax(0,1fr)_auto] items-center gap-x-2 rounded-md px-2 py-1 text-sm aria-selected:gap-y-1 pointer-coarse:min-h-11 pointer-coarse:gap-y-1",
                 // U3a: a press shows the hit (the selection's look) before the add's toast.
-                i === sel
+                selected
                   ? "bg-accent text-accent-foreground"
                   : "hover:bg-muted/60 active:bg-accent active:text-accent-foreground",
               )}
@@ -364,8 +383,15 @@ export function SearchPane({
                 )}
               </span>
               {/* The meta cell: ×N and the pips together, at the row's right edge like
-                  every other row's pips, whichever line the actions take. */}
-              <span data-slot="search-meta" className="flex shrink-0 items-center gap-2">
+                  every other row's pips, whichever line the actions take. A hovered
+                  unselected row on a fine pointer gives the cell to its actions. */}
+              <span
+                data-slot="search-meta"
+                className={cn(
+                  "flex shrink-0 items-center gap-2",
+                  !selected && "pointer-fine:group-hover/row:hidden",
+                )}
+              >
                 {owned > 0 && (
                   <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
                     ×{owned}
@@ -379,12 +405,18 @@ export function SearchPane({
                 )}
                 <CostPips html={adapter.display.costHtml(card)} className="shrink-0 text-xs" />
               </span>
-              {/* Actions on the active row and on touch (the spec's
-                  group-aria-selected fix): hover still reveals them on the rest.
-                  Selected or on touch they take the second row, right-aligned. */}
+              {/* Actions on the active row and on touch: selected or on touch they
+                  take the second row, right-aligned. Hover on a fine pointer shows
+                  them on the rest in the meta's cell, the row's first line (LATER
+                  550: placed nowhere, they wrapped to a new row and the row grew). */}
               <span
                 data-slot="search-actions"
-                className="hidden shrink-0 gap-1 group-aria-selected/row:col-start-2 group-aria-selected/row:col-end-4 group-aria-selected/row:row-start-2 group-aria-selected/row:flex group-aria-selected/row:justify-self-end group-hover/row:flex pointer-coarse:col-start-2 pointer-coarse:col-end-4 pointer-coarse:row-start-2 pointer-coarse:flex pointer-coarse:justify-self-end"
+                className={cn(
+                  "shrink-0 gap-1",
+                  selected
+                    ? "col-start-2 col-end-4 row-start-2 flex justify-self-end"
+                    : "hidden pointer-coarse:col-start-2 pointer-coarse:col-end-4 pointer-coarse:row-start-2 pointer-coarse:flex pointer-coarse:justify-self-end pointer-fine:group-hover/row:col-start-3 pointer-fine:group-hover/row:row-start-1 pointer-fine:group-hover/row:flex",
+                )}
               >
                 {mainZone && (
                   <Button
@@ -417,11 +449,17 @@ export function SearchPane({
                     {MAYBE_COPY.button}
                   </Button>
                 )}
+                {/* LATER 550 (the owner's second answer): not on a hovered row on a fine
+                    pointer, where its width left the name one letter at the maximum;
+                    the selected row, touch and Ctrl/Cmd+Enter keep it. */}
                 {leaderZone && (
                   <Button
                     size="xs"
                     variant="secondary"
-                    className="pointer-coarse:h-11 pointer-coarse:px-3"
+                    className={cn(
+                      "pointer-coarse:h-11 pointer-coarse:px-3",
+                      !selected && "pointer-fine:hidden",
+                    )}
                     aria-label={`Add ${card.name} as ${leaderNoun}`}
                     onClick={(e) => {
                       e.stopPropagation();

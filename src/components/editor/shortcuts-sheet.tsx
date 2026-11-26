@@ -11,15 +11,19 @@ import { Fragment, type ReactNode } from "react";
 
 import { Kbd } from "@/components/ui/kbd";
 import { Modal } from "@/components/ui/modal";
+import { MAYBE_COPY } from "@/lib/decks/maybe-copy";
 
 export function ShortcutsSheet({
   mainZoneLabel,
   leaderNoun,
+  maybe = false,
   onClose,
 }: {
   mainZoneLabel: string;
   /** Absent when the format has no leader zone (none today). */
   leaderNoun?: string;
+  /** The format has a Maybe list, so Shift+Enter parks a card (LATER 549). */
+  maybe?: boolean;
   onClose: () => void;
 }) {
   const rows: { keys: ReactNode; what: string }[] = [
@@ -34,6 +38,20 @@ export function ShortcutsSheet({
       what: "Move through results (wraps around)",
     },
     { keys: <Kbd>Enter</Kbd>, what: `Add the selected card to ${mainZoneLabel}` },
+    ...(maybe
+      ? [
+          {
+            keys: (
+              <>
+                <Kbd>Shift</Kbd>
+                <span aria-hidden>+</span>
+                <Kbd>Enter</Kbd>
+              </>
+            ),
+            what: MAYBE_COPY.keyRow,
+          },
+        ]
+      : []),
     ...(leaderNoun
       ? [
           {

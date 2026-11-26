@@ -6,9 +6,12 @@
  * `ZoneDef.label`, Magic's "Maybe").
  */
 export const MAYBE_COPY = {
-  /** The Suggestions and search rows' button. */
+  /** The Suggestions, search and Combos rows' button, and the phone card sheet's. */
   button: "Maybe",
   buttonLabel: (name: string) => `Add ${name} to Maybe`,
+  /** The search box's Shift+Enter (LATER 549): the hint line's words, and the `?` sheet's row. */
+  keyHint: "Maybe",
+  keyRow: "Add the selected card to Maybe",
   /** A row whose card already sits in Maybe. */
   inMaybe: "In Maybe",
   /** "Added Sol Ring to Maybe" — the Maybe add's toast ("Added 4× …" from a "4 Name" search). */
@@ -36,7 +39,7 @@ export const MAYBE_COPY = {
   visitorNote: "Cards the builder is considering. They’re not part of the deck.",
   /** The open section with nothing in it (the editor's only). */
   empty:
-    "Nothing here yet. Search and Suggestions can park a card here with Maybe; it won’t count toward the deck.",
+    "Nothing here yet. Search, Suggestions and Combos can park a card here with Maybe; it won’t count toward the deck.",
   /** The empty deck's hint while Maybe holds a card. */
   emptyDeckHint: "Add them from Search, or move one in from Maybe.",
 } as const;

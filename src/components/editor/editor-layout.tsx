@@ -116,11 +116,15 @@ const SHEET_SCRIM_CLASS =
 export const EDITOR_BOTTOM_INSET_CLASS =
   "[--editor-bottom-inset:calc(3.5rem_+_env(safe-area-inset-bottom))] md:[--editor-bottom-inset:0px]";
 
-/** The toast viewport's offset: above the bar on phones, the primitive's 1rem elsewhere. */
+/**
+ * The toast viewport's offset: above the bar on phones, the primitive's 1rem
+ * elsewhere, and above an on-screen keyboard while one is up (LATER 551:
+ * `--keyboard-inset`, written by the editor's `useKeyboardInset`).
+ */
 export const EDITOR_TOAST_VIEWPORT_CLASS = cn(
   EDITOR_BOTTOM_INSET_CLASS,
   // z-60: above the md tools drawer (z-50), which docks where toasts land.
-  "bottom-[calc(var(--editor-bottom-inset)_+_1rem)] z-60",
+  "bottom-[calc(max(var(--editor-bottom-inset),var(--keyboard-inset,0px))_+_1rem)] z-60",
 );
 
 /** R2's credit chip: 0.5rem above the bar (the chip's own `bottom-2`, plus the inset). */

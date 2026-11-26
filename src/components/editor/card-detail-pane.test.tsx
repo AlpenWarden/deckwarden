@@ -101,6 +101,25 @@ describe("CardDetailPane as the phone card sheet (U4b)", () => {
     expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
   });
 
+  it("LATER 538: a card in neither list gets Maybe after its Add, an outline 44 px target on touch", () => {
+    const onClick = vi.fn();
+    const onMaybe = vi.fn();
+    render(
+      <CardDetailPane
+        adapter={adapter}
+        card={sol}
+        sheet={sheetAt("peek", { add: { label: "Add", onClick }, onMaybe })}
+      />,
+    );
+    const actions = document.querySelector("[data-slot=sheet-actions]")!;
+    expect([...actions.children].map((b) => b.textContent)).toEqual(["Add", "Maybe"]);
+    const maybe = screen.getByRole("button", { name: "Add Sol Ring to Maybe" });
+    expect(maybe.className).toContain("pointer-coarse:h-11");
+    fireEvent.click(maybe);
+    expect(onMaybe).toHaveBeenCalledTimes(1);
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
   it("the half adds the card, sized to fit under the header and the actions; Add carries the editor's label", () => {
     const onClick = vi.fn();
     render(

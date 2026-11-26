@@ -90,6 +90,7 @@ import {
 } from "@/lib/cards/images";
 import { printingCaption, type GalleryPrinting } from "@/lib/cards/printings";
 import { MAX_TAG_LENGTH, MAX_TAGS, type EditorCard } from "@/lib/decks/editor-state";
+import { MAYBE_COPY } from "@/lib/decks/maybe-copy";
 import type { GameAdapter } from "@/lib/games/types";
 import {
   arrival,
@@ -138,6 +139,8 @@ export interface SheetActions {
    * deck", the Maybe row's own way in.
    */
   add?: { label: string; onClick: () => void };
+  /** MAYBE-LIST (LATER 538): park a card that is in neither list in Maybe, after the add. */
+  onMaybe?: () => void;
   onRemove?: () => void;
   /** MAYBE-LIST: the remove's words when it is not the deck's ("Remove from Maybe"); absent = "Remove". */
   removeLabel?: string;
@@ -496,12 +499,23 @@ export function CardDetailPane({
           data-slot="sheet-column"
           className="min-h-0 flex-1 overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)]"
         >
-          {(actions.add || actions.onRemove || actions.onSwap) && (
+          {(actions.add || actions.onMaybe || actions.onRemove || actions.onSwap) && (
             <div data-slot="sheet-actions" className="mt-2 flex flex-wrap items-center gap-2">
               {actions.add && (
                 <Button size="sm" className={SHEET_ACTION_CLASS} onClick={actions.add.onClick}>
                   <PlusIcon data-icon="inline-start" aria-hidden />
                   {actions.add.label}
+                </Button>
+              )}
+              {actions.onMaybe && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className={SHEET_ACTION_CLASS}
+                  aria-label={MAYBE_COPY.buttonLabel(card.name)}
+                  onClick={actions.onMaybe}
+                >
+                  {MAYBE_COPY.button}
                 </Button>
               )}
               {actions.onRemove && (

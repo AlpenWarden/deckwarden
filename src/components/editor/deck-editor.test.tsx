@@ -7040,6 +7040,119 @@ describe("DeckEditor — Maybe (MAYBE-LIST)", () => {
     expect(screen.queryByRole("textbox", { name: "Add tag" })).toBeNull();
   });
 
+  it("phone (LATER 538): a searched card in neither list gets Maybe in its sheet, after the add; it parks the card at 100 / 100 and the sheet turns to the Maybe card's actions", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) =>
+      String(input).startsWith("/api/cards/search")
+        ? ok({ results: [sol] })
+        : maybeRoute(input, init),
+    );
+    stubViewport(375);
+    render(<DeckEditor deckId="deck-1" />);
+    await loaded();
+    fireEvent.change(screen.getByRole("combobox", { name: "Card search" }), {
+      target: { value: "sol" },
+    });
+    await settle();
+    fireEvent.click(screen.getByRole("option", { name: /Sol Ring/ }));
+    await act(async () => {});
+    const sheet = screen.getByRole("dialog", { name: "Sol Ring" });
+    const actions = () =>
+      [...sheet.querySelector("[data-slot=sheet-actions]")!.children].map((b) => b.textContent);
+    expect(actions()).toEqual(["Swap in…", "Maybe"]);
+    fireEvent.click(within(sheet).getByRole("button", { name: "Add Sol Ring to Maybe" }));
+    const toastEl = await toastOf("Added Sol Ring to Maybe");
+    expect(deckSize()).toBe("100 / 100 cards");
+    // Parking is no swap: the sheet stays on the card, now a Maybe card's.
+    expect(screen.getByRole("dialog", { name: "Sol Ring" })).toBe(sheet);
+    expect(actions()).toEqual(["Swap in…", "Remove from Maybe"]);
+    await save();
+    expect(puts()).toBe(1);
+    expect(lastPut()).toContain("maybeboard:Sol Ring ×1");
+    fireEvent.click(within(toastEl).getByRole("button", { name: "Undo" }));
+    await save();
+    expect(lastPut()).not.toContain("maybeboard:Sol Ring ×1");
+    expect(actions()).toEqual(["Swap in…", "Maybe"]);
+  });
+
+  it("Combos (LATER 538): a one-away row's Maybe parks its missing piece at 100 / 100 with the editor's toast and Undo; the row then reads In Maybe", async () => {
+    const piece = (c: CardWire) => ({ id: c.id, name: c.name, externalKey: c.externalKey });
+    const oneAway = {
+      id: 9,
+      externalKey: "k-9",
+      results: ["Infinite colorless mana"],
+      templates: [],
+      popularity: 10,
+      tag: "E",
+      relevant: true,
+      inDeckPieces: [piece(vault)],
+      missingPieces: [piece(sol)],
+    };
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/decks/deck-1/combos") {
+        return ok({ inDeck: [], oneAway: [oneAway], truncated: false });
+      }
+      if (url.startsWith(`/api/cards/${kozilek.id}/combos`)) return ok({ total: 0, combos: [] });
+      return maybeRoute(input, init);
+    });
+    stubViewport(1440);
+    render(<DeckEditor deckId="deck-1" />);
+    await loaded();
+    fireEvent.click(screen.getByRole("tab", { name: "Combos" }));
+    const maybe = await pollFor(() =>
+      screen.queryByRole("button", { name: "Add Sol Ring to Maybe" }),
+    );
+    expect(screen.getByRole("button", { name: "Swap in Sol Ring…" })).toBeTruthy();
+    fireEvent.click(maybe);
+    const toastEl = await toastOf("Added Sol Ring to Maybe");
+    expect(deckSize()).toBe("100 / 100 cards");
+    expect(maybeTrigger().textContent).toBe("Maybe1");
+    expect(screen.queryByRole("button", { name: "Add Sol Ring to Maybe" })).toBeNull();
+    expect(screen.getByText("In Maybe")).toBeTruthy();
+    await save();
+    expect(puts()).toBe(1);
+    expect(lastPut()).toContain("maybeboard:Sol Ring ×1");
+    fireEvent.click(within(toastEl).getByRole("button", { name: "Undo" }));
+    await save();
+    expect(lastPut()).not.toContain("maybeboard:Sol Ring ×1");
+  });
+
+  it("the ? sheet lists Shift+Enter for Maybe (LATER 549); One Piece, with no Maybe list, does not", async () => {
+    stubViewport(1440);
+    const { unmount } = render(
+      <DeckEditor deckId={null} draftGame="mtg" draftFormat="commander" />,
+    );
+    fireEvent.keyDown(document.body, { key: "?", shiftKey: true });
+    const sheet = await pollFor(() => screen.queryByRole("dialog", { name: "Keyboard shortcuts" }));
+    expect(within(sheet).getByText("Add the selected card to Maybe")).toBeTruthy();
+    unmount();
+    render(<DeckEditor deckId={null} draftGame="optcg" draftFormat="standard" />);
+    fireEvent.keyDown(document.body, { key: "?", shiftKey: true });
+    const opSheet = await pollFor(() =>
+      screen.queryByRole("dialog", { name: "Keyboard shortcuts" }),
+    );
+    expect(within(opSheet).queryByText("Add the selected card to Maybe")).toBeNull();
+  });
+
+  it("the editor keeps its toasts above an on-screen keyboard (LATER 551): it writes the keyboard's inset on the root and takes it away on unmount", async () => {
+    stubViewport(375);
+    // An iPhone 15 with its keyboard up: the layout viewport keeps 844, the visual one 508.
+    const viewport = Object.assign(new EventTarget(), { height: 508, offsetTop: 0, scale: 1 });
+    vi.stubGlobal("visualViewport", viewport);
+    vi.stubGlobal("innerHeight", 844);
+    const inset = () => document.documentElement.style.getPropertyValue("--keyboard-inset");
+    const { unmount } = render(
+      <DeckEditor deckId={null} draftGame="mtg" draftFormat="commander" />,
+    );
+    await act(async () => {});
+    expect(inset()).toBe("336px");
+    viewport.height = 844;
+    viewport.dispatchEvent(new Event("resize"));
+    expect(inset()).toBe("0px");
+    unmount();
+    expect(inset()).toBe("");
+  });
+
   it("Import: a pasted Maybeboard lands in Maybe beside the 100, and the export leaves it out", async () => {
     stubViewport(1440);
     render(<DeckEditor deckId="deck-1" />);

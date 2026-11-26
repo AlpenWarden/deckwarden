@@ -6,7 +6,7 @@
  * line clearing on input, actions visible on the active row, a thumbnail
  * box on every row, keycaps in the hint, and no success line in the pane.
  */
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MAX_ENTRIES_ERROR, type CardWire } from "@/lib/decks/editor-state";
@@ -235,8 +235,13 @@ describe("SearchPane", () => {
     const active = screen.getByRole("option", { name: /Arcane Signet/ });
     expect(active.getAttribute("aria-selected")).toBe("true");
     const add = screen.getByRole("button", { name: "Add Arcane Signet to Main deck" });
-    expect(add.parentElement?.className).toContain("group-aria-selected/row:flex");
-    expect(add.parentElement?.className).toContain("pointer-coarse:flex");
+    // The active row shows its actions at every pointer; the row it left hides
+    // them again, except on touch.
+    expect(add.parentElement?.className.split(" ")).toContain("flex");
+    expect(add.parentElement?.className.split(" ")).not.toContain("hidden");
+    const left = screen.getByRole("button", { name: "Add Sol Ring to Main deck" }).parentElement!;
+    expect(left.className.split(" ")).toContain("hidden");
+    expect(left.className).toContain("pointer-coarse:flex");
     expect(screen.getByRole("button", { name: "Add Arcane Signet as Commander" })).toBeTruthy();
   });
 
@@ -353,7 +358,7 @@ describe("SearchPane — the title and the two-line selected row (FRESH-UI-EDITO
     expect(heading.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("a row is a grid of thumb · name · meta · actions; selected or on touch the actions take a second row under the name; hover moves nothing", async () => {
+  it("a row is a grid of thumb · name · meta · actions; selected or on touch the actions take a second row under the name; hover puts them in the meta's cell (LATER 550)", async () => {
     const { input } = renderPane();
     respond([sol, signet]);
     type(input, "s");
@@ -381,19 +386,42 @@ describe("SearchPane — the title and the two-line selected row (FRESH-UI-EDITO
       expect(meta.dataset.slot).toBe("search-meta");
       expect(meta.querySelector(".pip, [data-slot=pips], span")).not.toBeNull();
       expect(actions.dataset.slot).toBe("search-actions");
-      expect(actions.className).toContain("hidden");
-      expect(actions.className).toContain("group-aria-selected/row:flex");
-      expect(actions.className).toContain("group-hover/row:flex");
-      expect(actions.className).toContain("pointer-coarse:flex");
-      // The second row: under the name, spanning the name and meta columns, right-aligned.
-      for (const v of ["group-aria-selected/row:", "pointer-coarse:"]) {
-        expect(actions.className).toContain(`${v}col-start-2`);
-        expect(actions.className).toContain(`${v}col-end-4`);
-        expect(actions.className).toContain(`${v}row-start-2`);
-        expect(actions.className).toContain(`${v}justify-self-end`);
-      }
-      expect(actions.className).not.toMatch(/group-hover\/row:(col|row|justify)/);
     }
+    // The selected row: the actions on the second row at every pointer, under the
+    // name, spanning the name and meta columns, right-aligned; hover changes nothing.
+    const [, , selMeta, selActions] = [...selected.children] as HTMLElement[];
+    const selClasses = selActions.className.split(" ");
+    for (const c of ["flex", "col-start-2", "col-end-4", "row-start-2", "justify-self-end"]) {
+      expect(selClasses).toContain(c);
+    }
+    expect(selClasses).not.toContain("hidden");
+    expect(selActions.className).not.toContain("group-hover/row:");
+    expect(selMeta.className).not.toContain("group-hover/row:");
+    // An unselected row: hidden at rest; on touch the same second row; hovered on
+    // a fine pointer, the meta's cell on the first line, the meta out of the way,
+    // so the row keeps its height and the rows below never move.
+    const [, , restMeta, restActions] = [...rest.children] as HTMLElement[];
+    expect(restActions.className.split(" ")).toContain("hidden");
+    for (const c of ["flex", "col-start-2", "col-end-4", "row-start-2", "justify-self-end"]) {
+      expect(restActions.className).toContain(`pointer-coarse:${c}`);
+    }
+    for (const c of ["flex", "col-start-3", "row-start-1"]) {
+      expect(restActions.className).toContain(`pointer-fine:group-hover/row:${c}`);
+    }
+    expect(restActions.className).not.toMatch(/(^|\s)group-hover\/row:/);
+    expect(restActions.className).not.toMatch(/group-hover\/row:(col-end|row-start-2|justify)/);
+    expect(restMeta.className).toContain("pointer-fine:group-hover/row:hidden");
+    // Hover shows the main add and Maybe only (the owner's second answer): the
+    // leader's button stays off a fine pointer's unselected row, never off the
+    // selected one, and never off touch.
+    const leaderOf = (row: HTMLElement) =>
+      within(row).getByRole("button", { name: /as Commander$/ }).className;
+    expect(leaderOf(rest)).toContain("pointer-fine:hidden");
+    expect(leaderOf(selected)).not.toContain("pointer-fine:hidden");
+    expect(leaderOf(rest)).not.toMatch(/pointer-coarse:hidden/);
+    expect(within(rest).getByRole("button", { name: /to Main deck$/ }).className).not.toContain(
+      "pointer-fine:hidden",
+    );
     expect(selected.getAttribute("aria-selected")).toBe("true");
     expect(rest.getAttribute("aria-selected")).toBe("false");
     // The selection's look is the row's; an unselected row keeps the press.
@@ -523,6 +551,59 @@ describe("SearchPane — Maybe (MAYBE-LIST, the owner's follow-up)", () => {
     expect(live.className).toContain("text-destructive");
     expect(input.value).toBe("sol");
     expect(screen.getAllByRole("option")).toHaveLength(1);
+  });
+
+  it("Shift+Enter parks the selected card with the box's quantity, then clears and refocuses the box (LATER 549)", async () => {
+    const { input, onAdd, onMaybe, onSwapIn } = renderMaybe({ swapIn: true });
+    respond([sol, signet]);
+    type(input, "3 s");
+    await settle();
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(onMaybe).toHaveBeenCalledTimes(1);
+    expect(onMaybe).toHaveBeenCalledWith(expect.objectContaining({ name: "Arcane Signet" }), 3);
+    // Never the main add, nor its swap at the maximum.
+    expect(onAdd).not.toHaveBeenCalled();
+    expect(onSwapIn).not.toHaveBeenCalled();
+    expect(input.value).toBe("");
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("Shift+Enter on a card the button would not offer hands the editor's refusal to the live line", async () => {
+    const { input, onMaybe } = renderMaybe({
+      inDeckQty: new Map([[sol.id, 1]]),
+      onMaybe: vi.fn<Handler>(() => "Already in the deck"),
+    });
+    respond([sol]);
+    type(input, "sol");
+    await settle();
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(onMaybe).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Already in the deck").className).toContain("text-destructive");
+    expect(input.value).toBe("sol");
+  });
+
+  it("the hint line names Shift+Enter only where a Maybe list exists; without one Shift+Enter is Enter", async () => {
+    const hints = () => document.querySelector<HTMLElement>("[data-slot=search-hints]")!;
+    const { input, onAdd } = renderPane();
+    expect(hints().textContent).not.toContain("Shift");
+    respond([sol]);
+    type(input, "sol");
+    await settle();
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(onAdd).toHaveBeenLastCalledWith(expect.anything(), "main", 1);
+    cleanup();
+    renderMaybe();
+    // Packed for the 295 px pane (three rows, measured): the leader's item, the
+    // longest, ends the line, after Maybe's and the quantity's.
+    expect([...hints().children].map((s) => s.textContent!.replace(/\s+/g, " ").trim())).toEqual([
+      "↑ ↓ select",
+      "Enter add",
+      "? shortcuts",
+      "Shift+Enter Maybe",
+      "“4 Name” sets quantity",
+      "Ctrl+Enter add as Commander",
+    ]);
   });
 
   it("the keys keep their adds: Enter and Ctrl+Enter never park a card", async () => {
