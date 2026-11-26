@@ -80,6 +80,27 @@ describe("CardDetailPane as the phone card sheet (U4b)", () => {
     );
   });
 
+  it("MAYBE-LIST: the remove carries the editor's words for a Maybe card, and Add its Move to deck", () => {
+    const onRemove = vi.fn();
+    const onClick = vi.fn();
+    render(
+      <CardDetailPane
+        adapter={adapter}
+        card={sol}
+        sheet={sheetAt("peek", {
+          add: { label: "Move to deck", onClick },
+          onRemove,
+          removeLabel: "Remove from Maybe",
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Move to deck" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove from Maybe" }));
+    expect(onClick).toHaveBeenCalledTimes(1);
+    expect(onRemove).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+  });
+
   it("the half adds the card, sized to fit under the header and the actions; Add carries the editor's label", () => {
     const onClick = vi.fn();
     render(

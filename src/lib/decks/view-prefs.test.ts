@@ -24,6 +24,12 @@ describe("parseViewPrefs", () => {
     });
     expect(parseViewPrefs('{"tokensOpen":false}')).toEqual({ tokensOpen: false });
     expect(parseViewPrefs('{"tokensOpen":"yes"}')).toEqual({});
+    // MAYBE-LIST: the Maybe section's open state, the same way.
+    expect(parseViewPrefs('{"maybeOpen":true,"tokensOpen":false}')).toEqual({
+      maybeOpen: true,
+      tokensOpen: false,
+    });
+    expect(parseViewPrefs('{"maybeOpen":1}')).toEqual({});
   });
 
   it("returns empty prefs for null, junk JSON, and non-objects", () => {

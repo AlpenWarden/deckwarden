@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { CardWire } from "@/lib/decks/editor-state";
+import { MAX_ENTRIES, type CardWire } from "@/lib/decks/editor-state";
 import { applyImport, buildImportItems, defaultZoneId, type Resolution } from "@/lib/decks/import";
 import { mtgAdapter } from "@/lib/games/mtg/adapter";
 import { parseMtgDecklist } from "@/lib/games/mtg/decklist";
@@ -333,5 +333,176 @@ describe("the Moxfield commander guess at import level (P2.8b)", () => {
     expect(hook).not.toHaveBeenCalled();
     expect(items[1].zone).toBe("main");
     expect(items[1].guessed).toBeUndefined();
+  });
+});
+
+describe("Maybe in an import (MAYBE-LIST)", () => {
+  const cover = wire("Cover of Darkness");
+  const fountain = wire("Radiant Fountain");
+  const virtue = wire("Intangible Virtue");
+  const burial = wire("Proper Burial");
+  const signet = wire("Arcane Signet");
+  const byName = new Map(
+    [atraxa, solRing, island, cover, fountain, virtue, burial, signet].map((c) => [c.name, c]),
+  );
+  /** The real parser's lines, resolved by name, through buildImportItems. */
+  const itemsOf = (text: string) => {
+    const { lines } = parseMtgDecklist(text);
+    return buildImportItems(
+      COMMANDER,
+      lines,
+      resolutions(lines.map((l) => [l.rawName, byName.get(l.rawName) ?? null])),
+    );
+  };
+  const zones = (entries: { zone: string; cardId: string }[]) =>
+    entries.map(
+      (e) => `${e.zone}:${[...byName.values()].find((c) => c.id === e.cardId)?.name ?? e.cardId}`,
+    );
+
+  const MOXFIELD = [
+    "Commander",
+    "1 Atraxa, Praetors' Voice",
+    "",
+    "Deck",
+    "1 Sol Ring",
+    "30 Island",
+    "",
+    "Sideboard",
+    "1 Intangible Virtue",
+    "",
+    "Maybeboard",
+    "1 Cover of Darkness",
+    "1 Radiant Fountain",
+  ].join("\n");
+
+  it("a pasted Maybeboard section lands in Maybe with no parser change; Sideboard stays skipped", () => {
+    const { entries, warnings } = applyImport([], itemsOf(MOXFIELD), COMMANDER, "replace");
+    expect(zones(entries)).toEqual([
+      "commander:Atraxa, Praetors' Voice",
+      "main:Sol Ring",
+      "main:Island",
+      "maybeboard:Cover of Darkness",
+      "maybeboard:Radiant Fountain",
+    ]);
+    expect(warnings).toEqual(['No "sideboard" zone in Commander: skipped Intangible Virtue']);
+  });
+
+  it("Archidekt's out-of-deck categories land in Maybe; its Sideboard stays skipped", () => {
+    const text = [
+      "1x Atraxa, Praetors' Voice (one) 190 [Commander{top}]",
+      "1x Cover of Darkness (ons) 133 [Maybeboard{noDeck}{noPrice}]",
+      "1x Radiant Fountain (clb) 908 [Maybeboard{noDeck}{noPrice},Land]",
+      "1x Intangible Virtue (isd) 19 [Sideboard{noDeck}]",
+      "1x Proper Burial (ody) 20 [Considering{noDeck}]",
+      "1x Sol Ring (c21) 263 [Ramp]",
+    ].join("\n");
+    const { entries, warnings } = applyImport([], itemsOf(text), COMMANDER, "add");
+    expect(zones(entries)).toEqual([
+      "commander:Atraxa, Praetors' Voice",
+      "maybeboard:Cover of Darkness",
+      "maybeboard:Radiant Fountain",
+      "maybeboard:Proper Burial",
+      "main:Sol Ring",
+    ]);
+    expect(warnings).toEqual(['No "sideboard" zone in Commander: skipped Intangible Virtue']);
+  });
+
+  it("Replace keeps the Maybe list when the paste has no Maybe lines, as it keeps Tokens", () => {
+    const existing = [
+      { cardId: "old", zone: "main", qty: 5, tags: [] },
+      { cardId: signet.id, zone: "maybeboard", qty: 1, tags: [] },
+      { cardId: "treasure", zone: "tokens", qty: 3, tags: [] },
+    ];
+    const { entries } = applyImport(
+      existing,
+      itemsOf("1 Sol Ring\n30 Island"),
+      COMMANDER,
+      "replace",
+    );
+    expect(zones(entries)).toEqual([
+      "maybeboard:Arcane Signet",
+      "tokens:treasure",
+      "main:Sol Ring",
+      "main:Island",
+    ]);
+  });
+
+  it("Replace replaces the Maybe list when the paste brings Maybe lines of its own", () => {
+    const existing = [
+      { cardId: "old", zone: "main", qty: 5, tags: [] },
+      { cardId: signet.id, zone: "maybeboard", qty: 1, tags: [] },
+      { cardId: "treasure", zone: "tokens", qty: 3, tags: [] },
+    ];
+    const { entries } = applyImport(existing, itemsOf(MOXFIELD), COMMANDER, "replace");
+    expect(zones(entries)).toEqual([
+      "tokens:treasure",
+      "commander:Atraxa, Praetors' Voice",
+      "main:Sol Ring",
+      "main:Island",
+      "maybeboard:Cover of Darkness",
+      "maybeboard:Radiant Fountain",
+    ]);
+  });
+
+  it("a card the deck holds after the import is in no Maybe row: its own Maybe line is left out, said once", () => {
+    const text = ["Deck", "1 Sol Ring", "", "Maybeboard", "1 Sol Ring", "1 Cover of Darkness"].join(
+      "\n",
+    );
+    const { entries, warnings } = applyImport([], itemsOf(text), COMMANDER, "add");
+    expect(zones(entries)).toEqual(["main:Sol Ring", "maybeboard:Cover of Darkness"]);
+    expect(warnings).toEqual(["Already in the deck, so left out of Maybe: Sol Ring"]);
+    // A Maybe line for a card already in the deck, in add mode.
+    const again = applyImport(
+      [{ cardId: solRing.id, zone: "main", qty: 1, tags: [] }],
+      itemsOf("Maybeboard\n1 Sol Ring"),
+      COMMANDER,
+      "add",
+    );
+    expect(zones(again.entries)).toEqual(["main:Sol Ring"]);
+    expect(again.warnings).toEqual(["Already in the deck, so left out of Maybe: Sol Ring"]);
+  });
+
+  it("a Maybe card the paste puts in the deck leaves Maybe quietly, as any add takes it", () => {
+    const existing = [
+      { cardId: signet.id, zone: "maybeboard", qty: 1, tags: [] },
+      { cardId: cover.id, zone: "maybeboard", qty: 1, tags: [] },
+    ];
+    const { entries, warnings } = applyImport(
+      existing,
+      itemsOf("1 Arcane Signet"),
+      COMMANDER,
+      "add",
+    );
+    expect(zones(entries)).toEqual(["maybeboard:Cover of Darkness", "main:Arcane Signet"]);
+    expect(warnings).toEqual([]);
+  });
+
+  it("past the save route's 500 lines, new rows are skipped with one warning", () => {
+    const existing = Array.from({ length: MAX_ENTRIES - 1 }, (_, i) => ({
+      cardId: `m${i}`,
+      zone: "maybeboard",
+      qty: 1,
+      tags: [],
+    }));
+    const { entries, warnings } = applyImport(
+      existing,
+      itemsOf("1 Sol Ring\n1 Arcane Signet\n1 Cover of Darkness"),
+      COMMANDER,
+      "add",
+    );
+    expect(entries).toHaveLength(MAX_ENTRIES);
+    expect(zones(entries.slice(-1))).toEqual(["main:Sol Ring"]);
+    expect(warnings).toEqual([
+      "A deck can hold 500 lines at most, Maybe and Tokens included: skipped 2 cards (Arcane Signet, Cover of Darkness)",
+    ]);
+  });
+
+  it("One Piece declares no Maybe: a maybeboard hint is a zone it lacks, as before", () => {
+    const lines = [{ rawName: "Sol Ring", qty: 1, zoneHint: "maybeboard" }];
+    const items = buildImportItems(OP_STANDARD, lines, resolutions([["Sol Ring", solRing]]));
+    expect(items[0].zone).toBeNull();
+    expect(applyImport([], items, OP_STANDARD, "add").warnings).toEqual([
+      'No "maybeboard" zone in Standard: skipped Sol Ring',
+    ]);
   });
 });

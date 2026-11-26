@@ -132,9 +132,15 @@ type PrintingsState =
  * it applies; the editor decides which and what each does.
  */
 export interface SheetActions {
-  /** One more copy into the main list; its label says "Swap in…" at the deck's maximum. */
+  /**
+   * One more copy into the main list; its label says "Swap in…" at the
+   * deck's maximum. MAYBE-LIST: for a card that sits in Maybe it is "Move to
+   * deck", the Maybe row's own way in.
+   */
   add?: { label: string; onClick: () => void };
   onRemove?: () => void;
+  /** MAYBE-LIST: the remove's words when it is not the deck's ("Remove from Maybe"); absent = "Remove". */
+  removeLabel?: string;
   /** Opens Swap Lab's sheet for the card. */
   onSwap?: () => void;
 }
@@ -505,7 +511,7 @@ export function CardDetailPane({
                   className={SHEET_ACTION_CLASS}
                   onClick={actions.onRemove}
                 >
-                  Remove
+                  {actions.removeLabel ?? "Remove"}
                 </Button>
               )}
               {actions.onSwap && (

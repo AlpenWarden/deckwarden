@@ -66,6 +66,6 @@ export async function POST(request: NextRequest, ctx: RouteContext<"/api/decks/[
   const issue = journalIssue(access.journal, game);
   if (issue) return noStoreJson({ error: issue }, { status: 400 });
 
-  const logged = await logGame(access.deck.id, game);
+  const logged = await logGame(access.deck, game);
   return noStoreJson(logged, { status: 201 });
 }

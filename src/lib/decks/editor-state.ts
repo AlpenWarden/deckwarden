@@ -9,6 +9,7 @@
  * bans) is the adapter's `validate` and lands in P1.4 — here only the
  * structure the server would reject is enforced (known zones, zone maximums).
  */
+import { isPlayableZone, maybeZoneOf } from "@/lib/decks/playable";
 import type { CardData, FormatDef } from "@/lib/games/types";
 
 /** Wire shape both /api/cards/search and GET /api/decks/[id] return per card:
@@ -43,6 +44,17 @@ export interface EditorEntry {
 
 /** Matches the PUT route's zod bound. */
 export const MAX_QTY = 99;
+
+/**
+ * The most rows a deck saves (MAYBE-LIST): the PUT route's `.max(500)` over
+ * the whole list — every zone, Maybe and Tokens included. Maybe has no size
+ * of its own, so this is the one bound a long Maybe list meets; past it every
+ * autosave would fail with nothing said, so a new row is refused here instead.
+ */
+export const MAX_ENTRIES = 500;
+
+/** The sentence a refused new row gets (addCard, and Import's skipped lines). */
+export const MAX_ENTRIES_ERROR = `A deck can hold ${MAX_ENTRIES} lines at most, Maybe and Tokens included`;
 
 /**
  * The `4 Sol Ring` quantity-prefix syntax (build plan §7): a 1–2 digit count,
@@ -103,7 +115,104 @@ export function addCard(
       ),
     };
   }
+  if (entries.length >= MAX_ENTRIES) return { entries: [...entries], error: MAX_ENTRIES_ERROR };
   return { entries: [...entries, { cardId, zone: zoneId, qty: add, tags: [] }] };
+}
+
+/** A row an edit took out, and where it stood — for the edit's Undo (restoreRows). */
+export interface TakenRow {
+  entry: EditorEntry;
+  /** Its index in the list the edit started from. */
+  index: number;
+}
+
+/**
+ * The editor's Maybe rule (MAYBE-LIST): a card that enters the deck leaves
+ * Maybe. Takes the Maybe rows of `cardIds` out of the list and returns them
+ * with their indexes, so the edit's Undo can put each back where it stood
+ * (restoreRows). A format without a Maybe zone, or no id, changes nothing.
+ * The indexes are the list's own: callers run this on a list whose earlier
+ * rows sit where they stood before the edit (addCard appends, swapCard
+ * replaces in place), so they are the edit's starting positions too.
+ */
+export function leaveMaybe(
+  entries: readonly EditorEntry[],
+  format: FormatDef,
+  cardIds: Iterable<string>,
+): { entries: EditorEntry[]; left: TakenRow[] } {
+  const zone = maybeZoneOf(format);
+  const ids = new Set(cardIds);
+  if (!zone || ids.size === 0) return { entries: [...entries], left: [] };
+  const kept: EditorEntry[] = [];
+  const left: TakenRow[] = [];
+  entries.forEach((entry, index) => {
+    if (entry.zone === zone.id && ids.has(entry.cardId)) left.push({ entry, index });
+    else kept.push(entry);
+  });
+  return { entries: kept, left };
+}
+
+/**
+ * An Undo's second half (MAYBE-LIST): put rows back where they stood, in
+ * the order of their starting indexes, so each lands among the rows that
+ * stood before it — a swap's outgoing card and the Maybe row its incoming
+ * card left, in either order. Each goes through restoreEntry (a row of the
+ * same zone and card that came back meanwhile is replaced in place); the
+ * first refusal stops and is returned.
+ */
+export function restoreRows(
+  entries: readonly EditorEntry[],
+  format: FormatDef,
+  rows: readonly TakenRow[],
+): EditResult {
+  let next: EditorEntry[] = [...entries];
+  for (const row of [...rows].sort((a, b) => a.index - b.index)) {
+    const result = restoreEntry(next, format, row.entry, row.index);
+    if (result.error) return { entries: [...entries], error: result.error };
+    next = result.entries;
+  }
+  return { entries: next };
+}
+
+/**
+ * The cards a whole-list change brought into the deck (MAYBE-LIST): every
+ * card whose copies in the playable list rose from `before` to `after` —
+ * Import, Autofill's Add, the Fit and bracket sheets. Each then leaves Maybe.
+ */
+export function enteredDeck(
+  before: readonly EditorEntry[],
+  after: readonly EditorEntry[],
+  format: FormatDef,
+): Set<string> {
+  const copies = (list: readonly EditorEntry[]) => {
+    const byCard = new Map<string, number>();
+    for (const e of list) {
+      if (isPlayableZone(format, e.zone)) byCard.set(e.cardId, (byCard.get(e.cardId) ?? 0) + e.qty);
+    }
+    return byCard;
+  };
+  const was = copies(before);
+  const entered = new Set<string>();
+  for (const [cardId, qty] of copies(after)) if (qty > (was.get(cardId) ?? 0)) entered.add(cardId);
+  return entered;
+}
+
+/** The copies of each card in the playable list — the editor's in-deck count (a Maybe card is not in the deck). */
+export function playableQty(
+  entries: readonly EditorEntry[],
+  format: FormatDef,
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const e of entries) {
+    if (isPlayableZone(format, e.zone)) counts.set(e.cardId, (counts.get(e.cardId) ?? 0) + e.qty);
+  }
+  return counts;
+}
+
+/** The ids of the cards in the format's Maybe zone; empty for a format without one. */
+export function maybeCardIds(entries: readonly EditorEntry[], format: FormatDef): Set<string> {
+  const zone = maybeZoneOf(format);
+  return new Set(zone ? entries.filter((e) => e.zone === zone.id).map((e) => e.cardId) : []);
 }
 
 export function removeCard(

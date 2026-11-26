@@ -163,6 +163,25 @@ describe("GET versions (Y10)", () => {
     expect(statements).toHaveLength(4);
   });
 
+  it("an unhashed newest version is hashed with the deck's format: its Maybe rows left out (MAYBE-LIST, the owner's decision 2)", async () => {
+    const parked = [
+      ...LIVE,
+      {
+        cardId: "00000000-0000-4000-8000-000000000044",
+        zone: "maybeboard",
+        qty: 1,
+        tags: [],
+        printingId: null,
+      },
+    ];
+    answer = answers({
+      versions: [[1, null, "saved", AT, 3, null]],
+      cells: [],
+      detail: [[1, null, "saved", AT, parked]],
+    });
+    expect((await (await get()).json()).latestListHash).toBe(playableListHash(LIVE));
+  });
+
   it("an older hash prefix counts as unhashed too", async () => {
     answer = answers({
       versions: [[2, null, "saved", AT, 3, "h0:old"]],

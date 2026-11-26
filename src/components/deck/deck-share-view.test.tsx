@@ -1227,3 +1227,94 @@ describe("DeckShareView — Log a game (Y9b, WAVE4 D10)", () => {
     expect(document.body.textContent).not.toMatch(/game journal|Log a game/);
   });
 });
+
+describe("DeckShareView — the Maybe section (MAYBE-LIST)", () => {
+  /** Banned and off Atraxa's colors: a wrong deck if it ever counted. */
+  const bolt = card({
+    name: "Lightning Bolt",
+    primaryType: "Instant",
+    costValue: 1,
+    colorsMask: 8,
+    ciMask: 8,
+    legality: [{ status: "banned" }],
+  });
+  const signet = card({ name: "Arcane Signet", primaryType: "Artifact", costValue: 2 });
+  const treasure = card({
+    name: "Treasure",
+    primaryType: "Artifact",
+    attrs: { type_line: "Token Artifact — Treasure", oracle_text: "", is_token: true },
+  });
+  // A token beside the Maybe cards: each section takes its own zone's rows.
+  const withMaybe: ShareDeckCard[] = [
+    ...cards,
+    wire(treasure, "tokens"),
+    wire(bolt, "maybeboard"),
+    wire(signet, "maybeboard"),
+  ];
+  const maybe = () => document.querySelector<HTMLElement>("[data-slot=maybe-section]");
+  const writeText = vi.fn<(text: string) => Promise<void>>();
+  beforeEach(() => {
+    writeText.mockReset();
+    writeText.mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  });
+
+  it("a visitor sees it under a closed Maybe heading; the deck still reads 100 / 100 and the Warden approves", () => {
+    render(<DeckShareView deck={deck} cards={withMaybe} author={author} />);
+    const header = screen.getByRole("banner");
+    expect(header.querySelector("[data-slot=meta-line]")?.textContent).toBe(
+      "100 / 100 cards · Updated Sep 9, 2026 by Bobandis6",
+    );
+    expect(within(header).getByTitle("Legal Commander deck").textContent).toBe(
+      "The Warden approves this deck ✓",
+    );
+    const trigger = within(maybe()!).getByRole("button", { name: /^Maybe\d+$/ });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(trigger.textContent).toBe("Maybe2");
+    // After the deck's own groups, inside Cards.
+    expect(screen.queryByRole("button", { name: "Lightning Bolt" })).toBeNull();
+  });
+
+  it("opened, it is read-only: the visitor's note and the names, no move, no remove, no legality mark", () => {
+    render(<DeckShareView deck={deck} cards={withMaybe} />);
+    fireEvent.click(within(maybe()!).getByRole("button", { name: /^Maybe\d+$/ }));
+    const section = maybe()!;
+    expect(
+      within(section).getByText("Cards the builder is considering. They’re not part of the deck."),
+    ).toBeTruthy();
+    expect(within(section).getByRole("button", { name: "Lightning Bolt" })).toBeTruthy();
+    expect(within(section).getByRole("button", { name: "Arcane Signet" })).toBeTruthy();
+    expect(
+      within(section).queryByRole("button", { name: /to the deck|from Maybe|Swap in/ }),
+    ).toBeNull();
+    expect(within(section).queryByLabelText("Has a problem")).toBeNull();
+  });
+
+  it("Copy decklist carries the deck alone (the owner's decision 3: exports leave Maybe out)", async () => {
+    render(<DeckShareView deck={deck} cards={withMaybe} />);
+    fireEvent.click(screen.getByRole("button", { name: "Copy decklist" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const text = writeText.mock.calls[0][0];
+    expect(text).toContain("Sol Ring");
+    expect(text).not.toContain("Lightning Bolt");
+    expect(text).not.toContain("Arcane Signet");
+  });
+
+  it("the buy menu buys the deck alone: Whole deck (100)", async () => {
+    render(<DeckShareView deck={deck} cards={withMaybe} />);
+    const trigger = screen.getByRole("button", { name: "Buy this deck" });
+    fireEvent.pointerDown(trigger, { pointerType: "mouse", button: 0 });
+    fireEvent.mouseDown(trigger, { button: 0 });
+    fireEvent.click(trigger, { button: 0 });
+    const menu = await screen.findByRole("menu", { name: "Buy this deck" });
+    expect(within(menu).getAllByRole("menuitem")[0].textContent).toBe("Whole deck (100)");
+    expect(within(menu).getAllByRole("menuitem")[0].getAttribute("href")).not.toContain("Bolt");
+  });
+
+  it("a deck with no Maybe card shows no section", () => {
+    render(<DeckShareView deck={deck} cards={cards} />);
+    expect(maybe()).toBeNull();
+  });
+});

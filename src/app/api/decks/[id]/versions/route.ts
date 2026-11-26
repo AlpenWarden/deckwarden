@@ -61,7 +61,10 @@ export async function GET(request: NextRequest, ctx: RouteContext<"/api/decks/[i
   let latestListHash = newest?.listHash ?? null;
   if (newest && !latestListHash?.startsWith(LIST_HASH_PREFIX)) {
     const detail = await loadVersion(getDb(), access.deck.id, newest.version);
-    latestListHash = detail ? playableListHash(detail.cards) : null;
+    // MAYBE-LIST: the deck's format, so the hash leaves Maybe out, as the stamp does.
+    latestListHash = detail
+      ? playableListHash(detail.cards, deckFormat(access.deck)?.format)
+      : null;
   }
   return noStoreJson({
     versions: versions.map((v) => ({

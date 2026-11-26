@@ -69,6 +69,7 @@ import { useIsMac } from "@/components/use-is-mac";
 import { Kbd } from "@/components/ui/kbd";
 import { thumbnailUrl } from "@/lib/cards/images";
 import { toEditorCard, type CardWire, type EditorCard } from "@/lib/decks/editor-state";
+import { MAYBE_COPY } from "@/lib/decks/maybe-copy";
 import { INITIAL_SEARCH_STATE, searchReducer } from "@/lib/decks/search-state";
 import type { FormatDef, GameAdapter } from "@/lib/games/types";
 import { cn } from "@/lib/utils";
@@ -92,8 +93,10 @@ export interface SearchPaneHandle {
 interface SearchPaneProps {
   adapter: GameAdapter;
   format: FormatDef;
-  /** Total copies of a card already in the deck (any zone) — result badges. */
+  /** Copies of a card the deck holds (MAYBE-LIST: the playable list, never Maybe) — result badges. */
   inDeckQty: ReadonlyMap<string, number>;
+  /** MAYBE-LIST: the cards parked in Maybe — their rows say so in the meta cell. */
+  inMaybe?: ReadonlySet<string>;
   /** Returns an error message when the add is rejected (e.g. zone full). */
   onAdd: (card: EditorCard, zoneId: string, qty: number) => string | undefined;
   /** Passive: the first result of a response, the row under the arrow keys. */
@@ -111,6 +114,7 @@ export function SearchPane({
   adapter,
   format,
   inDeckQty,
+  inMaybe,
   onAdd,
   onPreview,
   onInspect,
@@ -344,6 +348,12 @@ export function SearchPane({
                 {owned > 0 && (
                   <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
                     ×{owned}
+                  </span>
+                )}
+                {/* MAYBE-LIST: a parked card says so; its Add moves it into the deck. */}
+                {owned === 0 && inMaybe?.has(card.id) && (
+                  <span data-slot="in-maybe" className="text-muted-foreground shrink-0 text-xs">
+                    {MAYBE_COPY.inMaybe}
                   </span>
                 )}
                 <CostPips html={adapter.display.costHtml(card)} className="shrink-0 text-xs" />

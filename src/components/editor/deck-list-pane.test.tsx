@@ -377,7 +377,8 @@ describe("DeckListPane — the type order (DECK-TOKENS)", () => {
         />,
       );
       // The commander's zone heads the list; then the owner's order, the 37 lands
-      // last of the 100 — and the Tokens section after them, outside it.
+      // last of the 100 — and the Tokens section after them, outside it, then
+      // Maybe (MAYBE-LIST), outside it too.
       const sequence = [...document.querySelectorAll("h3")].map((h) => h.textContent);
       expect(sequence).toEqual([
         "Commander1",
@@ -388,6 +389,7 @@ describe("DeckListPane — the type order (DECK-TOKENS)", () => {
         "Enchantment1",
         "Land37",
         "Tokens0",
+        "Maybe0",
       ]);
     },
   );
@@ -816,5 +818,184 @@ describe("DeckListPane — the deck total rolls (ROLLING-NUMBERS)", () => {
     rerender(<DeckListPane {...props(45)} />);
     expect(rolls(size)).toEqual([]);
     expect(size.textContent).toBe("46 / 100 · 54 to go");
+  });
+});
+
+describe("DeckListPane — the Maybe section (MAYBE-LIST)", () => {
+  const sol = toEditorCard({ ...card({ name: "Sol Ring", primaryType: "Artifact" }), image: null });
+  const bolt = toEditorCard({
+    ...card({ name: "Lightning Bolt", primaryType: "Instant", ciMask: 8 }),
+    image: null,
+  });
+  const treasure = toEditorCard({
+    ...card({
+      name: "Treasure",
+      primaryType: "Artifact",
+      attrs: { type_line: "Token Artifact — Treasure", oracle_text: "", is_token: true },
+    }),
+    image: null,
+  });
+  // A token beside the Maybe card: each section takes its own zone's rows.
+  const listed: EditorEntry[] = [
+    ...entries,
+    { cardId: sol.id, zone: "main", qty: 1, tags: [] },
+    { cardId: treasure.id, zone: "tokens", qty: 2, tags: [] },
+    { cardId: bolt.id, zone: "maybeboard", qty: 1, tags: [] },
+  ];
+  const listedCards = new Map([...cards, [sol.id, sol], [bolt.id, bolt], [treasure.id, treasure]]);
+  // Bolt carries an issue (it would in the deck): a Maybe row never shows it.
+  const boltIssue: ValidationIssue = {
+    code: "COLOR_IDENTITY",
+    severity: "error",
+    message: "Lightning Bolt is outside the commander's color identity",
+    cardIds: [bolt.id],
+  };
+  function maybePane(over: Partial<React.ComponentProps<typeof DeckListPane>> = {}) {
+    return render(
+      <DeckListPane
+        adapter={mtg}
+        format={COMMANDER}
+        entries={listed}
+        cards={listedCards}
+        issues={[boltIssue]}
+        analytics={[]}
+        onSetQty={() => undefined}
+        onRemove={() => {}}
+        onPreview={() => {}}
+        extras={false}
+        {...over}
+      />,
+    );
+  }
+  const maybe = () => document.querySelector<HTMLElement>("[data-slot=maybe-section]")!;
+  const trigger = () => within(maybe()).getByRole("button", { name: /^Maybe\d+$/ });
+
+  it("after Tokens, closed by default with its count; the count and the deck's size ignore it", () => {
+    maybePane({ onMoveToDeck: () => undefined });
+    const sections = [...document.querySelectorAll("section[data-slot]")].map((s) =>
+      s.getAttribute("data-slot"),
+    );
+    expect(sections.slice(-2)).toEqual(["tokens-section", "maybe-section"]);
+    expect(trigger().getAttribute("aria-expanded")).toBe("false");
+    expect(trigger().textContent).toBe("Maybe1");
+    expect(document.querySelector("[data-slot=deck-size]")?.textContent).toBe("2 / 100 · 98 to go");
+    // Not part of the deck's groups: no group lists Bolt.
+    expect(screen.queryByRole("button", { name: "Lightning Bolt" })).toBeNull();
+  });
+
+  it("opened: the note, the row with Move to deck and Remove from Maybe, and no legality mark even for a card with an issue", () => {
+    const onMoveToDeck = vi.fn(() => undefined);
+    const onRemove = vi.fn();
+    maybePane({ onMoveToDeck, onRemove });
+    fireEvent.click(trigger());
+    const section = maybe();
+    expect(
+      within(section).getByText(
+        "Cards you’re considering. They don’t count toward the deck and aren’t checked.",
+      ),
+    ).toBeTruthy();
+    expect(within(section).getByRole("button", { name: "Lightning Bolt" })).toBeTruthy();
+    expect(within(section).queryByLabelText("Has a problem")).toBeNull();
+    fireEvent.click(
+      within(section).getByRole("button", { name: "Move Lightning Bolt to the deck" }),
+    );
+    expect(onMoveToDeck).toHaveBeenCalledWith(bolt.id);
+    fireEvent.click(
+      within(section).getByRole("button", { name: "Remove Lightning Bolt from Maybe" }),
+    );
+    expect(onRemove).toHaveBeenCalledWith("maybeboard", bolt.id);
+    // An editable row: 44 px on touch like the deck's own rows; the token stays in Tokens.
+    expect(within(section).getAllByRole("listitem")[0].className).toContain(
+      "pointer-coarse:min-h-11",
+    );
+    expect(within(section).queryByRole("button", { name: "Treasure" })).toBeNull();
+    // No steppers: a Maybe row's count is not edited there.
+    expect(within(section).queryByRole("button", { name: "One more Lightning Bolt" })).toBeNull();
+  });
+
+  it("at the maximum the row's move is Swap in…; a refused move says why in the section", () => {
+    const onMoveToDeck = vi.fn(
+      () => "A deck can hold 500 lines at most, Maybe and Tokens included",
+    );
+    maybePane({ onMoveToDeck, deckFull: true });
+    fireEvent.click(trigger());
+    const swap = within(maybe()).getByRole("button", { name: "Swap in Lightning Bolt…" });
+    // The swap's own icon (the deck rows' Swap…), and its words on hover.
+    expect(swap.querySelector("svg.lucide-arrow-left-right")).toBeTruthy();
+    expect(swap.getAttribute("title")).toBe("Swap in…");
+    fireEvent.click(swap);
+    expect(
+      within(maybe()).getByText("A deck can hold 500 lines at most, Maybe and Tokens included"),
+    ).toBeTruthy();
+  });
+
+  it("its open state is kept with the view preferences", () => {
+    const view = maybePane({ onMoveToDeck: () => undefined });
+    fireEvent.click(trigger());
+    expect(JSON.parse(window.localStorage.getItem("deckwarden:deck-view")!).maybeOpen).toBe(true);
+    view.unmount();
+    maybePane({ onMoveToDeck: () => undefined });
+    expect(trigger().getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("empty: the section waits for the first card, then opens on its empty line", () => {
+    const view = render(
+      <DeckListPane
+        adapter={mtg}
+        format={COMMANDER}
+        entries={entries}
+        cards={cards}
+        issues={[]}
+        analytics={[]}
+        onSetQty={() => undefined}
+        onRemove={() => {}}
+        onPreview={() => {}}
+        extras={false}
+        onMoveToDeck={() => undefined}
+      />,
+    );
+    expect(document.querySelector("[data-slot=maybe-section]")).toBeNull();
+    view.unmount();
+    maybePane({
+      entries: listed.filter((e) => e.zone !== "maybeboard"),
+      onMoveToDeck: () => undefined,
+    });
+    fireEvent.click(trigger());
+    expect(
+      within(maybe()).getByText(
+        "Nothing here yet. Suggestions can park a card here with Maybe; it won’t count toward the deck.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("a deck with Maybe cards and none in the deck: No cards yet, and the hint names Maybe", () => {
+    maybePane({
+      entries: [...entries, { cardId: bolt.id, zone: "maybeboard", qty: 1, tags: [] }],
+      issues: [],
+      onMoveToDeck: () => undefined,
+    });
+    expect(screen.getByText("No cards yet")).toBeTruthy();
+    expect(screen.getByText("Add them from Search, or move one in from Maybe.")).toBeTruthy();
+    expect(trigger().textContent).toBe("Maybe1");
+  });
+
+  it("One Piece declares no Maybe zone: no section, whatever the rows say", () => {
+    const op = getAdapter("optcg");
+    render(
+      <DeckListPane
+        adapter={op}
+        format={op.formats[0]}
+        entries={[{ cardId: sol.id, zone: "main", qty: 1, tags: [] }]}
+        cards={new Map([[sol.id, sol]])}
+        issues={[]}
+        analytics={[]}
+        onSetQty={() => undefined}
+        onRemove={() => {}}
+        onPreview={() => {}}
+        extras={false}
+        onMoveToDeck={() => undefined}
+      />,
+    );
+    expect(document.querySelector("[data-slot=maybe-section]")).toBeNull();
   });
 });

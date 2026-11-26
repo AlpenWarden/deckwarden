@@ -25,6 +25,7 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { getDb, schema, type DbExecutor } from "@/db";
 import type { GameResult } from "@/db/schema";
+import { deckFormat } from "@/lib/decks/deck-format";
 import { diffDeckLists, diffSummary } from "@/lib/decks/diff";
 import { LIST_HASH_PREFIX, playableListHash } from "@/lib/decks/list-hash";
 import {
@@ -210,12 +211,20 @@ export interface LogResult {
   first: boolean;
 }
 
-export async function logGame(deckId: string, game: GameFields): Promise<LogResult> {
+export async function logGame(
+  deck: { id: string; gameId: number; formatId: number },
+  game: GameFields,
+): Promise<LogResult> {
+  const deckId = deck.id;
+  // MAYBE-LIST (the owner's decision 2): the hash leaves the format's Maybe
+  // zone out, so a game logged after a Maybe-only edit reuses the latest
+  // version — every hash here, and insertVersion's stamp, reads the format.
+  const format = deckFormat(deck)?.format;
   const db = getDb();
   return db.transaction(async (tx) => {
     await lockDeck(tx, deckId);
     const live = await loadLiveFrozen(tx, deckId);
-    const hash = playableListHash(live);
+    const hash = playableListHash(live, format);
 
     // Every version's hash, newest first — and the cards of any still
     // unhashed (a pre-0018 row, or one under an older hash prefix), so they
@@ -231,7 +240,10 @@ export async function logGame(deckId: string, game: GameFields): Promise<LogResu
       .orderBy(desc(deckVersions.version));
     const stamps = versions
       .filter((v) => v.cards !== null)
-      .map((v) => ({ version: v.version, hash: playableListHash(parseFrozenCards(v.cards)) }));
+      .map((v) => ({
+        version: v.version,
+        hash: playableListHash(parseFrozenCards(v.cards), format),
+      }));
     if (stamps.length > 0) {
       const byVersion = sql.join(
         stamps.map((s) => sql`when ${s.version} then ${s.hash}`),

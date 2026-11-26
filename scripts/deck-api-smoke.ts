@@ -17,6 +17,9 @@
  * in its own quantities, unanswered); the answer's PATCH `{ownsPrecon}`
  * leaves updatedAt alone; a visitor's GET carries none of it; a deck that
  * didn't start from a precon answers 400.
+ * MAYBE-LIST: the Maybe zone (`maybeboard`) saves and reads back; an
+ * off-color card and a banned card there raise no issue in the server's
+ * validation and leave the leader denorm alone; a token there is refused.
  * Cleans up after itself (the deck is deleted at the end even on failure).
  */
 import { BASE } from "./smoke/guard"; // first import: a non-local BASE_URL exits 1 here
@@ -382,6 +385,72 @@ async function main() {
           body: { cards: [{ cardId: crypto.randomUUID(), zone: "main", qty: 1, tags: [] }] },
         })
       ).status === 400,
+    );
+
+    // MAYBE-LIST: the Maybe zone holds cards, counts toward nothing, and is never validated.
+    const offColor = await findCard("lightning bolt"); // red, outside Atraxa's identity
+    const banned = await findCard("black lotus"); // banned in Commander
+    const maybeList = {
+      cards: [
+        ...list.cards,
+        { cardId: offColor.id, zone: "maybeboard", qty: 1, tags: [] },
+        { cardId: banned.id, zone: "maybeboard", qty: 1, tags: [] },
+      ],
+    };
+    const putMaybe = await api("PUT", `/api/decks/${deckId}/cards`, { token, body: maybeList });
+    const maybeJson = putMaybe.json as {
+      leaderIds?: string[];
+      validation?: { cardIds?: string[] }[];
+    };
+    check("PUT with two Maybe rows → 200", putMaybe.status === 200, putMaybe.json);
+    check(
+      "…the server's validation names neither Maybe card (an off-color one, a banned one)",
+      Array.isArray(maybeJson?.validation) &&
+        !maybeJson.validation.some((i) =>
+          (i.cardIds ?? []).some((id) => id === offColor.id || id === banned.id),
+        ),
+      maybeJson?.validation,
+    );
+    check(
+      "…and the leader denorm is still the commander alone",
+      same(maybeJson?.leaderIds, [commander.id]),
+      maybeJson?.leaderIds,
+    );
+    const maybeRead = (await api("GET", `/api/decks/${deckId}`, { token })).json as {
+      cards?: { cardId: string; zone: string }[];
+    };
+    check(
+      "GET reads the Maybe rows back in their zone",
+      (maybeRead?.cards ?? []).filter((c) => c.zone === "maybeboard").length === 2 &&
+        (maybeRead?.cards ?? []).some((c) => c.cardId === offColor.id && c.zone === "maybeboard"),
+      maybeRead?.cards,
+    );
+    const tokenSearch = await api(
+      "GET",
+      "/api/cards/search?game=mtg&name=treasure&tokens=1&limit=1",
+    );
+    const tokenCard = ((tokenSearch.json as { results?: { id: string }[] })?.results ?? [])[0];
+    check("a token to try (the Tokens catalog answers)", tokenCard !== undefined, tokenSearch.json);
+    if (tokenCard) {
+      check(
+        "PUT a token into Maybe → 400 (the token rule: Maybe holds cards)",
+        (
+          await api("PUT", `/api/decks/${deckId}/cards`, {
+            token,
+            body: {
+              cards: [
+                ...list.cards,
+                { cardId: tokenCard.id, zone: "maybeboard", qty: 1, tags: [] },
+              ],
+            },
+          })
+        ).status === 400,
+      );
+    }
+    // Back to the plain list, so the checks below read what they always read.
+    check(
+      "PUT the plain list again → 200",
+      (await api("PUT", `/api/decks/${deckId}/cards`, { token, body: list })).status === 200,
     );
 
     // Goals (Y4b, WAVE4 D5): their own PATCH body — a setting, never an

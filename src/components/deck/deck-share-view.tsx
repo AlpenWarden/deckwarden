@@ -82,6 +82,12 @@
  * and a deck holding tokens shows its Tokens section after them, inside
  * Cards — read-only, closed until opened, in the page's View, its open state
  * not remembered (the rule above for every toggle here).
+ *
+ * MAYBE-LIST: a deck holding Maybe cards shows its Maybe section after
+ * Tokens, the same way (the owner's decision 4: visitors see it, closed),
+ * in text rows with no legality mark: nothing in it is validated, counted,
+ * read for the bracket, exported (Copy list) or bought (the buy menu reads
+ * the counted zones).
  */
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -103,6 +109,7 @@ import { OwnerShareRow } from "@/components/deck/owner-share-row";
 import { SampleHand } from "@/components/deck/sample-hand";
 import { GROUP_OPTIONS, Segmented, SORT_OPTIONS, VIEW_OPTIONS } from "@/components/deck/segmented";
 import { useBracketFacts } from "@/components/deck/use-bracket-facts";
+import { MaybeSection } from "@/components/deck/maybe-section";
 import { TokensSection } from "@/components/deck/tokens-section";
 import { useTokenFill } from "@/components/deck/use-token-fill";
 import { ValidationPanel } from "@/components/deck/validation-panel";
@@ -133,7 +140,7 @@ import {
 import type { ForkCredit } from "@/lib/decks/fork-credit";
 import { readGoals, type DeckGoals } from "@/lib/decks/goals";
 import { hasLeader } from "@/lib/decks/panel-view";
-import { playableEntries, tokenZoneOf } from "@/lib/decks/playable";
+import { maybeZoneOf, playableEntries, tokenZoneOf } from "@/lib/decks/playable";
 import { releasedLabel, type PreconInfo } from "@/lib/decks/precon-info";
 import { getDeckToken } from "@/lib/decks/token-store";
 import type { TokenFillItem } from "@/lib/decks/token-fill-load";
@@ -276,6 +283,7 @@ export function DeckShareView({
 
   const [view, setView] = useState<DeckViewMode>("text");
   const [tokensOpen, setTokensOpen] = useState(false);
+  const [maybeOpen, setMaybeOpen] = useState(false);
   const [groupBy, setGroupBy] = useState<GroupKey>(
     adapter?.display.defaultGroupBy ?? "primaryType",
   );
@@ -421,6 +429,12 @@ export function DeckShareView({
   const tokenZone = tokenZoneOf(format);
   const tokenItems = aside.flatMap((entry) => {
     const card = entry.zone === tokenZone?.id ? cardMap.get(entry.cardId) : undefined;
+    return card ? [{ entry, card }] : [];
+  });
+  // MAYBE-LIST: the owner's Maybe list, set aside like the tokens (the owner's decision 4: visitors see it, closed).
+  const maybeZone = maybeZoneOf(format);
+  const maybeItems = aside.flatMap((entry) => {
+    const card = entry.zone === maybeZone?.id ? cardMap.get(entry.cardId) : undefined;
     return card ? [{ entry, card }] : [];
   });
   const fill =
@@ -781,6 +795,20 @@ export function DeckShareView({
             onPreview={onPreview}
             owned={owned}
             fill={fill}
+            preview
+          />
+        )}
+        {/* MAYBE-LIST: after Tokens, closed, only when it holds a card; never checked or counted. */}
+        {maybeZone && maybeItems.length > 0 && (
+          <MaybeSection
+            className="mt-2"
+            adapter={adapter}
+            zone={maybeZone}
+            items={maybeItems}
+            open={maybeOpen}
+            onOpenChange={setMaybeOpen}
+            onPreview={onPreview}
+            owned={owned}
             preview
           />
         )}

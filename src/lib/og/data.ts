@@ -6,14 +6,20 @@
  * curve semantics live in og/curve.ts, mirrored from analyze.ts).
  *
  * DECK-TOKENS: the card read leaves token identities out — a token can only
- * sit in a deck's Tokens zone (the save route's rule), so the count, the
- * price and the curve stay the playable list's without an adapter import.
+ * sit in a deck's Tokens zone (the save route's rule). MAYBE-LIST: a Maybe
+ * card is a card, so leaving tokens out no longer leaves the playable list:
+ * the read names the format's playable zones (the deck's format through the
+ * registry, playable.ts), and the count, the price and the curve stay the
+ * list as played — "100 cards" with a Maybe list beside it. A format the
+ * registry can't name (none today) reads as before, every non-token row.
  */
 import { and, eq, inArray } from "drizzle-orm";
 
 import { getDb, schema } from "@/db";
 import { notTokenSql } from "@/lib/cards/tokens-sql";
 import { goalsTargetLevel } from "@/lib/decks/collections";
+import { deckFormat } from "@/lib/decks/deck-format";
+import { playableZoneIds } from "@/lib/decks/playable";
 import { ogCurveBuckets } from "@/lib/og/curve";
 
 const { decks, deckCards, cardIdentities } = schema;
@@ -53,6 +59,7 @@ export async function loadDeckOgData(publicId: string): Promise<DeckOgRead | nul
       name: decks.name,
       visibility: decks.visibility,
       gameId: decks.gameId,
+      formatId: decks.formatId,
       leaderIds: decks.leaderIds,
       targetLevel: goalsTargetLevel,
     })
@@ -62,6 +69,9 @@ export async function loadDeckOgData(publicId: string): Promise<DeckOgRead | nul
   if (!deck) return null;
   if (deck.visibility === "private") return { visibility: "private" };
 
+  // MAYBE-LIST: the playable zones; undefined = a format the registry can't name.
+  const fmt = deckFormat(deck);
+  const zones = fmt ? playableZoneIds(fmt.format) : undefined;
   const [cards, leaders] = await Promise.all([
     db
       .select({
@@ -72,7 +82,13 @@ export async function loadDeckOgData(publicId: string): Promise<DeckOgRead | nul
       })
       .from(deckCards)
       .innerJoin(cardIdentities, eq(cardIdentities.id, deckCards.cardIdentityId))
-      .where(and(eq(deckCards.deckId, deck.id), notTokenSql(cardIdentities.attrs))),
+      .where(
+        and(
+          eq(deckCards.deckId, deck.id),
+          notTokenSql(cardIdentities.attrs),
+          zones ? inArray(deckCards.zone, zones) : undefined,
+        ),
+      ),
     deck.leaderIds.length
       ? db
           .select({ id: cardIdentities.id, name: cardIdentities.name })

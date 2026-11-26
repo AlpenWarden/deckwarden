@@ -25,7 +25,21 @@
  * empty" contract above outranks the name — and a game logged after one
  * mints a played snapshot like any edit. No stored list held a token before,
  * so no `h1:` row changes.
+ *
+ * Every zone but Maybe (MAYBE-LIST, the owner's decision 2 of 2026-11-26: a
+ * Maybe edit is no change to the list played). Given the deck's format, the
+ * payload leaves out the rows of its Maybe zone (playable.ts `maybeZoneOf`),
+ * so a game logged after a Maybe-only edit reuses the latest version and
+ * History keeps "No card changes since vN"; the contract above reads "no
+ * card changes outside Maybe" — versions still freeze the Maybe list and the
+ * diff still shows its changes. Every caller that knows the deck passes its
+ * format (versions.ts insertVersion and the journal read it off the deck
+ * row; the versions route and the History dialog hold it); without one
+ * every row is read, as before. No stored list held a Maybe row before (the
+ * save route refused an undeclared zone), so no `h1:` row changes.
  */
+import { maybeZoneOf } from "@/lib/decks/playable";
+import type { FormatDef } from "@/lib/games/types";
 
 /** Anything with a zone, a card and a quantity: frozen snapshots, editor entries. */
 export interface PlayableEntry {
@@ -37,9 +51,11 @@ export interface PlayableEntry {
 export const LIST_HASH_PREFIX = "h1:";
 
 /** The canonical payload — exported for the pins; callers want playableListHash. */
-export function playablePayload(entries: readonly PlayableEntry[]): string {
+export function playablePayload(entries: readonly PlayableEntry[], format?: FormatDef): string {
+  const maybe = format ? maybeZoneOf(format)?.id : undefined;
   const merged = new Map<string, [string, string, number]>();
   for (const e of entries) {
+    if (e.zone === maybe) continue;
     const key = `${e.zone} ${e.cardId}`;
     const prev = merged.get(key);
     if (prev) prev[2] += e.qty;
@@ -75,7 +91,10 @@ function cyrb128(str: string): string {
   return [h1, h2, h3, h4].map((h) => (h >>> 0).toString(16).padStart(8, "0")).join("");
 }
 
-/** The list's hash: equal exactly when `isEmptyDiff(diffDeckLists(a, b))`. */
-export function playableListHash(entries: readonly PlayableEntry[]): string {
-  return LIST_HASH_PREFIX + cyrb128(playablePayload(entries));
+/**
+ * The list's hash: equal exactly when `isEmptyDiff(diffDeckLists(a, b))` —
+ * outside the format's Maybe zone, when the format is given (MAYBE-LIST).
+ */
+export function playableListHash(entries: readonly PlayableEntry[], format?: FormatDef): string {
+  return LIST_HASH_PREFIX + cyrb128(playablePayload(entries, format));
 }

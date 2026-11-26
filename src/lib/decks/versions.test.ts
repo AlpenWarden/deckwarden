@@ -98,6 +98,24 @@ describe("insertVersion — the hash stamp and each kind's ceiling (Y9a)", () =>
     expect(at("note")).toBe("post-FNM");
   });
 
+  it("the stamp reads the deck's format off the bump: a Maybe row is left out of it (MAYBE-LIST)", async () => {
+    const withMaybe: FrozenCard[] = [
+      ...cards,
+      { cardId: U(5), zone: "maybeboard", qty: 1, tags: [], printingId: null },
+    ];
+    // count · bump (version, game 1 = Magic, format 1 = Commander) · insert
+    answers = [[[3]], [[8, 1, 1]], []];
+    const made = await insertVersion(tx(), DECK, withMaybe, null, "saved", ["commander", "main"]);
+    expect(made).toEqual({ version: 8, cardCount: 4 });
+    const bump = statements.find((s) => s.sql.startsWith('update "decks"'))!;
+    expect(bump.sql).toMatch(/returning "current_version", "game_id", "format_id"$/);
+    const { at } = insertParams();
+    expect(at("list_hash")).toBe(playableListHash(cards));
+    expect(at("list_hash")).not.toBe(playableListHash(withMaybe));
+    // The frozen list keeps the Maybe row: a restore brings it back.
+    expect(JSON.parse(String(at("cards")))).toHaveLength(3);
+  });
+
   it("a played snapshot counts against the played allowance only, and is stamped too", async () => {
     answers = [[[57]], [[9]], []];
     await insertVersion(tx(), DECK, cards, "Played Oct 10, 2026", "played");

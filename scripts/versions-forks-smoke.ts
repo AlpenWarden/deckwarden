@@ -11,6 +11,11 @@
  * Sessions come from scripts/smoke/session.ts (throwaway users + session
  * rows in the database .env.local names). Every fixture is created here
  * and deleted in `finally` — never the owner's real decks.
+ *
+ * MAYBE-LIST: a version freezes the Maybe list and counts and hashes the
+ * deck alone (the owner's decision 2), so a game logged after a Maybe-only
+ * edit reuses the version while a card moved from Maybe into the deck mints
+ * a played list; a fork copies the Maybe list, and a restore brings it back.
  */
 import { BASE } from "./smoke/guard"; // first import: a non-local BASE_URL exits 1 here
 import { mintSession } from "./smoke/session";
@@ -27,6 +32,8 @@ import postgres from "postgres";
 
 import { createDb } from "../src/db";
 import { diffDeckLists, type FrozenCard } from "../src/lib/decks/diff";
+import { playableListHash } from "../src/lib/decks/list-hash";
+import { COMMANDER } from "../src/lib/games/mtg/formats";
 import { deleteDecksForkSafe } from "../src/lib/decks/forks";
 
 const DB_URL = process.env.DATABASE_URL;
@@ -575,6 +582,134 @@ async function main() {
     check(
       "fork survives the purge path with a NULLed pointer",
       forkAfterPurge?.forked_from_deck_id === null,
+    );
+
+    // ---- MAYBE-LIST: versions freeze Maybe and count and hash the deck alone ----
+    const signet = await findCard("arcane signet");
+    const maybeCreated = await api("POST", "/api/decks", {
+      cookie: alice.cookie,
+      body: { game: "mtg", format: "commander", name: `Maybe Smoke ${run}`, visibility: "public" },
+    });
+    const maybeDeck = j<{ id: string }>(j(maybeCreated.json).deck);
+    cleanup.deckIds.push(requireDeckId("Maybe deck create", maybeCreated, maybeDeck.id));
+    const deckRows = [
+      { cardId: commander.id, zone: "commander", qty: 1, tags: [] },
+      { cardId: solRing.id, zone: "main", qty: 1, tags: [] },
+      { cardId: plains.id, zone: "main", qty: 3, tags: [] },
+    ];
+    const parked = [...deckRows, { cardId: rhystic.id, zone: "maybeboard", qty: 1, tags: [] }];
+    const putList = async (cards: typeof deckRows) =>
+      (
+        await api("PUT", `/api/decks/${maybeDeck.id}/cards`, {
+          cookie: alice.cookie,
+          body: { cards },
+        })
+      ).status;
+    check("MAYBE-LIST: PUT a list with a Maybe row → 200", (await putList(parked)) === 200);
+    const maybeSaved = await api("POST", `/api/decks/${maybeDeck.id}/versions`, {
+      cookie: alice.cookie,
+      body: { note: "with a Maybe row" },
+    });
+    const savedV = Number(j(maybeSaved.json).version);
+    check(
+      "…a saved version counts the deck alone: 5 cards, not 6",
+      maybeSaved.status === 201 && j(maybeSaved.json).cardCount === 5,
+      maybeSaved.json,
+    );
+    const frozenV = j<{ cards: FrozenCard[] }>(
+      (await api("GET", `/api/decks/${maybeDeck.id}/versions/${savedV}`, { cookie: alice.cookie }))
+        .json,
+    ).cards;
+    check(
+      "…and freezes the Maybe row with the list",
+      frozenV.some((c) => c.cardId === rhystic.id && c.zone === "maybeboard"),
+      frozenV,
+    );
+    const deckOnly = frozen(deckRows.map((c) => ({ ...c, printingId: null })));
+    const [stamp] =
+      await sql`select list_hash from deck_versions where deck_id = ${maybeDeck.id} and version = ${savedV}`;
+    check(
+      "…stamped with the hash of the deck alone (the owner's decision 2)",
+      stamp?.list_hash === playableListHash(deckOnly) &&
+        stamp?.list_hash !== playableListHash(frozenV),
+      stamp,
+    );
+    const logGame = async () =>
+      j<{ version: number | null; minted: boolean }>(
+        (
+          await api("POST", `/api/decks/${maybeDeck.id}/games`, {
+            cookie: alice.cookie,
+            body: { result: "win", podSize: 4 },
+          })
+        ).json,
+      );
+    const firstGame = await logGame();
+    check(
+      "a game logged now reuses that version, nothing minted",
+      firstGame.version === savedV && firstGame.minted === false,
+      firstGame,
+    );
+    check(
+      "a Maybe-only edit (a second card parked) → 200",
+      (await putList([...parked, { cardId: signet.id, zone: "maybeboard", qty: 1, tags: [] }])) ===
+        200,
+    );
+    const secondGame = await logGame();
+    check(
+      "after a Maybe-only edit a game still reuses the version: no change to the list played",
+      secondGame.version === savedV && secondGame.minted === false,
+      secondGame,
+    );
+    const maybeVersions = j<{ latestListHash: string | null }>(
+      (await api("GET", `/api/decks/${maybeDeck.id}/versions`, { cookie: alice.cookie })).json,
+    );
+    const liveMaybe = j<{ cards: WireCard[] }>(
+      (await api("GET", `/api/decks/${maybeDeck.id}`, { cookie: alice.cookie })).json,
+    ).cards;
+    check(
+      "History's hash still matches the live list (No card changes since vN)",
+      maybeVersions.latestListHash === playableListHash(frozen(liveMaybe), COMMANDER),
+      { latest: maybeVersions.latestListHash, cards: liveMaybe.length },
+    );
+    check(
+      "a fork copies the Maybe list with the deck (bob forks the public deck)",
+      await (async () => {
+        const forked = await api("POST", `/api/decks/${maybeDeck.id}/fork`, { cookie: bob.cookie });
+        const forkId = j<{ id: string }>(j(forked.json).deck).id;
+        cleanup.deckIds.push(requireDeckId("Maybe fork", forked, forkId));
+        const forkCards = j<{ cards: WireCard[] }>(
+          (await api("GET", `/api/decks/${forkId}`, { cookie: bob.cookie })).json,
+        ).cards;
+        return forkCards.filter((c) => c.zone === "maybeboard").length === 2;
+      })(),
+    );
+    check(
+      "a card moved from Maybe into the deck → 200",
+      (await putList([
+        ...deckRows,
+        { cardId: rhystic.id, zone: "main", qty: 1, tags: [] },
+        { cardId: signet.id, zone: "maybeboard", qty: 1, tags: [] },
+      ])) === 200,
+    );
+    const thirdGame = await logGame();
+    check(
+      "…is a change to the list played: the next game mints a played list",
+      thirdGame.minted === true && (thirdGame.version ?? 0) > savedV,
+      thirdGame,
+    );
+    check("the deck alone again → 200", (await putList(deckRows)) === 200);
+    const maybeRestore = await api(
+      "POST",
+      `/api/decks/${maybeDeck.id}/versions/${savedV}/restore`,
+      { cookie: alice.cookie },
+    );
+    const afterMaybeRestore = j<{ cards: WireCard[] }>(
+      (await api("GET", `/api/decks/${maybeDeck.id}`, { cookie: alice.cookie })).json,
+    ).cards;
+    check(
+      "restoring the version brings its Maybe row back",
+      maybeRestore.status === 200 && sameList(afterMaybeRestore, parked),
+      afterMaybeRestore,
     );
   } finally {
     // Only real ids reach the DELETEs: an undefined here once crashed the

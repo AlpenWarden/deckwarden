@@ -64,9 +64,21 @@
  * the same truncating name button, named "Not in the precon" ("2 not in the
  * precon" when only some of the row's copies are). A shape with a name, never
  * a color alone. The share page passes nothing.
+ *
+ * MAYBE-LIST: `rowAction` puts one control of the caller's before the remove
+ * button (the Maybe section's "Move to deck"), and `removeLabel` names the
+ * remove ("Remove Sol Ring from Maybe"). A row with an action is editable
+ * for touch sizing, like a row with steppers; the share page passes neither.
  */
 import { ArrowLeftRightIcon, CirclePlusIcon, XIcon } from "lucide-react";
-import { useEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+  type RefObject,
+} from "react";
 
 import { CHROME_CLASS } from "@/components/chrome-material";
 import { CardNamePreview } from "@/components/deck/card-name-preview";
@@ -234,6 +246,10 @@ interface DeckTextViewProps {
   caption?: (card: EditorCard) => string | null;
   /** False = no group headings (the Tokens section, whose disclosure is its heading). */
   headings?: boolean;
+  /** MAYBE-LIST: one control before the remove button (the Maybe section's "Move to deck"); absent = none. */
+  rowAction?: (entry: EditorEntry, card: EditorCard) => ReactNode;
+  /** MAYBE-LIST: the remove button's accessible name; absent = "Remove <name>". */
+  removeLabel?: (card: EditorCard) => string;
 }
 
 export function DeckTextView({
@@ -252,7 +268,11 @@ export function DeckTextView({
   preview = false,
   caption,
   headings = true,
+  rowAction,
+  removeLabel,
 }: DeckTextViewProps) {
+  // R4's touch sizing for an editable row: steppers, or (MAYBE-LIST) a row action.
+  const editable = Boolean(onSetQty || rowAction);
   return (
     <>
       {groups.map((group) => (
@@ -280,7 +300,7 @@ export function DeckTextView({
                   // a 44 px target like the steppers beside it.
                   className={cn(
                     "flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 text-left hover:underline",
-                    onSetQty && "pointer-coarse:self-stretch",
+                    editable && "pointer-coarse:self-stretch",
                   )}
                 >
                   {severity.has(card.id) && (
@@ -339,7 +359,7 @@ export function DeckTextView({
                   key={rowKey}
                   className={cn(
                     "group/row hover:bg-muted/60 flex items-center gap-1 rounded-md px-1 py-0.5 text-sm",
-                    onSetQty && "pointer-coarse:min-h-11",
+                    editable && "pointer-coarse:min-h-11",
                   )}
                 >
                   {onSetQty ? (
@@ -393,7 +413,7 @@ export function DeckTextView({
                     data-slot="pips"
                     className={cn(
                       "inline-flex min-w-20 shrink-0 justify-end text-sm [--pip-size:0.8em]",
-                      onSetQty && "pointer-coarse:min-w-12",
+                      editable && "pointer-coarse:min-w-12",
                     )}
                   >
                     <CostPips html={adapter.display.costHtml(card)} />
@@ -414,11 +434,12 @@ export function DeckTextView({
                     ) : (
                       <span aria-hidden className="size-6 shrink-0 pointer-coarse:size-11" />
                     ))}
+                  {rowAction?.(entry, card)}
                   {onRemove && (
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      aria-label={`Remove ${card.name}`}
+                      aria-label={removeLabel ? removeLabel(card) : `Remove ${card.name}`}
                       className={REVEAL_CLASS}
                       onClick={() => onRemove(entry.zone, entry.cardId)}
                     >

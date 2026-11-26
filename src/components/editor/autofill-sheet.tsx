@@ -586,7 +586,8 @@ export function AutofillSheet({
     // the plan was built without the non-leader cards, so Apply replaces
     // them — leaders + picks (see the module doc; pinned in tests) — except
     // a pinned combo's pieces, which the plan was built around (X3), and the
-    // Tokens zone (DECK-TOKENS), which was never part of the 100 it rebuilt.
+    // Tokens and Maybe zones (DECK-TOKENS, MAYBE-LIST), never part of the 100
+    // it rebuilt. A pick that sits in Maybe leaves it in the editor's swap.
     const base = keepChecked
       ? [...entries]
       : entries.filter(

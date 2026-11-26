@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import { maybeZoneOf } from "@/lib/decks/playable";
+
 import { parseMtgDecklist, serializeMtgDecklist } from "./decklist";
+import { COMMANDER } from "./formats";
 import { atraxa, cardMap, commanderDeck, entry, island, solRing } from "./test-fixtures";
 
 describe("parseMtgDecklist", () => {
@@ -112,6 +115,20 @@ describe("parseMtgDecklist", () => {
       ["Sol Ring", undefined], // a secondary category never moves the card
       ["King of the Oathbreakers", "commander"],
     ]);
+  });
+
+  it("its maybeboard hint is Commander's Maybe zone, and sideboard and companion are zones it lacks (MAYBE-LIST)", () => {
+    // The hint the parser writes for "Maybeboard" headers and {noDeck}
+    // categories IS the Maybe zone's id, so a paste lands there with no
+    // parser change; Sideboard and Companion lines keep being skipped.
+    const { lines } = parseMtgDecklist(
+      "Sideboard\n1 Intangible Virtue\nMaybeboard\n1 Cover of Darkness\nCompanion\n1 Lurrus of the Dream-Den",
+    );
+    expect(lines.map((l) => l.zoneHint)).toEqual(["sideboard", "maybeboard", "companion"]);
+    const ids = new Set(COMMANDER.zones.map((z) => z.id));
+    expect(maybeZoneOf(COMMANDER)?.id).toBe("maybeboard");
+    expect(ids.has("sideboard")).toBe(false);
+    expect(ids.has("companion")).toBe(false);
   });
 
   it("reads Deckstats '# !Commander' markers as commander zone hints", () => {

@@ -314,6 +314,63 @@ describe("RecommendationsPanel — a saved deck (P3.2)", () => {
     expect(screen.queryByRole("button", { name: "Add Arcane Signet to the deck" })).toBeNull();
   });
 
+  it("MAYBE-LIST: Maybe ends the sources line and parks the resolved card through the editor's onMaybe; a parked card reads In Maybe and keeps its Add", async () => {
+    const onAdd = vi.fn<Props["onAdd"]>(() => undefined);
+    const onMaybe = vi.fn<NonNullable<Props["onMaybe"]>>(() => undefined);
+    const view = render(<RecommendationsPanel {...saved({ onAdd, onMaybe })} />);
+    await flush();
+    const button = screen.getByRole("button", { name: "Add Arcane Signet to Maybe" });
+    expect(button.textContent).toBe("Maybe");
+    // On the sources line, beside "EDHREC · $0.40" — never on the name's line.
+    expect(button.parentElement?.textContent).toBe("EDHREC · $0.40Maybe");
+    fireEvent.click(button);
+    await flush();
+    expect(onMaybe).toHaveBeenCalledTimes(1);
+    expect(onMaybe.mock.calls[0][0]).toMatchObject({ id: rec.cardId, name: "Arcane Signet" });
+    expect(onAdd).not.toHaveBeenCalled();
+    // A second press of either action resolves nothing again (the shared cache).
+    fireEvent.click(screen.getByRole("button", { name: "Add Arcane Signet to the deck" }));
+    await flush();
+    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/cards/resolve")).toHaveLength(1);
+
+    view.rerender(
+      <RecommendationsPanel {...saved({ onAdd, onMaybe, inMaybe: new Set([rec.cardId]) })} />,
+    );
+    expect(screen.getByText("In Maybe")).toBeTruthy();
+    // The line keeps the button's 44 px on touch: nothing moves under the finger.
+    expect(screen.getByText("In Maybe").className).toContain("pointer-coarse:min-h-11");
+    expect(screen.queryByRole("button", { name: "Add Arcane Signet to Maybe" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Add Arcane Signet to the deck" })).toBeTruthy();
+    // A card the deck holds offers neither.
+    view.rerender(
+      <RecommendationsPanel
+        {...saved({ onAdd, onMaybe, inDeckQty: new Map([[rec.cardId, 1]]) })}
+      />,
+    );
+    expect(screen.getByText("In deck ✓")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add Arcane Signet to Maybe" })).toBeNull();
+    expect(screen.queryByText("In Maybe")).toBeNull();
+  });
+
+  it("MAYBE-LIST: at the deck's maximum the row offers Swap in… and Maybe (the owner's decision 1); without onMaybe (One Piece) no row has a Maybe", async () => {
+    const onMaybe = vi.fn<NonNullable<Props["onMaybe"]>>(() => undefined);
+    const view = render(<RecommendationsPanel {...saved({ onMaybe, swapIn: true })} />);
+    await flush();
+    expect(screen.getByRole("button", { name: "Swap in Arcane Signet…" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add Arcane Signet to Maybe" })).toBeTruthy();
+    view.rerender(<RecommendationsPanel {...saved({ swapIn: true })} />);
+    expect(screen.queryByRole("button", { name: /to Maybe$/ })).toBeNull();
+  });
+
+  it("MAYBE-LIST: a Maybe the editor refuses says why on the panel's line", async () => {
+    const onMaybe = vi.fn<NonNullable<Props["onMaybe"]>>(() => "Already in the deck");
+    render(<RecommendationsPanel {...saved({ onMaybe })} />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Add Arcane Signet to Maybe" }));
+    await flush();
+    expect(screen.getByText("Already in the deck")).toBeTruthy();
+  });
+
   it("a resolve that answers a different card adds nothing and says so", async () => {
     fetchMock.mockImplementation(async (url: string) =>
       String(url) === "/api/cards/resolve"

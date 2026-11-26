@@ -427,6 +427,24 @@ describe("HistoryDialog — results (Y10)", () => {
     expect(changed.dialog.querySelector("[data-slot=history-unchanged]")).toBeNull();
   });
 
+  it("a Maybe-only change keeps the line (MAYBE-LIST, the owner's decision 2); a card moved from Maybe into the deck drops it", async () => {
+    const parked = [...LIVE, { cardId: U(4), zone: "maybeboard", qty: 1, tags: [] }];
+    const first = renderHistory({
+      versions: [version(3, "saved", null)],
+      latestListHash: playableListHash(LIVE),
+      entries: parked,
+    });
+    await loaded(first.dialog, "No card changes since v3");
+    cleanup();
+    const moved = renderHistory({
+      versions: [version(3, "saved", null)],
+      latestListHash: playableListHash(parked, COMMANDER),
+      entries: [...LIVE, { cardId: U(4), zone: main, qty: 1, tags: [] }],
+    });
+    await loaded(moved.dialog, "Version 3");
+    expect(moved.dialog.querySelector("[data-slot=history-unchanged]")).toBeNull();
+  });
+
   it("no versions, or no hash sent: no line", async () => {
     const none = renderHistory({ latestListHash: playableListHash(LIVE) });
     await loaded(none.dialog, "No versions yet.");

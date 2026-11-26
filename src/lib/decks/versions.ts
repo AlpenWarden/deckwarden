@@ -53,6 +53,7 @@ import { getDb, schema, type DbExecutor, type Tx } from "@/db";
 import type { DeckVersionKind } from "@/db/schema";
 import { tokenSql } from "@/lib/cards/tokens-sql";
 import { cardListIssues, tokenZoneIssues, type DeckCardInput } from "@/lib/decks/cards";
+import { deckFormat } from "@/lib/decks/deck-format";
 import type { FrozenCard } from "@/lib/decks/diff";
 import { playableListHash } from "@/lib/decks/list-hash";
 import { MAX_PLAYED_SNAPSHOTS_PER_DECK } from "@/lib/journal/limits";
@@ -128,9 +129,10 @@ export interface VersionDetail extends VersionSummary {
 
 /**
  * A frozen list's size: its copies in the given zones — the playable list
- * (DECK-TOKENS: "100 cards", never 100 plus the Tokens zone; a One Piece
- * list still counts its leader, as it always has) — or every copy when the
- * caller can't say which zones count.
+ * (DECK-TOKENS: "100 cards", never 100 plus the Tokens zone, nor, since
+ * MAYBE-LIST, plus Maybe; a One Piece list still counts its leader, as it
+ * always has) — or every copy when the caller can't say which zones count
+ * (a version's detail, whose count no screen shows).
  */
 export function frozenCount(
   cards: readonly { zone: string; qty: number }[],
@@ -243,7 +245,9 @@ export async function lockDeck(tx: Tx, deckId: string): Promise<boolean> {
 
 /**
  * Freeze `cards` as the deck's next version, stamped with its playable-list
- * hash. Caller holds the row lock (lockDeck) — the count check is only safe
+ * hash — read with the deck's format (MAYBE-LIST: the hash leaves Maybe out),
+ * which the version bump's own RETURNING hands back, so no writer passes it.
+ * Caller holds the row lock (lockDeck) — the count check is only safe
  * under it. Each kind counts against its own ceiling: `saved` the 50 cap
  * (VersionCapError), `played` the allowance (PlayedAllowanceError).
  * `counted` sizes the returned cardCount (frozenCount).
@@ -266,13 +270,17 @@ export async function insertVersion(
     .update(decks)
     .set({ currentVersion: sql`${decks.currentVersion} + 1` })
     .where(eq(decks.id, deckId))
-    .returning({ version: decks.currentVersion });
+    .returning({
+      version: decks.currentVersion,
+      gameId: decks.gameId,
+      formatId: decks.formatId,
+    });
   await tx.insert(deckVersions).values({
     deckId,
     version: bumped.version,
     note,
     cards: cards as unknown as object,
-    listHash: playableListHash(cards),
+    listHash: playableListHash(cards, deckFormat(bumped)?.format),
     kind,
   });
   return { version: bumped.version, cardCount: frozenCount(cards, counted) };

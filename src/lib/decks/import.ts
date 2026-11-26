@@ -5,8 +5,8 @@
  * fetch + selection state; everything here is testable shaping.
  */
 import type { CardWire, EditorEntry } from "@/lib/decks/editor-state";
-import { MAX_QTY } from "@/lib/decks/editor-state";
-import { isPlayableZone } from "@/lib/decks/playable";
+import { MAX_ENTRIES, MAX_ENTRIES_ERROR, MAX_QTY } from "@/lib/decks/editor-state";
+import { isPlayableZone, maybeZoneOf } from "@/lib/decks/playable";
 import type { FormatDef } from "@/lib/games/types";
 
 /** adapter.parseDecklist line (structural match with the contract's type). */
@@ -109,12 +109,20 @@ export interface ImportOutcome {
 /**
  * Apply reviewed items to the deck. mode "replace" starts from an empty list
  * — empty of the playable list, that is: the Tokens zone stays (DECK-TOKENS;
- * a paste can't carry tokens, and replacing the 100 isn't replacing them);
- * "add" folds into the existing entries. Duplicate (zone, card) pairs merge
- * quantities (capped at MAX_QTY, matching the PUT route's bound). Overflow in
- * a zone with a card-count maximum (the commander zone) spills into the
- * default zone with a warning, grouped per zone when several lines spill
- * (P2.8b) — the PUT route would reject the list otherwise.
+ * a paste can't carry tokens, and replacing the 100 isn't replacing them),
+ * and so does Maybe unless the paste brings Maybe lines of its own
+ * (MAYBE-LIST, the owner's answer of 2026-11-26: Replace replaces what the
+ * paste brings); "add" folds into the existing entries. Duplicate (zone,
+ * card) pairs merge quantities (capped at MAX_QTY, matching the PUT route's
+ * bound). Overflow in a zone with a card-count maximum (the commander zone)
+ * spills into the default zone with a warning, grouped per zone when several
+ * lines spill (P2.8b) — the PUT route would reject the list otherwise; for
+ * the same reason a new row past MAX_ENTRIES is skipped, with one warning.
+ *
+ * The editor's Maybe rule holds here too (MAYBE-LIST): a card the deck holds
+ * after the import is in no Maybe row. A Maybe row it already had leaves
+ * quietly (the card entered the deck, as any add does), and a Maybe line of
+ * the paste's own for such a card is left out with one warning.
  */
 export function applyImport(
   existing: readonly EditorEntry[],
@@ -128,8 +136,17 @@ export function applyImport(
   const zoneMax = new Map(format.zones.map((z) => [z.id, z.max]));
   const zoneLabel = new Map(format.zones.map((z) => [z.id, z.label]));
 
+  const maybeZone = maybeZoneOf(format);
+  const pastedMaybe = new Set(
+    maybeZone ? items.filter((i) => i.card && i.zone === maybeZone.id).map((i) => i.card!.id) : [],
+  );
   const entries: EditorEntry[] = (
-    mode === "replace" ? existing.filter((e) => !isPlayableZone(format, e.zone)) : existing
+    mode === "replace"
+      ? existing.filter(
+          (e) =>
+            !isPlayableZone(format, e.zone) && !(pastedMaybe.size > 0 && e.zone === maybeZone?.id),
+        )
+      : existing
   ).map((e) => ({ ...e }));
   const zoneQty = new Map<string, number>();
   for (const e of entries) zoneQty.set(e.zone, (zoneQty.get(e.zone) ?? 0) + e.qty);
@@ -150,9 +167,15 @@ export function applyImport(
   const spills = new Map<string, string[]>();
 
   const cards = new Map<string, CardWire>();
+  // MAYBE-LIST: past the save route's row bound a new row is skipped, named once.
+  const overCap: string[] = [];
   const merge = (zone: string, card: CardWire, qty: number) => {
-    cards.set(card.id, card);
     const entry = entries.find((e) => e.zone === zone && e.cardId === card.id);
+    if (!entry && entries.length >= MAX_ENTRIES) {
+      overCap.push(card.name);
+      return;
+    }
+    cards.set(card.id, card);
     const added = entry ? Math.min(entry.qty + qty, MAX_QTY) - entry.qty : Math.min(qty, MAX_QTY);
     if (entry) entry.qty += added;
     else entries.push({ cardId: card.id, zone, qty: added, tags: [] });
@@ -215,6 +238,27 @@ export function applyImport(
     );
   }
 
+  // The Maybe rule (MAYBE-LIST): a card the deck holds is in no Maybe row.
+  if (maybeZone) {
+    const inDeck = new Set(
+      entries.filter((e) => isPlayableZone(format, e.zone)).map((e) => e.cardId),
+    );
+    const leftOut: string[] = [];
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const e = entries[i];
+      if (e.zone !== maybeZone.id || !inDeck.has(e.cardId)) continue;
+      entries.splice(i, 1);
+      if (pastedMaybe.has(e.cardId)) leftOut.unshift(cards.get(e.cardId)?.name ?? e.cardId);
+    }
+    if (leftOut.length > 0) {
+      warnings.push(
+        `Already in the deck, so left out of ${maybeZone.label}: ${namesPhrase(leftOut)}`,
+      );
+    }
+  }
+
+  if (overCap.length > 0) warnings.push(`${MAX_ENTRIES_ERROR}: skipped ${namesPhrase(overCap)}`);
+
   for (const item of skipped) {
     warnings.push(
       item.card
@@ -224,4 +268,11 @@ export function applyImport(
   }
 
   return { entries, cards: [...cards.values()], warnings, skipped };
+}
+
+/** One name, or "N cards (A, B, C, …)" — the spill warning's grouping. */
+function namesPhrase(names: readonly string[]): string {
+  return names.length === 1
+    ? names[0]
+    : `${names.length} cards (${names.slice(0, 3).join(", ")}${names.length > 3 ? ", …" : ""})`;
 }

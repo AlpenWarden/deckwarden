@@ -49,7 +49,8 @@ export function cardListIssues(entries: DeckCardInput[], format: FormatDef): str
 /**
  * The token rule (DECK-TOKENS): a zone that holds tokens (`ZoneDef.holds`)
  * takes only token-catalog objects, and every other zone takes none — so a
- * token never enters the 100 and the Tokens zone never becomes a maybeboard.
+ * token never enters the 100, and the Tokens zone is never a second Maybe:
+ * Magic's Maybe zone (MAYBE-LIST) holds cards, so a token is refused there too.
  * Game-ignorant like cardListIssues: `isToken` says what each card is, read
  * by the caller from the rows it already holds; unknown zones are
  * cardListIssues' to report. [] = ok.

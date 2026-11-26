@@ -63,6 +63,14 @@
  * saved (the GET reads them off the row); a draft sends them in its body.
  * Adds are announced by the editor's toast ("Added X · Undo"), so the live
  * line keeps only failures.
+ *
+ * Maybe (MAYBE-LIST): with `onMaybe` (a format with a Maybe zone) every row
+ * carries a small "Maybe" at the end of its sources line, so the name keeps
+ * its width and "Add" or "Swap in…" stays on the first line; at any deck
+ * size, since a Maybe card counts toward nothing (the owner's decision 1:
+ * beside "Swap in…" at the maximum). A card already parked reads "In Maybe";
+ * its Add still moves it into the deck. A Maybe edit never refetches: the
+ * key reads the playable list (deckStateKey), and Maybe is not part of it.
  */
 import { ArrowRightIcon, ArrowUpRightIcon, GaugeIcon } from "lucide-react";
 import Link from "next/link";
@@ -84,6 +92,7 @@ import { useResolvedAdd } from "@/components/editor/use-resolved-add";
 import { BRACKET_COPY } from "@/lib/brackets/copy";
 import type { EditorCard } from "@/lib/decks/editor-state";
 import { goalsPatchBody, suggestionGoals, withBudget, type DeckGoals } from "@/lib/decks/goals";
+import { MAYBE_COPY } from "@/lib/decks/maybe-copy";
 import { deckStateKey, hasLeader, snapshotBody } from "@/lib/decks/panel-view";
 import { playableEntries } from "@/lib/decks/playable";
 import { DECK_TOKEN_HEADER, getDeckToken } from "@/lib/decks/token-store";
@@ -103,13 +112,17 @@ interface RecommendationsPanelProps {
   /** Live deck id — null until draft mode's first autosave creates the row. */
   deckId: string | null;
   entries: readonly { cardId: string; zone: string; qty: number }[];
-  /** Total copies already in the deck (any zone) — rows flip to "in deck". */
+  /** Copies the deck holds (MAYBE-LIST: the playable list, never Maybe) — rows flip to "in deck". */
   inDeckQty: ReadonlyMap<string, number>;
+  /** MAYBE-LIST: the cards parked in Maybe — their rows read "In Maybe". */
+  inMaybe?: ReadonlySet<string>;
   saveStatus: "saved" | "dirty" | "saving" | "error";
   /** Tab visibility: no fetching (lazy) and no work while hidden. */
   active: boolean;
   /** Add to the main zone via the editor's own edit path — the editor toasts it with Undo (Y6a). */
   onAdd: (card: EditorCard) => string | undefined;
+  /** MAYBE-LIST: park the card in Maybe (the editor's edit, toasted with Undo); absent = no Maybe button. */
+  onMaybe?: (card: EditorCard) => string | undefined;
   /** The user has an imported collection (P3.7) — enables "only cards I own". */
   ownedAvailable?: boolean;
   /** The deck's goals (Y6a): the target and per-card budget the list follows. */
@@ -138,9 +151,11 @@ export function RecommendationsPanel({
   deckId,
   entries,
   inDeckQty,
+  inMaybe,
   saveStatus,
   active,
   onAdd,
+  onMaybe,
   ownedAvailable = false,
   goals = null,
   estimate = null,
@@ -165,7 +180,10 @@ export function RecommendationsPanel({
   // Force-refetch counter (Refresh button / error retry) — part of the key.
   const [nonce, setNonce] = useState(0);
   const lastKeyRef = useRef<string | null>(null);
-  const { pendingAdd, notice, add } = useResolvedAdd(adapter, format, onAdd, { announce: false });
+  const { pendingAdd, pendingMaybe, notice, add, maybe } = useResolvedAdd(adapter, format, onAdd, {
+    announce: false,
+    onMaybe,
+  });
 
   const leader = hasLeader(entries, format);
   // The owned filter needs a collection AND a deck row: a draft's route takes
@@ -373,11 +391,16 @@ export function RecommendationsPanel({
                   rec={rec}
                   hidden
                   inDeck={(inDeckQty.get(rec.cardId) ?? 0) > 0}
+                  inMaybe={inMaybe?.has(rec.cardId) ?? false}
                   expanded={expanded.has(rec.cardId)}
                   pending={pendingAdd === rec.cardId}
+                  pendingMaybe={pendingMaybe === rec.cardId}
                   swapIn={swapIn}
                   onToggle={() => toggleExpanded(rec.cardId)}
                   onAdd={() => void add({ cardId: rec.cardId, name: rec.name })}
+                  onMaybe={
+                    onMaybe ? () => void maybe({ cardId: rec.cardId, name: rec.name }) : undefined
+                  }
                 />
               ))}
             </ul>
@@ -425,11 +448,16 @@ export function RecommendationsPanel({
               adapter={adapter}
               rec={rec}
               inDeck={(inDeckQty.get(rec.cardId) ?? 0) > 0}
+              inMaybe={inMaybe?.has(rec.cardId) ?? false}
               expanded={expanded.has(rec.cardId)}
               pending={pendingAdd === rec.cardId}
+              pendingMaybe={pendingMaybe === rec.cardId}
               swapIn={swapIn}
               onToggle={() => toggleExpanded(rec.cardId)}
               onAdd={() => void add({ cardId: rec.cardId, name: rec.name })}
+              onMaybe={
+                onMaybe ? () => void maybe({ cardId: rec.cardId, name: rec.name }) : undefined
+              }
             />
           ))}
         </ul>
@@ -467,23 +495,31 @@ function SuggestionRow({
   rec,
   hidden = false,
   inDeck,
+  inMaybe = false,
   expanded,
   pending,
+  pendingMaybe = false,
   swapIn = false,
   onToggle,
   onAdd,
+  onMaybe,
 }: {
   adapter: GameAdapter;
   rec: SuggestionRec;
   /** Hidden by the goals (Y6a), shown on request: a dashed border beside its reasons. */
   hidden?: boolean;
   inDeck: boolean;
+  /** MAYBE-LIST: the card is parked in Maybe — the button reads "In Maybe". */
+  inMaybe?: boolean;
   expanded: boolean;
   pending: boolean;
+  pendingMaybe?: boolean;
   /** Y7b: the deck is full — the add opens the swap-in sheet. */
   swapIn?: boolean;
   onToggle: () => void;
   onAdd: () => void;
+  /** MAYBE-LIST: park the card in Maybe; absent = no button (a format without a Maybe zone). */
+  onMaybe?: () => void;
 }) {
   const evidence = orderEvidence(rec.evidence);
   const top = evidence[0];
@@ -523,10 +559,34 @@ function SuggestionRow({
 
       {/* Strongest evidence leads even collapsed — never a bare "add this". */}
       <p className={`mt-1 text-xs leading-relaxed ${expanded ? "" : "line-clamp-2"}`}>{top.why}</p>
-      <p className="text-muted-foreground mt-0.5 text-xs">
-        {sourceLabels.join(", ")}
-        {price ? ` · ${price}` : ""}
-      </p>
+      {/* MAYBE-LIST: Maybe ends the sources line, so the name keeps the first line's width. */}
+      <div className="mt-0.5 flex items-center gap-2">
+        <p className="text-muted-foreground min-w-0 flex-1 text-xs">
+          {sourceLabels.join(", ")}
+          {price ? ` · ${price}` : ""}
+        </p>
+        {onMaybe &&
+          !inDeck &&
+          (inMaybe ? (
+            // On touch the line keeps the button's 44 px, so the row never moves under the finger.
+            <span
+              data-slot="in-maybe"
+              className="text-muted-foreground inline-flex shrink-0 items-center text-xs pointer-coarse:min-h-11"
+            >
+              {MAYBE_COPY.inMaybe}
+            </span>
+          ) : (
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={pendingMaybe}
+              aria-label={MAYBE_COPY.buttonLabel(rec.name)}
+              onClick={onMaybe}
+            >
+              {pendingMaybe ? "Adding…" : MAYBE_COPY.button}
+            </Button>
+          ))}
+      </div>
       {/* Goals (Y6a): beside the evidence, never part of it — each line names its source. */}
       {rec.conflicts?.map((c) => (
         <p

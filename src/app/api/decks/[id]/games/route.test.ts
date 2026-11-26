@@ -357,6 +357,37 @@ describe("POST — the list the game was played with (one transaction)", () => {
     expect(inserted(inserts("deck_games")[0], "version")).toBe(8);
   });
 
+  it("a Maybe-only change keeps the hash — the version is reused (MAYBE-LIST, the owner's decision 2)", async () => {
+    const parked = [
+      ...LIVE,
+      { cardId: U(4), zone: "maybeboard", qty: 1, tags: [], printingId: null },
+    ];
+    answers = [[deckRow()], [[DECK]], liveRows(parked), [[8, HASH, null]], [[40]], [gameRow()]];
+    const res = await POST(req("POST", { result: "win", podSize: 4 }), ctx);
+    expect(await res.json()).toMatchObject({ version: 8, minted: false });
+    expect(inserts("deck_versions")).toEqual([]);
+    expect(inserted(inserts("deck_games")[0], "list_hash")).toBe(HASH);
+    // A token edit still counts (DECK-TOKENS): the same list with a token mints a snapshot.
+    statements = [];
+    const withToken = [
+      ...LIVE,
+      { cardId: U(5), zone: "tokens", qty: 1, tags: [], printingId: null },
+    ];
+    answers = [
+      [deckRow()],
+      [[DECK]],
+      liveRows(withToken),
+      [[8, HASH, null]],
+      [[3]],
+      [[9, 1, 1]],
+      [],
+      [[40]],
+      [gameRow({ version: 9 })],
+    ];
+    const minted = await POST(req("POST", { result: "win", podSize: 4 }), ctx);
+    expect(await minted.json()).toMatchObject({ version: 9, minted: true });
+  });
+
   it("a tag or printing change keeps the hash — the same snapshot is reused", async () => {
     const retagged = LIVE.map((c) => ({ ...c, tags: ["Changed"], printingId: U(99) }));
     answers = [[deckRow()], [[DECK]], liveRows(retagged), [[8, HASH, null]], [[40]], [gameRow()]];

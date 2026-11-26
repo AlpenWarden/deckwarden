@@ -4,7 +4,14 @@ import { COMMANDER } from "@/lib/games/mtg/formats";
 import {
   addCard,
   deckSizeCount,
+  enteredDeck,
+  leaveMaybe,
+  MAX_ENTRIES,
+  MAX_ENTRIES_ERROR,
+  maybeCardIds,
   MAX_QTY,
+  playableQty,
+  restoreRows,
   MAX_TAGS,
   mergeEntries,
   normalizeTags,
@@ -391,5 +398,103 @@ describe("restoreEntry (Y2a — Undo for a removal)", () => {
     const result = restoreEntry(now, standard, luffy, 0);
     expect(result.error).toBe("Leader is full (max 1 card)");
     expect(result.entries).toEqual(now);
+  });
+});
+
+describe("the Maybe rule (MAYBE-LIST)", () => {
+  const maybe = (cardId: string, over: Partial<EditorEntry> = {}) =>
+    entry({ cardId, zone: "maybeboard", ...over });
+  const STANDARD = optcgAdapter.formats[0];
+
+  it("a Maybe card counts toward nothing: the size and the in-deck count read the deck alone", () => {
+    const list = [
+      entry({ cardId: "cmd", zone: "commander" }),
+      entry({ cardId: "a", qty: 99 }),
+      maybe("a"),
+      maybe("b", { qty: 3 }),
+      entry({ cardId: "t", zone: "tokens", qty: 2 }),
+    ];
+    expect(deckSizeCount(list, COMMANDER)).toBe(100);
+    expect([...playableQty(list, COMMANDER)]).toEqual([
+      ["cmd", 1],
+      ["a", 99],
+    ]);
+    expect([...maybeCardIds(list, COMMANDER)]).toEqual(["a", "b"]);
+    expect(maybeCardIds(list, STANDARD).size).toBe(0);
+  });
+
+  it("leaveMaybe takes the named cards' Maybe rows out and says where each stood", () => {
+    const tagged = maybe("b", { tags: ["Ramp"], printingId: "p" });
+    const list = [entry({ cardId: "a" }), tagged, entry({ cardId: "b" }), maybe("c")];
+    const { entries, left } = leaveMaybe(list, COMMANDER, ["b", "x"]);
+    expect(entries).toEqual([list[0], list[2], list[3]]);
+    expect(left).toEqual([{ entry: tagged, index: 1 }]);
+    // Nothing named, or a format with no Maybe zone: nothing moves.
+    expect(leaveMaybe(list, COMMANDER, []).entries).toEqual(list);
+    expect(leaveMaybe(list, STANDARD, ["b"]).left).toEqual([]);
+  });
+
+  it("restoreRows puts rows back in starting order, whichever was taken first", () => {
+    // A swap: "out" at 1 left the deck and its incoming card's Maybe row at 3 left Maybe.
+    const before = [
+      entry({ cardId: "a" }),
+      entry({ cardId: "out" }),
+      entry({ cardId: "b" }),
+      maybe("in"),
+      entry({ cardId: "c" }),
+    ];
+    const taken = [
+      { entry: before[1], index: 1 },
+      { entry: before[3], index: 3 },
+    ];
+    const without = [before[0], before[2], before[4]];
+    expect(restoreRows(without, COMMANDER, taken).entries).toEqual(before);
+    expect(restoreRows(without, COMMANDER, [...taken].reverse()).entries).toEqual(before);
+    // The Maybe row stood first this time.
+    const before2 = [maybe("in"), entry({ cardId: "a" }), entry({ cardId: "out" })];
+    expect(
+      restoreRows([before2[1]], COMMANDER, [
+        { entry: before2[2], index: 2 },
+        { entry: before2[0], index: 0 },
+      ]).entries,
+    ).toEqual(before2);
+  });
+
+  it("restoreRows stops at a refusal and leaves the list as it was", () => {
+    const now = [entry({ cardId: "zoro", zone: "leader" })];
+    const result = restoreRows(now, STANDARD, [
+      { entry: entry({ cardId: "luffy", zone: "leader" }), index: 0 },
+    ]);
+    expect(result.error).toBe("Leader is full (max 1 card)");
+    expect(result.entries).toEqual(now);
+  });
+
+  it("enteredDeck names the cards whose copies in the deck rose, Maybe and Tokens aside", () => {
+    const before = [
+      entry({ cardId: "a" }),
+      maybe("b"),
+      maybe("c"),
+      entry({ cardId: "t", zone: "tokens" }),
+    ];
+    const after = [
+      entry({ cardId: "a" }),
+      entry({ cardId: "b" }),
+      maybe("b"),
+      maybe("c", { qty: 4 }),
+      entry({ cardId: "cmd", zone: "commander" }),
+      entry({ cardId: "t", zone: "tokens", qty: 5 }),
+    ];
+    expect([...enteredDeck(before, after, COMMANDER)].sort()).toEqual(["b", "cmd"]);
+    expect(enteredDeck(after, before, COMMANDER).size).toBe(0);
+  });
+
+  it("addCard refuses a new row past the save route's 500, and still grows an existing one", () => {
+    const full = Array.from({ length: MAX_ENTRIES }, (_, i) => maybe(`m${i}`));
+    const refused = addCard(full, COMMANDER, "main", "new", 1);
+    expect(refused.error).toBe(MAX_ENTRIES_ERROR);
+    expect(refused.entries).toEqual(full);
+    expect(addCard(full, COMMANDER, "maybeboard", "m0", 1).entries[0].qty).toBe(2);
+    expect(addCard(full.slice(1), COMMANDER, "main", "new", 1).error).toBeUndefined();
+    expect(MAX_ENTRIES_ERROR).toBe("A deck can hold 500 lines at most, Maybe and Tokens included");
   });
 });

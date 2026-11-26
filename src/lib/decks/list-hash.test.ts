@@ -6,6 +6,9 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { COMMANDER } from "@/lib/games/mtg/formats";
+import { optcgAdapter } from "@/lib/games/optcg/adapter";
+
 import { diffDeckLists, isEmptyDiff, type FrozenCard } from "./diff";
 import { LIST_HASH_PREFIX, playableListHash, playablePayload } from "./list-hash";
 
@@ -144,5 +147,39 @@ describe("playableListHash", () => {
     // Both sides of the equivalence were exercised.
     expect(equal).toBeGreaterThan(200);
     expect(equal).toBeLessThan(1800);
+  });
+});
+
+describe("the hash leaves Maybe out, given the format (MAYBE-LIST, the owner's decision 2)", () => {
+  const deck = [card(1, { zone: "commander" }), card(2, { qty: 3 }), card(3)];
+  const maybe = (n: number, over: Partial<FrozenCard> = {}) =>
+    card(n, { zone: "maybeboard", ...over });
+
+  it("a Maybe-only change keeps the hash: no change to the list played", () => {
+    const withMaybe = [...deck, maybe(4), maybe(5, { qty: 2 })];
+    expect(playableListHash(withMaybe, COMMANDER)).toBe(playableListHash(deck, COMMANDER));
+    expect(playablePayload(withMaybe, COMMANDER)).toBe(playablePayload(deck));
+    // The diff still sees it: versions freeze the Maybe list and compare shows it.
+    expect(isEmptyDiff(diffDeckLists(deck, withMaybe))).toBe(false);
+  });
+
+  it("a stored list without a Maybe row hashes as it always did, so no h1: stamp moves", () => {
+    expect(playableListHash(deck, COMMANDER)).toBe(playableListHash(deck));
+    expect(playableListHash(deck, COMMANDER)).toBe("h1:7af1fb419e6ba85efe0b0b2811f0293d");
+  });
+
+  it("a card moved from Maybe into the deck moves it; Tokens still count", () => {
+    const before = [...deck, maybe(4)];
+    const moved = [...deck, card(4)];
+    expect(playableListHash(moved, COMMANDER)).not.toBe(playableListHash(before, COMMANDER));
+    const tokens = [...deck, card(6, { zone: "tokens", qty: 2 })];
+    expect(playableListHash(tokens, COMMANDER)).not.toBe(playableListHash(deck, COMMANDER));
+  });
+
+  it("without the format every row is read, as before; One Piece has no Maybe to leave out", () => {
+    const withMaybe = [...deck, maybe(4)];
+    expect(playableListHash(withMaybe)).not.toBe(playableListHash(deck));
+    const op = optcgAdapter.formats[0];
+    expect(playableListHash(withMaybe, op)).toBe(playableListHash(withMaybe));
   });
 });

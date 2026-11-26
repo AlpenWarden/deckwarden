@@ -28,9 +28,9 @@ export interface SnapshotEntry {
  * src/lib/decks/playable.ts): every leader or counted format zone is present
  * in `zones` even when empty — the adapter's zone-minimum checks (empty
  * commander zone) only fire for keys that exist — and a zone that is neither
- * (Magic's Tokens) is left out, so validate, analyze, the bracket read and
- * the export never see a token. Zones the format doesn't define pass through
- * so ZONE_UNKNOWN fires too.
+ * (Magic's Tokens and, since MAYBE-LIST, Maybe) is left out, so validate,
+ * analyze, the bracket read and the export never see a token or a Maybe card.
+ * Zones the format doesn't define pass through so ZONE_UNKNOWN fires too.
  */
 export function toDeckSnapshot(
   gameId: GameId,

@@ -4270,6 +4270,44 @@ describe("DeckEditor — your target and the answers (Y4b)", () => {
       expect(after).toContain(vault.id);
     });
 
+    it("MAYBE-LIST: a piece parked in Maybe is still a missing piece — Add 2 pieces adds it and takes it out of Maybe; ONE Undo puts both back", async () => {
+      fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === "/api/decks/deck-1" && (init?.method ?? "GET") === "GET") {
+          const deck = savedDeck(deckGoals);
+          const parked = {
+            cardId: signet.id,
+            zone: "maybeboard",
+            qty: 1,
+            tags: [],
+            printingId: null,
+          };
+          return ok({ ...deck, cards: [...deck.cards, { ...parked, card: signet }] });
+        }
+        return y6bRoute(input, init);
+      });
+      stubViewport(1440);
+      render(<DeckEditor deckId="deck-1" />);
+      await lineIs("Bracket 3 or 4 · one card is your call Why?");
+      await combosTab();
+      fireEvent.click(await pollFor(() => screen.queryByRole("button", { name: "Add 2 pieces" })));
+      const toastEl = await toastOf("Added 2 combo pieces");
+      expect(within(toastEl).getByText("Taken out of Maybe.")).toBeTruthy();
+      await settle(1500);
+      await act(async () => {});
+      const zoneOf = (id: string) =>
+        (lastPutEntries() as unknown as { cardId: string; zone: string }[])
+          .filter((e) => e.cardId === id)
+          .map((e) => e.zone);
+      expect(zoneOf(signet.id)).toEqual(["main"]);
+      expect(zoneOf(sol.id)).toEqual(["main"]);
+
+      fireEvent.click(within(toastEl).getByRole("button", { name: "Undo" }));
+      await settle(1500);
+      await act(async () => {});
+      expect(zoneOf(signet.id)).toEqual(["maybeboard"]);
+      expect(zoneOf(sol.id)).toEqual([]);
+    });
+
     it("the Radar's rows read the deck's target: the R combo one card away is above a target of 2", async () => {
       deckGoals = { v: 1, targetLevel: 2 };
       stubViewport(1440);
@@ -6443,5 +6481,518 @@ describe("DeckEditor — Do you own this precon? (PRECON-OWNED)", () => {
     expect(yes.getAttribute("aria-describedby")).toBe(asked.querySelector("span")!.id);
     await settle(1500);
     expect(posts()).toBe(0);
+  });
+});
+
+describe("DeckEditor — Maybe (MAYBE-LIST)", () => {
+  const kozilek: CardWire = {
+    ...card({
+      name: "Kozilek, the Great Distortion",
+      primaryType: "Creature",
+      costValue: 10,
+      isLeaderCandidate: true,
+      attrs: { type_line: "Legendary Creature — Eldrazi", oracle_text: "" },
+    }),
+    image: null,
+  };
+  const vault: CardWire = {
+    ...card({
+      name: "Mana Vault",
+      primaryType: "Artifact",
+      costValue: 1,
+      attrs: { type_line: "Artifact", oracle_text: "", game_changer: true },
+    }),
+    image: null,
+  };
+  const wastes: CardWire = {
+    ...card({
+      name: "Wastes",
+      primaryType: "Land",
+      costValue: null,
+      attrs: { type_line: "Basic Land — Wastes", oracle_text: "" },
+    }),
+    image: null,
+  };
+  /** Banned in Commander and off Kozilek's (colorless) identity: a wrong deck if it ever counted. */
+  const bolt: CardWire = {
+    ...card({
+      name: "Lightning Bolt",
+      primaryType: "Instant",
+      costValue: 1,
+      colorsMask: 8,
+      ciMask: 8,
+      legality: [{ status: "banned" }],
+      attrs: { type_line: "Instant", oracle_text: "", mana_cost: "{R}" },
+    }),
+    image: null,
+  };
+  const row = (wire: CardWire, zone: string, qty = 1) => ({
+    cardId: wire.id,
+    zone,
+    qty,
+    tags: [],
+    printingId: null,
+    card: wire,
+  });
+  /** Kozilek, Mana Vault and `wastes` Wastes (98 = 100 / 100), plus the Maybe rows and their printings. */
+  let state: { wastes: number; maybe: CardWire[]; printing?: Record<string, string> } = {
+    wastes: 98,
+    maybe: [],
+  };
+  function maybeDeck() {
+    return {
+      deck: {
+        id: "deck-1",
+        publicId: "abcdefgh1234",
+        game: "mtg",
+        format: "commander",
+        name: "Kozilek",
+        description: null,
+        notes: null,
+        visibility: "unlisted",
+        isOwner: true,
+        forkedFrom: null,
+        leaderIds: [kozilek.id],
+        goals: null,
+      },
+      cards: [
+        row(kozilek, "commander"),
+        row(vault, "main"),
+        row(wastes, "main", state.wastes),
+        ...state.maybe.map((w) => ({
+          ...row(w, "maybeboard"),
+          printingId: state.printing?.[w.id] ?? null,
+        })),
+      ],
+      owned: [],
+      hasCollection: false,
+    };
+  }
+  const solRec = {
+    cardId: sol.id,
+    name: sol.name,
+    primaryType: "Artifact",
+    costValue: 1,
+    ciMask: 0,
+    cheapestUsd: "1.20",
+    popularity: 1,
+    score: 0.9,
+    confidence: "high",
+    evidence: [
+      {
+        source: "edhrec_rank",
+        why: "A Commander staple in EDHREC decklists",
+        with: [],
+        howOften: "EDHREC rank #1",
+        confidence: "high",
+      },
+    ],
+    conflicts: [],
+  };
+  const byName = new Map([sol, signet, bolt].map((c) => [c.name, c]));
+  function maybeRoute(input: RequestInfo | URL, init?: RequestInit) {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    if (url === "/api/decks/deck-1" && method === "GET") return ok(maybeDeck());
+    if (url.startsWith("/api/decks/deck-1/recommendations")) {
+      return ok({ count: 1, recommendations: [solRec], hidden: [], combosTruncated: false });
+    }
+    if (url === "/api/cards/resolve") {
+      const { names } = JSON.parse(String(init?.body)) as { names: string[] };
+      return ok({
+        results: names.map((n) => ({ input: n, match: byName.get(n) ?? null, suggestions: [] })),
+      });
+    }
+    return route(input, init);
+  }
+  beforeEach(() => {
+    state = { wastes: 98, maybe: [] };
+    fetchMock.mockImplementation(maybeRoute);
+  });
+
+  const deckSize = () => document.querySelector("[data-slot=deck-size]")?.textContent;
+  const maybeSection = () => document.querySelector<HTMLElement>("[data-slot=maybe-section]");
+  /** The section's disclosure: its label beside its count ("Maybe1"). */
+  const maybeTrigger = () => within(maybeSection()!).getByRole("button", { name: /^Maybe\d+$/ });
+  async function openMaybe() {
+    fireEvent.click(maybeTrigger());
+    await act(async () => {});
+    return maybeSection()!;
+  }
+  /** The last PUT's rows as "zone:card name ×qty". */
+  const names = new Map([kozilek, vault, wastes, sol, signet, bolt].map((c) => [c.id, c.name]));
+  const lastPut = () =>
+    (lastPutEntries() as unknown as { cardId: string; zone: string; qty: number }[]).map(
+      (e) => `${e.zone}:${names.get(e.cardId)} ×${e.qty}`,
+    );
+  async function save() {
+    await settle(1500);
+    await act(async () => {});
+  }
+  const toastOf = async (text: string) =>
+    (await pollFor(() => screen.queryByText(text))).closest('[data-slot="toast"]') as HTMLElement;
+  async function suggestions() {
+    fireEvent.click(screen.getByRole("tab", { name: "Suggestions" }));
+    await pollFor(() => screen.queryByText("A Commander staple in EDHREC decklists"));
+  }
+  async function loaded() {
+    await pollFor(() => (deckSize() ? true : null));
+  }
+
+  it("at 100 / 100 a Suggestions row offers Swap in… and Maybe; Maybe parks the card: still 100 / 100, ONE PUT with the Maybe row, and its Undo takes it out", async () => {
+    stubViewport(1440);
+    render(<DeckEditor deckId="deck-1" />);
+    await loaded();
+    expect(deckSize()).toBe("100 / 100 cards");
+    await suggestions();
+    // The owner's decision 1: Maybe beside Swap in…, at any size.
+    expect(screen.getByRole("button", { name: "Swap in Sol Ring…" }).textContent).toBe("Swap in…");
+    fireEvent.click(screen.getByRole("button", { name: "Add Sol Ring to Maybe" }));
+    const toastEl = await toastOf("Added Sol Ring to Maybe");
+    expect(deckSize()).toBe("100 / 100 cards");
+    // The row says so, and its first line still swaps the card in.
+    expect(screen.getByText("In Maybe")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add Sol Ring to Maybe" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Swap in Sol Ring…" })).toBeTruthy();
+    expect(maybeTrigger().textContent).toBe("Maybe1");
+    await save();
+    expect(puts()).toBe(1);
+    expect(lastPut()).toEqual([
+      "commander:Kozilek, the Great Distortion ×1",
+      "main:Mana Vault ×1",
+      "main:Wastes ×98",
+      "maybeboard:Sol Ring ×1",
+    ]);
+    // Suggestions never asked again: a Maybe edit is not a change to the list it reads.
+    const recs = () =>
+      fetchMock.mock.calls.filter(([url]) =>
+        String(url).startsWith("/api/decks/deck-1/recommendations"),
+      ).length;
+    expect(recs()).toBe(1);
+
+    fireEvent.click(within(toastEl).getByRole("button", { name: "Undo" }));
+    await save();
+    expect(puts()).toBe(2);
+    expect(lastPut()).not.toContain("maybeboard:Sol Ring ×1");
+    expect(deckSize()).toBe("100 / 100 cards");
+  });
+
+  it("a reload with a banned, off-color card in Maybe: 100 / 100, a closed Maybe heading, no legality mark and no issue for it", async () => {
+    state.maybe = [bolt];
+    stubViewport(1440);
+    render(<DeckEditor deckId="deck-1" />);
+    await loaded();
+    expect(deckSize()).toBe("100 / 100 cards");
+    expect(maybeTrigger().getAttribute("aria-expanded")).toBe("false");
+    expect(maybeTrigger().textContent).toBe("Maybe1");
+    const opened = await openMaybe();
+    expect(within(opened).getByRole("button", { name: "Lightning Bolt" })).toBeTruthy();
+    expect(within(opened).queryByLabelText("Has a problem")).toBeNull();
+    expect(within(opened).queryByLabelText("Warning")).toBeNull();
+    // The Warden line knows nothing of it.
+    expect(
+      screen.queryByText(/Lightning Bolt/, { selector: "[data-slot=status-slot] *" }),
+    ).toBeNull();
+    expect(screen.queryAllByLabelText("Has a problem")).toHaveLength(0);
+    // Loading is no edit.
+    await save();
+    expect(puts()).toBe(0);
+  });
+
+  it("Move to deck below the maximum: the card joins the main list with the Maybe row's printing and leaves Maybe — one toast, one PUT; Undo restores both", async () => {
+    state = { wastes: 97, maybe: [sol], printing: { [sol.id]: solAltPrinting.id } };
+    stubViewport(1440);
+    render(<DeckEditor deckId="deck-1" />);
+    await loaded();
+    expect(deckSize()).toBe("99 / 100 · 1 to go");
+    const opened = await openMaybe();
+    fireEvent.click(within(opened).getByRole("button", { name: "Move Sol Ring to the deck" }));
+    const toastEl = await toastOf("Moved Sol Ring to the deck");
+    expect(deckSize()).toBe("100 / 100 cards");
+    expect(maybeTrigger().textContent).toBe("Maybe0");
+    await save();
+    expect(lastPut()).toEqual([
+      "commander:Kozilek, the Great Distortion ×1",
+      "main:Mana Vault ×1",
+      "main:Wastes ×97",
+      "main:Sol Ring ×1",
+    ]);
+    // The printing the Maybe row chose comes with it.
+    expect(lastPutEntries().find((e) => e.cardId === sol.id)?.printingId).toBe(solAltPrinting.id);
+    fireEvent.click(within(toastEl).getByRole("button", { name: "Undo" }));
+    await save();
+    expect(lastPut()).toEqual([
+      "commander:Kozilek, the Great Distortion ×1",
+      "main:Mana Vault ×1",
+      "main:Wastes ×97",
+      "maybeboard:Sol Ring ×1",
+    ]);
+    expect(deckSize()).toBe("99 / 100 · 1 to go");
+  });
+
+  it("at the maximum a Maybe row's move is Swap in…: the swap takes the card out of Maybe, and one Undo puts the cut card and the Maybe row back", async () => {
+    state.maybe = [sol];
+    stubViewport(1440);
+    render(<DeckEditor deckId="deck-1" />);
+    await loaded();
+    const opened = await openMaybe();
+    expect(within(opened).queryByRole("button", { name: "Move Sol Ring to the deck" })).toBeNull();
+    fireEvent.click(within(opened).getByRole("button", { name: "Swap in Sol Ring…" }));
+    const sheetEl = await pollFor(() => screen.queryByRole("dialog", { name: "Swap in Sol Ring" }));
+    fireEvent.click(within(sheetEl).getByRole("button", { name: "Swap Mana Vault for Sol Ring" }));
+    const toastEl = await toastOf("Swapped Mana Vault → Sol Ring");
+    expect(within(toastEl).getByText("Taken out of Maybe.")).toBeTruthy();
+    expect(deckSize()).toBe("100 / 100 cards");
+    await save();
+    expect(lastPut()).toEqual([
+      "commander:Kozilek, the Great Distortion ×1",
+      "main:Sol Ring ×1",
+      "main:Wastes ×98",
+    ]);
+    fireEvent.click(within(toastEl).getByRole("button", { name: "Undo" }));
+    await save();
+    expect(lastPut()).toEqual([
+      "commander:Kozilek, the Great Distortion ×1",
+      "main:Mana Vault ×1",
+      "main:Wastes ×98",
+      "maybeboard:Sol Ring ×1",
+    ]);
+  });
+
+  it("a search add of a parked card takes it out of Maybe and says so; Undo puts it back in Maybe", async () => {
+    state = { wastes: 97, maybe: [sol] };
+    stubViewport(1440);
+    render(<DeckEditor deckId="deck-1" />);
+    await loaded();
+    const input = screen.getByRole("combobox", { name: "Card search" });
+    fireEvent.change(input, { target: { value: "sol" } });
+    await settle();
+    // The row says the card is parked; the deck's ×N reads the deck alone.
+    const option = screen.getByRole("option", { name: /Sol Ring/ });
+    expect(within(option).getByText("In Maybe")).toBeTruthy();
+    expect(within(option).queryByText(/×\d/)).toBeNull();
+    fireEvent.click(within(option).getByRole("button", { name: "Add Sol Ring to Main deck" }));
+    const toastEl = await toastOf("Added Sol Ring");
+    expect(within(toastEl).getByText("Taken out of Maybe.")).toBeTruthy();
+    await save();
+    expect(lastPut()).toEqual([
+      "commander:Kozilek, the Great Distortion ×1",
+      "main:Mana Vault ×1",
+      "main:Wastes ×97",
+      "main:Sol Ring ×1",
+    ]);
+    fireEvent.click(within(toastEl).getByRole("button", { name: "Undo" }));
+    await save();
+    expect(lastPut()).toEqual([
+      "commander:Kozilek, the Great Distortion ×1",
+      "main:Mana Vault ×1",
+      "main:Wastes ×97",
+      "maybeboard:Sol Ring ×1",
+    ]);
+  });
+
+  it("a Suggestions Add of a parked card moves it into the deck, and its Undo puts it back in Maybe", async () => {
+    state = { wastes: 97, maybe: [sol] };
+    stubViewport(1440);
+    render(<DeckEditor deckId="deck-1" />);
+    await loaded();
+    await suggestions();
+    expect(screen.getByText("In Maybe")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Add Sol Ring to the deck" }));
+    const toastEl = await toastOf("Added Sol Ring");
+    expect(within(toastEl).getByText("Taken out of Maybe.")).toBeTruthy();
+    expect(screen.getByText("In deck ✓")).toBeTruthy();
+    await save();
+    expect(lastPut()).toContain("main:Sol Ring ×1");
+    expect(lastPut()).not.toContain("maybeboard:Sol Ring ×1");
+    fireEvent.click(within(toastEl).getByRole("button", { name: "Undo" }));
+    await save();
+    expect(lastPut()).toContain("maybeboard:Sol Ring ×1");
+    expect(lastPut()).not.toContain("main:Sol Ring ×1");
+  });
+
+  it("Remove from Maybe toasts Removed X from Maybe · Undo, which puts it back", async () => {
+    state.maybe = [sol, signet];
+    stubViewport(1440);
+    render(<DeckEditor deckId="deck-1" />);
+    await loaded();
+    const opened = await openMaybe();
+    fireEvent.click(within(opened).getByRole("button", { name: "Remove Sol Ring from Maybe" }));
+    const toastEl = await toastOf("Removed Sol Ring from Maybe");
+    expect(maybeTrigger().textContent).toBe("Maybe1");
+    await save();
+    expect(lastPut().filter((e) => e.startsWith("maybeboard:"))).toEqual([
+      "maybeboard:Arcane Signet ×1",
+    ]);
+    fireEvent.click(within(toastEl).getByRole("button", { name: "Undo" }));
+    expect(maybeTrigger().textContent).toBe("Maybe2");
+    await save();
+    // Back where it stood: first of the two.
+    expect(lastPut().filter((e) => e.startsWith("maybeboard:"))).toEqual([
+      "maybeboard:Sol Ring ×1",
+      "maybeboard:Arcane Signet ×1",
+    ]);
+  });
+
+  it("phone: a Maybe card's sheet offers Move to deck and Remove from Maybe, never the deck's Add or Remove, and no tag editor", async () => {
+    state = { wastes: 97, maybe: [sol] };
+    stubViewport(375);
+    render(<DeckEditor deckId="deck-1" />);
+    await loaded();
+    const opened = await openMaybe();
+    fireEvent.click(within(opened).getByRole("button", { name: "Sol Ring" }));
+    await act(async () => {});
+    const sheet = screen.getByRole("dialog", { name: "Sol Ring" });
+    expect(within(sheet).getByRole("button", { name: "Move to deck" })).toBeTruthy();
+    expect(within(sheet).getByRole("button", { name: "Remove from Maybe" })).toBeTruthy();
+    expect(within(sheet).queryByRole("button", { name: "Add" })).toBeNull();
+    expect(within(sheet).queryByRole("button", { name: "Remove" })).toBeNull();
+    expect(within(sheet).queryByRole("textbox", { name: "Add tag" })).toBeNull();
+    fireEvent.click(within(sheet).getByRole("button", { name: "Move to deck" }));
+    await toastOf("Moved Sol Ring to the deck");
+    expect(deckSize()).toContain("100 / 100");
+  });
+
+  it("the Card tab gives a deck card the tag editor and a Maybe card none", async () => {
+    state.maybe = [sol];
+    stubViewport(1440);
+    render(<DeckEditor deckId="deck-1" />);
+    await loaded();
+    fireEvent.click(within(section("Deck list")).getByRole("button", { name: "Mana Vault" }));
+    await act(async () => {});
+    expect(screen.getByRole("textbox", { name: "Add tag" })).toBeTruthy();
+    const opened = await openMaybe();
+    fireEvent.click(within(opened).getByRole("button", { name: "Sol Ring" }));
+    await act(async () => {});
+    const tools = section("Card detail and suggestions");
+    expect(within(tools).getByRole("heading", { name: "Sol Ring" })).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: "Add tag" })).toBeNull();
+  });
+
+  it("Import: a pasted Maybeboard lands in Maybe beside the 100, and the export leaves it out", async () => {
+    stubViewport(1440);
+    render(<DeckEditor deckId="deck-1" />);
+    await loaded();
+    const trigger = screen.getByRole("button", { name: "More" });
+    fireEvent.pointerDown(trigger, { pointerType: "mouse", button: 0 });
+    fireEvent.mouseDown(trigger, { button: 0 });
+    fireEvent.click(trigger, { button: 0 });
+    const menu = await pollFor(() => screen.queryByRole("menu", { name: "More" }));
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Import" }));
+    const dialog = await pollFor(() => screen.queryByRole("dialog", { name: "Import decklist" }));
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Decklist text" }), {
+      target: { value: "Maybeboard\n1 Sol Ring\n1 Lightning Bolt" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    fireEvent.click(await pollFor(() => screen.queryByRole("button", { name: "Add to deck" })));
+    await toastOf("Import applied");
+    expect(deckSize()).toBe("100 / 100 cards");
+    expect(maybeTrigger().textContent).toBe("Maybe2");
+    await save();
+    expect(lastPut().filter((e) => e.startsWith("maybeboard:"))).toEqual([
+      "maybeboard:Sol Ring ×1",
+      "maybeboard:Lightning Bolt ×1",
+    ]);
+    // Export carries the deck alone (the owner's decision 3).
+    fireEvent.pointerDown(trigger, { pointerType: "mouse", button: 0 });
+    fireEvent.mouseDown(trigger, { button: 0 });
+    fireEvent.click(trigger, { button: 0 });
+    const again = await pollFor(() => screen.queryByRole("menu", { name: "More" }));
+    fireEvent.click(within(again).getByRole("menuitem", { name: "Export" }));
+    const exported = await pollFor(() =>
+      screen.queryByRole("textbox", { name: "Exported decklist" }),
+    );
+    const text = (exported as HTMLTextAreaElement).value;
+    expect(text).toContain("98 Wastes");
+    expect(text).not.toContain("Sol Ring");
+    expect(text).not.toContain("Lightning Bolt");
+  });
+
+  it("a whole-list change that brings a parked card in (Autofill's Add) takes it out of Maybe; its Undo restores the old list whole", async () => {
+    state = { wastes: 97, maybe: [sol] };
+    const evidence = {
+      source: "edhrec_rank",
+      why: "A Commander staple in EDHREC decklists",
+      with: [],
+      howOften: null,
+      confidence: "high",
+    };
+    const shell = {
+      game: "mtg",
+      format: "commander",
+      seed: 7,
+      picks: [
+        {
+          cardId: sol.id,
+          name: "Sol Ring",
+          zone: "main",
+          qty: 1,
+          group: "curve",
+          tier: "locked",
+          score: 0.9,
+          cheapestUsd: "1.20",
+          evidence: [evidence],
+        },
+      ],
+      groups: [{ id: "curve", label: "Mana value 1", picks: 1 }],
+      notes: [],
+      totals: { picks: 1, estUsd: 1.2, unpriced: 0 },
+      issues: [],
+      cards: [kozilek, sol],
+    };
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) =>
+      String(input) === "/api/decks/autofill"
+        ? { ...ok(shell), headers: new Headers() }
+        : maybeRoute(input, init),
+    );
+    stubViewport(1440);
+    render(<DeckEditor deckId="deck-1" />);
+    await loaded();
+    const trigger = screen.getByRole("button", { name: "More" });
+    fireEvent.pointerDown(trigger, { pointerType: "mouse", button: 0 });
+    fireEvent.mouseDown(trigger, { button: 0 });
+    fireEvent.click(trigger, { button: 0 });
+    const menu = await pollFor(() => screen.queryByRole("menu", { name: "More" }));
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Autofill…" }));
+    fireEvent.click(await pollFor(() => screen.queryByRole("button", { name: "Add 1 card" })));
+    const toastEl = await toastOf("Added 1 card");
+    expect(deckSize()).toBe("100 / 100 cards");
+    expect(maybeTrigger().textContent).toBe("Maybe0");
+    await save();
+    expect(lastPut()).toContain("main:Sol Ring ×1");
+    expect(lastPut()).not.toContain("maybeboard:Sol Ring ×1");
+    fireEvent.click(within(toastEl).getByRole("button", { name: "Undo" }));
+    await save();
+    expect(lastPut()).toContain("maybeboard:Sol Ring ×1");
+    expect(lastPut()).not.toContain("main:Sol Ring ×1");
+  });
+
+  it("an import that puts a parked card in the deck takes it out of Maybe; the toast's Undo restores the old list whole", async () => {
+    state = { wastes: 97, maybe: [sol] };
+    stubViewport(1440);
+    render(<DeckEditor deckId="deck-1" />);
+    await loaded();
+    const trigger = screen.getByRole("button", { name: "More" });
+    fireEvent.pointerDown(trigger, { pointerType: "mouse", button: 0 });
+    fireEvent.mouseDown(trigger, { button: 0 });
+    fireEvent.click(trigger, { button: 0 });
+    const menu = await pollFor(() => screen.queryByRole("menu", { name: "More" }));
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Import" }));
+    const dialog = await pollFor(() => screen.queryByRole("dialog", { name: "Import decklist" }));
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Decklist text" }), {
+      target: { value: "1 Sol Ring" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    fireEvent.click(await pollFor(() => screen.queryByRole("button", { name: "Add to deck" })));
+    const toastEl = await toastOf("Import applied");
+    expect(deckSize()).toBe("100 / 100 cards");
+    expect(maybeTrigger().textContent).toBe("Maybe0");
+    await save();
+    expect(lastPut()).toContain("main:Sol Ring ×1");
+    expect(lastPut()).not.toContain("maybeboard:Sol Ring ×1");
+    fireEvent.click(within(toastEl).getByRole("button", { name: "Undo" }));
+    await save();
+    expect(lastPut()).toContain("maybeboard:Sol Ring ×1");
+    expect(lastPut()).not.toContain("main:Sol Ring ×1");
   });
 });

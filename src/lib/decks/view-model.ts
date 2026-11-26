@@ -48,8 +48,9 @@ export interface DeckGroup<E extends ViewEntry, C extends ViewCard> {
 /**
  * Entries in the format's leader zone(s), the rest of the playable list, and
  * the entries set aside in zones that don't count toward the size (DECK-TOKENS:
- * Magic's Tokens) — so `rest` is the deck as played everywhere it's read (the
- * groups, the sample hand, ambient art) and `aside` is the token list.
+ * Magic's Tokens; MAYBE-LIST: Magic's Maybe) — so `rest` is the deck as played
+ * everywhere it's read (the groups, the sample hand, ambient art) and `aside`
+ * is the token and Maybe lists, each section taking its own zone's rows.
  */
 export function splitLeaderEntries<E extends { zone: string }>(
   entries: readonly E[],

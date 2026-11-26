@@ -17,10 +17,15 @@
  * `announce: false` (Y6a — Suggestions, whose adds the editor toasts as
  * "Added X · Undo"): a success says nothing here, so nothing announces
  * twice; a failure still lands on the panel's live line.
+ *
+ * MAYBE-LIST: `onMaybe` gives a second action over the same resolve and
+ * cache — Suggestions' Maybe button, `maybe(target)` — with its own pending
+ * card, so a row's Add and Maybe never both read "Adding…".
  */
 import { useRef, useState } from "react";
 
 import { toEditorCard, type CardWire, type EditorCard } from "@/lib/decks/editor-state";
+import { MAYBE_COPY } from "@/lib/decks/maybe-copy";
 import type { FormatDef, GameAdapter } from "@/lib/games/types";
 
 export interface PanelNotice {
@@ -32,14 +37,23 @@ export function useResolvedAdd(
   adapter: GameAdapter,
   format: FormatDef,
   onAdd: (card: EditorCard) => string | undefined,
-  { announce = true }: { announce?: boolean } = {},
+  {
+    announce = true,
+    onMaybe,
+  }: { announce?: boolean; onMaybe?: (card: EditorCard) => string | undefined } = {},
 ) {
   const [pendingAdd, setPendingAdd] = useState<string | null>(null);
+  const [pendingMaybe, setPendingMaybe] = useState<string | null>(null);
   const [notice, setNotice] = useState<PanelNotice | null>(null);
   const cacheRef = useRef(new Map<string, EditorCard>());
 
-  const add = async (target: { cardId: string; name: string }) => {
-    setPendingAdd(target.cardId);
+  const run = async (
+    target: { cardId: string; name: string },
+    act: (card: EditorCard) => string | undefined,
+    setPending: (cardId: string | null) => void,
+    done: string,
+  ) => {
+    setPending(target.cardId);
     setNotice(null);
     try {
       let card = cacheRef.current.get(target.cardId);
@@ -58,18 +72,24 @@ export function useResolvedAdd(
         card = toEditorCard(match);
         cacheRef.current.set(target.cardId, card);
       }
-      const error = onAdd(card);
+      const error = act(card);
       if (error) setNotice({ text: error, tone: "err" });
-      else if (announce) setNotice({ text: `Added ${target.name}`, tone: "ok" });
+      else if (announce) setNotice({ text: done, tone: "ok" });
     } catch (err) {
       setNotice({
         text: err instanceof Error ? err.message : "Add failed. Check your connection.",
         tone: "err",
       });
     } finally {
-      setPendingAdd(null);
+      setPending(null);
     }
   };
 
-  return { pendingAdd, notice, add };
+  const add = (target: { cardId: string; name: string }) =>
+    run(target, onAdd, setPendingAdd, `Added ${target.name}`);
+  const maybe = async (target: { cardId: string; name: string }) => {
+    if (onMaybe) await run(target, onMaybe, setPendingMaybe, MAYBE_COPY.added(target.name));
+  };
+
+  return { pendingAdd, pendingMaybe, notice, add, maybe };
 }

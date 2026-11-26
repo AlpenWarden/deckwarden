@@ -1,6 +1,7 @@
 /**
  * Client-side persistence for the deck-view toggles (P1.3): view mode, group
- * key, sort key — and whether the Tokens section is open (DECK-TOKENS). Pure
+ * key, sort key — and whether the Tokens section is open (DECK-TOKENS), and
+ * the Maybe section (MAYBE-LIST). Pure
  * UI preference — the deck itself stays server-side
  * (CLAUDE.md), so localStorage is the right home. One global preference, not
  * per-deck: how you like reading decks doesn't change per deck.
@@ -21,6 +22,8 @@ export interface DeckViewPrefs {
   sortBy?: SortKey;
   /** The editor's Tokens section open (DECK-TOKENS); absent = closed. */
   tokensOpen?: boolean;
+  /** The editor's Maybe section open (MAYBE-LIST); absent = closed, the default the sketch set. */
+  maybeOpen?: boolean;
 }
 
 const KEY = "deckwarden:deck-view";
@@ -44,6 +47,7 @@ export function parseViewPrefs(raw: string | null): DeckViewPrefs {
     if (groupBy) prefs.groupBy = groupBy;
     if (sortBy) prefs.sortBy = sortBy;
     if (typeof record.tokensOpen === "boolean") prefs.tokensOpen = record.tokensOpen;
+    if (typeof record.maybeOpen === "boolean") prefs.maybeOpen = record.maybeOpen;
     return prefs;
   } catch {
     return {};

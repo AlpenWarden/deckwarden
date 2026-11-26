@@ -308,7 +308,10 @@ export function HistoryDialog({
   // The screen's list against the newest version's: the same cards, said before a save.
   const newest = list?.versions[0];
   const unchangedSince =
-    newest && list.latestListHash !== null && list.latestListHash === playableListHash(entries)
+    newest &&
+    list.latestListHash !== null &&
+    // MAYBE-LIST: with the format, the hash leaves Maybe out (a Maybe edit is no card change).
+    list.latestListHash === playableListHash(entries, format)
       ? newest.version
       : null;
 

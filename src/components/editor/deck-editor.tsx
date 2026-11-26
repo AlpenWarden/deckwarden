@@ -234,10 +234,15 @@ import { leaderDenorm } from "@/lib/decks/cards";
 import {
   addCard,
   deckSizeCount,
+  enteredDeck,
+  leaveMaybe,
+  maybeCardIds,
   mergeEntries,
+  playableQty,
   removeCard,
   replaceLeader,
   restoreEntry,
+  restoreRows,
   setPrinting,
   setQty,
   setTags,
@@ -249,6 +254,7 @@ import {
   type EditorCard,
   type EditorEntry,
   type EditResult,
+  type TakenRow,
 } from "@/lib/decks/editor-state";
 import type { ForkCredit } from "@/lib/decks/fork-credit";
 import {
@@ -272,7 +278,8 @@ import type { LogResult } from "@/lib/journal/games";
 import type { ImportOutcome } from "@/lib/decks/import";
 import { clearPickIntent, pickIntentFor, writePickIntent } from "@/lib/decks/leader-pick-intent";
 import { hasLeader, snapshotBody } from "@/lib/decks/panel-view";
-import { playableEntries, tokenZoneOf } from "@/lib/decks/playable";
+import { MAYBE_COPY } from "@/lib/decks/maybe-copy";
+import { isPlayableZone, maybeZoneOf, playableEntries, tokenZoneOf } from "@/lib/decks/playable";
 import { addMorePhrase, deckProgress } from "@/lib/decks/progress";
 import { startDoors } from "@/lib/decks/start-doors";
 import {
@@ -365,6 +372,26 @@ const PHONE_STRIP_CLASS =
 const PHONE_TAB_CLASS = "flex-[1_0_auto] px-1 text-[0.8125rem] pointer-coarse:min-w-11";
 
 /** Write headers: token when this browser holds one, else the session cookie authenticates. */
+/**
+ * The editor's Maybe rule (MAYBE-LIST): a card that goes into a deck zone
+ * leaves Maybe. `list` without the Maybe rows of `cardIds` when `zoneId`
+ * is one of the deck's (playable) zones, and the rows it took with their
+ * starting indexes — the edit then adds to the list it returns, and its
+ * Undo puts them back with restoreRows. Taken BEFORE the add, so a deck at
+ * MAX_ENTRIES lines can still move a card in, and an add that fails takes
+ * nothing.
+ */
+function leaveForDeck(
+  format: FormatDef,
+  list: readonly EditorEntry[],
+  zoneId: string,
+  cardIds: readonly string[],
+): { entries: EditorEntry[]; left: TakenRow[] } {
+  return isPlayableZone(format, zoneId)
+    ? leaveMaybe(list, format, cardIds)
+    : { entries: [...list], left: [] };
+}
+
 function writeHeaders(deckId: string): Record<string, string> {
   const token = getDeckToken(deckId);
   return { "Content-Type": "application/json", ...(token ? { [DECK_TOKEN_HEADER]: token } : {}) };
@@ -1323,6 +1350,17 @@ export function DeckEditor({
   const format = load.state === "ready" ? load.format : null;
   const adapter = load.state === "ready" ? load.adapter : null;
 
+  // An add's or a swap's Undo (MAYBE-LIST): the deck side back, then the
+  // Maybe rows the edit took, each where it stood. A deck side that can't
+  // come back (a zone filled meanwhile) leaves the list as it is, as before.
+  const applyUndo = useCallback(
+    (back: EditResult, rows: readonly TakenRow[]) => {
+      if (back.error || !format) return;
+      applyEdit(rows.length > 0 ? restoreRows(back.entries, format, rows) : back);
+    },
+    [format, applyEdit],
+  );
+
   // The editor's global keys (R3, C5): ONE listener, off while any dialog is
   // open. `/` focuses search through the pane's handle — the same handle the
   // leader zone's "Choose commander / leader" uses; `?` opens the sheet.
@@ -1516,20 +1554,25 @@ export function DeckEditor({
       // Leader replace (R3 builder fix): a DIFFERENT card into a full max-1
       // leader zone swaps the occupant out, with Undo. Magic's max-2 zone
       // never takes this path — addCard's "full" message stands there.
+      // MAYBE-LIST: the card leaves Maybe on its way into the deck.
+      const { entries: from, left } = leaveForDeck(format, before, zoneId, [card.id]);
+      const leftNote = left.length > 0 ? MAYBE_COPY.leftMaybe : undefined;
       if (
         zone.isLeaderZone &&
         zone.max === 1 &&
         previousQty === 0 &&
         zoneQty(before, zoneId) >= 1
       ) {
-        const result = replaceLeader(before, format, zoneId, card.id);
+        const result = replaceLeader(from, format, zoneId, card.id);
         const error = applyEdit(result);
         if (error) return error;
         const previousId = result.replaced;
         if (previousId) {
           const previousName = cards.get(previousId)?.name ?? `the previous ${zone.label}`;
-          notify(`Replaced ${previousName} with ${card.name}`, () =>
-            applyEdit(replaceLeader(entriesRef.current, format, zoneId, previousId)),
+          notify(
+            `Replaced ${previousName} with ${card.name}`,
+            () => applyUndo(replaceLeader(entriesRef.current, format, zoneId, previousId), left),
+            leftNote,
           );
         }
         // A leader add is a destination, not a step in a streak (P2.8b): a
@@ -1538,16 +1581,18 @@ export function DeckEditor({
         if (tier === "phone") setActivePane("deck");
         return undefined;
       }
-      const error = applyEdit(addCard(before, format, zoneId, card.id, qty));
+      const error = applyEdit(addCard(from, format, zoneId, card.id, qty));
       if (error) return error;
       if (zone.isLeaderZone && tier === "phone") setActivePane("deck");
       const where = zone.isLeaderZone ? ` as ${adapter.display.leaderNoun}` : "";
-      notify(`Added ${qty > 1 ? `${qty}× ` : ""}${card.name}${where}`, () =>
-        applyEdit(setQty(entriesRef.current, format, zoneId, card.id, previousQty)),
+      notify(
+        `Added ${qty > 1 ? `${qty}× ` : ""}${card.name}${where}`,
+        () => applyUndo(setQty(entriesRef.current, format, zoneId, card.id, previousQty), left),
+        leftNote,
       );
       return undefined;
     },
-    [format, adapter, cards, applyEdit, showCard, notify, tier],
+    [format, adapter, cards, applyEdit, applyUndo, showCard, notify, tier],
   );
 
   // The saved-deck half of the browse round trip (W4, D3): apply ?leader=
@@ -1601,14 +1646,20 @@ export function DeckEditor({
   // Adds from the right-pane panels (Suggestions P3.2, Combo Radar P3.3):
   // same edit path as handleAdd, but the preview updates without stealing
   // the tab — the user is mid-scan.
+  // MAYBE-LIST: the card leaves Maybe on its way in (`leave`, the default);
+  // the combo pieces' batch takes every piece's Maybe row once, up front.
   const handlePanelAdd = useCallback(
-    (card: EditorCard): string | undefined => {
-      if (!format) return "Deck not loaded yet";
+    (card: EditorCard, leave = true): { error?: string; left: TakenRow[] } => {
+      if (!format) return { error: "Deck not loaded yet", left: [] };
       const mainZone = format.zones.find((z) => !z.isLeaderZone);
-      if (!mainZone) return "This format has no main zone";
+      if (!mainZone) return { error: "This format has no main zone", left: [] };
       setCards((prev) => (prev.has(card.id) ? prev : new Map(prev).set(card.id, card)));
       setPreview(card);
-      return applyEdit(addCard(entriesRef.current, format, mainZone.id, card.id, 1));
+      const { entries: from, left } = leave
+        ? leaveForDeck(format, entriesRef.current, mainZone.id, [card.id])
+        : { entries: entriesRef.current, left: [] };
+      const error = applyEdit(addCard(from, format, mainZone.id, card.id, 1));
+      return { error, left: error ? [] : left };
     },
     [format, applyEdit],
   );
@@ -1627,14 +1678,17 @@ export function DeckEditor({
       const mainZone = format?.zones.find((z) => !z.isLeaderZone);
       const previousQty =
         entriesRef.current.find((e) => e.zone === mainZone?.id && e.cardId === card.id)?.qty ?? 0;
-      const error = handlePanelAdd(card);
+      const { error, left } = handlePanelAdd(card);
       if (error || !format || !mainZone) return error;
-      notify(`Added ${card.name}`, () =>
-        applyEdit(setQty(entriesRef.current, format, mainZone.id, card.id, previousQty)),
+      notify(
+        `Added ${card.name}`,
+        () =>
+          applyUndo(setQty(entriesRef.current, format, mainZone.id, card.id, previousQty), left),
+        left.length > 0 ? MAYBE_COPY.leftMaybe : undefined,
       );
       return undefined;
     },
-    [format, handlePanelAdd, notify, applyEdit, swapInOn, atMax, openSwapIn],
+    [format, handlePanelAdd, notify, applyUndo, swapInOn, atMax, openSwapIn],
   );
 
   // A combo's pieces from the Combo Radar (Y6b, LATER row 179): each one
@@ -1651,22 +1705,34 @@ export function DeckEditor({
       let firstError: string | undefined;
       for (const card of cards) {
         const previousQty = qtyOf(card.id);
-        const error = handlePanelAdd(card);
+        const { error } = handlePanelAdd(card, false);
         if (error) firstError ??= error;
         else added.push({ cardId: card.id, previousQty });
       }
+      // MAYBE-LIST: the pieces that landed leave Maybe in one step after the
+      // adds — which append, so the rows' indexes are the batch's starting ones.
+      const { entries: next, left } = leaveMaybe(
+        entriesRef.current,
+        format,
+        added.map((a) => a.cardId),
+      );
+      if (left.length > 0) applyEdit({ entries: next });
       if (announce && added.length > 0) {
-        notify(`Added ${added.length} combo piece${added.length === 1 ? "" : "s"}`, () => {
-          let entries = entriesRef.current;
-          for (const a of added) {
-            entries = setQty(entries, format, mainZone.id, a.cardId, a.previousQty).entries;
-          }
-          applyEdit({ entries });
-        });
+        notify(
+          `Added ${added.length} combo piece${added.length === 1 ? "" : "s"}`,
+          () => {
+            let entries = entriesRef.current;
+            for (const a of added) {
+              entries = setQty(entries, format, mainZone.id, a.cardId, a.previousQty).entries;
+            }
+            applyUndo({ entries }, left);
+          },
+          left.length > 0 ? MAYBE_COPY.leftMaybe : undefined,
+        );
       }
       return firstError;
     },
-    [format, handlePanelAdd, notify, applyEdit],
+    [format, handlePanelAdd, notify, applyEdit, applyUndo],
   );
 
   // Swap Lab (Y7a, WAVE4 D8): one copy out, one in (swapCard), so the
@@ -1683,7 +1749,9 @@ export function DeckEditor({
       if (!format || !mainZone) return "Deck not loaded yet";
       const before = entriesRef.current;
       const index = before.findIndex((e) => e.zone === mainZone.id && e.cardId === out.id);
-      const result = swapCard(before, format, mainZone.id, out.id, incoming.id);
+      // MAYBE-LIST: the incoming card leaves Maybe (a Maybe row's Swap in…, or any swap).
+      const { entries: from, left } = leaveForDeck(format, before, mainZone.id, [incoming.id]);
+      const result = swapCard(from, format, mainZone.id, out.id, incoming.id);
       if (result.error || index < 0) return result.error ?? "That card isn't in the deck anymore";
       const removed = before[index];
       const previousQty =
@@ -1693,13 +1761,19 @@ export function DeckEditor({
       if (error) return error;
       if (quiet) setPreview(incoming);
       else showCard(incoming);
-      notify(`Swapped ${out.name} → ${incoming.name}`, () => {
-        const back = setQty(entriesRef.current, format, mainZone.id, incoming.id, previousQty);
-        applyEdit(restoreEntry(back.entries, format, removed, index));
-      });
+      notify(
+        `Swapped ${out.name} → ${incoming.name}`,
+        // The old row and the Maybe row, each back where it stood (restoreRows orders them).
+        () =>
+          applyUndo(setQty(entriesRef.current, format, mainZone.id, incoming.id, previousQty), [
+            { entry: removed, index },
+            ...left,
+          ]),
+        left.length > 0 ? MAYBE_COPY.leftMaybe : undefined,
+      );
       return undefined;
     },
-    [format, applyEdit, showCard, notify],
+    [format, applyEdit, applyUndo, showCard, notify],
   );
   const handleSwap = useCallback(
     (out: EditorCard, wire: CardWire) => swapOne(out, toEditorCard(wire)),
@@ -1758,7 +1832,11 @@ export function DeckEditor({
       const removed = before[index];
       applyEdit({ entries: removeCard(before, zoneId, cardId) });
       const name = cards.get(cardId)?.name ?? "the card";
-      notify(`Removed ${removed.qty > 1 ? `${removed.qty}× ` : ""}${name}`, () => {
+      const title =
+        maybeZoneOf(format)?.id === zoneId
+          ? MAYBE_COPY.removed(name, removed.qty)
+          : `Removed ${removed.qty > 1 ? `${removed.qty}× ` : ""}${name}`;
+      notify(title, () => {
         const error = applyEdit(restoreEntry(entriesRef.current, format, removed, index));
         if (error) {
           toast.add({ title: `Couldn't undo: ${error}.`, type: "error", timeout: TOAST_MS });
@@ -1893,7 +1971,13 @@ export function DeckEditor({
         for (const card of newCards) if (!next.has(card.id)) next.set(card.id, toEditorCard(card));
         return next;
       });
-      const merged = mergeEntries(nextEntries);
+      // MAYBE-LIST: every card the change brought into the deck leaves Maybe
+      // (Import, Fit, Swap to fit, Upgrade toward, Autofill's Add); the Undo
+      // restores the previous list whole, its Maybe rows with it.
+      const folded = mergeEntries(nextEntries);
+      const merged = format
+        ? leaveMaybe(folded, format, enteredDeck(previous, folded, format)).entries
+        : folded;
       entriesRef.current = merged;
       setEntries(merged);
       markDirty();
@@ -1907,7 +1991,7 @@ export function DeckEditor({
         description,
       );
     },
-    [markDirty, notify],
+    [format, markDirty, notify],
   );
 
   // Import applies as one whole-list swap: the pure applyImport already
@@ -1931,6 +2015,73 @@ export function DeckEditor({
       return handleAdd(token, zone.id, 1);
     },
     [format, handleAdd],
+  );
+
+  // MAYBE-LIST: a Suggestions row's Maybe. The card is parked in the
+  // format's Maybe zone, which counts toward no size, so it is offered at
+  // any size (the owner's decision 1: beside "Swap in…" at the maximum).
+  // A card the deck plays, or one already parked, is refused with its
+  // sentence; the toast's Undo takes it out again.
+  const handleMaybeAdd = useCallback(
+    (card: EditorCard): string | undefined => {
+      if (!format) return "Deck not loaded yet";
+      const zone = maybeZoneOf(format);
+      if (!zone) return "This deck has no Maybe list";
+      const before = entriesRef.current;
+      if (before.some((e) => e.cardId === card.id && isPlayableZone(format, e.zone))) {
+        return MAYBE_COPY.alreadyInDeck;
+      }
+      if (before.some((e) => e.cardId === card.id && e.zone === zone.id)) {
+        return MAYBE_COPY.alreadyInMaybe;
+      }
+      setCards((prev) => (prev.has(card.id) ? prev : new Map(prev).set(card.id, card)));
+      setPreview(card);
+      const error = applyEdit(addCard(before, format, zone.id, card.id, 1));
+      if (error) return error;
+      notify(MAYBE_COPY.added(card.name), () =>
+        applyEdit(setQty(entriesRef.current, format, zone.id, card.id, 0)),
+      );
+      return undefined;
+    },
+    [format, applyEdit, notify],
+  );
+
+  // MAYBE-LIST: a Maybe row's "Move to deck" (the section's row, the card
+  // sheet). Below the deck's maximum the row's copies go to the main list,
+  // with the printing the row chose when the deck had no row of the card,
+  // and the row leaves Maybe: one toast, one Undo for both. At the maximum
+  // it is "Swap in…" (Y7b's sheet), whose swap takes it out (swapOne).
+  const handleMoveToDeck = useCallback(
+    (cardId: string): string | undefined => {
+      if (!format) return "Deck not loaded yet";
+      const zone = maybeZoneOf(format);
+      const mainZone = format.zones.find((z) => !z.isLeaderZone);
+      const card = cards.get(cardId);
+      const before = entriesRef.current;
+      const row = zone && before.find((e) => e.zone === zone.id && e.cardId === cardId);
+      if (!zone || !mainZone || !card || !row) return "That card isn't in Maybe anymore";
+      if (swapInOn && atMax(before)) {
+        openSwapIn(card, 1, "panel");
+        return undefined;
+      }
+      const previousQty =
+        before.find((e) => e.zone === mainZone.id && e.cardId === cardId)?.qty ?? 0;
+      const { entries: from, left } = leaveMaybe(before, format, [cardId]);
+      const added = addCard(from, format, mainZone.id, cardId, row.qty);
+      if (added.error) return added.error;
+      const next =
+        previousQty === 0 && row.printingId
+          ? setPrinting(added.entries, cardId, row.printingId)
+          : added.entries;
+      const error = applyEdit({ entries: next });
+      if (error) return error;
+      setPreview(card);
+      notify(MAYBE_COPY.moved(card.name, row.qty), () =>
+        applyUndo(setQty(entriesRef.current, format, mainZone.id, cardId, previousQty), left),
+      );
+      return undefined;
+    },
+    [format, cards, applyEdit, applyUndo, notify, swapInOn, atMax, openSwapIn],
   );
 
   // The empty deck state's autofill door (W9b): never from the More menu,
@@ -2213,21 +2364,31 @@ export function DeckEditor({
     if (deckId) showLoggedToast(deckId, logged);
   }, []);
 
-  const inDeckQty = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const e of entries) counts.set(e.cardId, (counts.get(e.cardId) ?? 0) + e.qty);
-    return counts;
-  }, [entries]);
+  // The copies the DECK holds (MAYBE-LIST: a Maybe card is not in the deck):
+  // the search row's ×N, Suggestions' "In deck ✓" and the Combo Radar's
+  // missing pieces all read it — a piece parked in Maybe is still missing.
+  const inDeckQty = useMemo(
+    () => (format ? playableQty(entries, format) : new Map<string, number>()),
+    [entries, format],
+  );
+  // The cards parked in Maybe: Suggestions' "In Maybe" and the search row's mark.
+  const inMaybe = useMemo(
+    () => (format ? maybeCardIds(entries, format) : new Set<string>()),
+    [entries, format],
+  );
 
   // Tag editing (P2.7): the detail pane edits the previewed card's entry.
   // Prefer a non-leader entry — tags group the main list — but the leader
-  // entry is still taggable when it's all there is.
+  // entry is still taggable when it's all there is. MAYBE-LIST: never a
+  // Maybe entry — a card that sits in Maybe alone gets no tag editor.
   const tagging = useMemo(() => {
     if (!preview || !format) return null;
     const leaderZones = new Set(format.zones.filter((z) => z.isLeaderZone).map((z) => z.id));
+    const maybeId = maybeZoneOf(format)?.id;
+    const tagged = entries.filter((e) => e.zone !== maybeId);
     const entry =
-      entries.find((e) => e.cardId === preview.id && !leaderZones.has(e.zone)) ??
-      entries.find((e) => e.cardId === preview.id);
+      tagged.find((e) => e.cardId === preview.id && !leaderZones.has(e.zone)) ??
+      tagged.find((e) => e.cardId === preview.id);
     if (!entry) return null;
     return {
       tags: entry.tags,
@@ -2603,14 +2764,32 @@ export function DeckEditor({
   // Swap… is the row's Swap Lab sheet. The two sheets close the card sheet
   // first, so neither opens over a card that is about to leave. The sheet
   // itself stays layout: only these are edits.
+  // MAYBE-LIST: a Maybe entry is never the sheet's entry. A card that sits
+  // in Maybe alone gets "Move to deck" ("Swap in…" at the maximum) where
+  // Add would be, and "Remove from Maybe".
+  const maybeZone = maybeZoneOf(load.format);
   const sheetEntry = preview
-    ? (entries.find((e) => e.cardId === preview.id && e.zone !== leaderZone?.id) ??
-      entries.find((e) => e.cardId === preview.id))
+    ? (entries.find(
+        (e) => e.cardId === preview.id && e.zone !== leaderZone?.id && e.zone !== maybeZone?.id,
+      ) ?? entries.find((e) => e.cardId === preview.id && e.zone !== maybeZone?.id))
     : undefined;
+  const sheetMaybe =
+    preview && !sheetEntry && maybeZone
+      ? entries.find((e) => e.cardId === preview.id && e.zone === maybeZone.id)
+      : undefined;
   const sheetActions: SheetActions = {};
   if (preview) {
     const card = preview;
-    if (mainZone && !sheetEntry) {
+    if (mainZone && !sheetEntry && sheetMaybe) {
+      sheetActions.add = {
+        label: deckFull ? "Swap in…" : MAYBE_COPY.move,
+        onClick: () => {
+          if (deckFull) setSheetOpen(false);
+          const error = handleMoveToDeck(card.id);
+          if (error) toast.add({ title: error, type: "error", timeout: TOAST_MS });
+        },
+      };
+    } else if (mainZone && !sheetEntry) {
       sheetActions.add = {
         label: deckFull ? "Swap in…" : "Add",
         onClick: () => {
@@ -2627,6 +2806,10 @@ export function DeckEditor({
     if (sheetEntry) {
       const { zone, cardId } = sheetEntry;
       sheetActions.onRemove = () => handleRemove(zone, cardId);
+    } else if (sheetMaybe) {
+      const { zone, cardId } = sheetMaybe;
+      sheetActions.onRemove = () => handleRemove(zone, cardId);
+      sheetActions.removeLabel = MAYBE_COPY.remove;
     }
     if (canSwapId(card.id)) {
       sheetActions.onSwap = () => {
@@ -2729,9 +2912,11 @@ export function DeckEditor({
                 deckId={liveDeckId}
                 entries={entries}
                 inDeckQty={inDeckQty}
+                inMaybe={inMaybe}
                 saveStatus={autosave.status}
                 active={rightTab === "suggest"}
                 onAdd={handleUndoableAdd}
+                onMaybe={maybeZoneOf(load.format) ? handleMaybeAdd : undefined}
                 ownedAvailable={hasCollection}
                 goals={goals}
                 estimate={estimate}
@@ -3109,6 +3294,7 @@ export function DeckEditor({
           adapter={load.adapter}
           format={load.format}
           inDeckQty={inDeckQty}
+          inMaybe={inMaybe}
           onAdd={handleAdd}
           onPreview={showCard}
           onInspect={inspectCard}
@@ -3167,6 +3353,8 @@ export function DeckEditor({
           hiddenTokens={hiddenTokens}
           onHideToken={handleHideToken}
           onShowTokens={handleShowTokens}
+          onMoveToDeck={handleMoveToDeck}
+          deckFull={deckFull}
         />
       }
       tools={toolsContent}

@@ -42,7 +42,10 @@ export interface ZoneDef {
    * token-catalog objects (`attrs.is_token`, src/lib/cards/tokens.ts) —
    * Magic's Tokens zone. The save route refuses a token anywhere else and a
    * card here; a tokens zone never counts toward the size, so nothing that
-   * reads the playable list (src/lib/decks/playable.ts) sees it.
+   * reads the playable list (src/lib/decks/playable.ts) sees it. MAYBE-LIST:
+   * a zone that counts toward no size, is no leader's and holds cards is the
+   * format's Maybe (`maybeZoneOf`) — no field of its own, found by that shape,
+   * at most one per format (a test pins it).
    */
   holds?: "cards" | "tokens";
 }

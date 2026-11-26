@@ -37,11 +37,13 @@ const { loadDeckOgData } = await import("./data");
 
 const DECK_ID = "44444444-4444-4444-8444-444444444444";
 const LEADER = "55555555-5555-4555-8555-555555555555";
-const row = (visibility: string) => [
+/** The decks row in its select's order: id, name, visibility, gameId, formatId, leaderIds, target. */
+const row = (visibility: string, gameId = 1, formatId = 1) => [
   DECK_ID,
   "Azusa, Lost but Seeking",
   visibility,
-  1,
+  gameId,
+  formatId,
   [LEADER],
   3,
 ];
@@ -83,8 +85,27 @@ describe("loadDeckOgData", () => {
       rest.some((sql) => /from "card_identities" where "card_identities"\."id" in/.test(sql)),
     ).toBe(true);
     const cards = calls.find((c) => c.sql.includes('from "deck_cards"'));
-    // DECK-TOKENS: the count, price and curve never read a token.
+    // DECK-TOKENS: the count, price and curve never read a token. MAYBE-LIST:
+    // nor a Maybe card — the read names Commander's playable zones, so a
+    // Maybe list beside the 100 still unfurls as "100 cards".
     expect(cards?.sql).toContain('NOT ("card_identities"."attrs" @> $2::jsonb)');
+    expect(cards?.sql).toContain('"deck_cards"."zone" in ($3, $4)');
+    expect(cards?.params).toEqual([DECK_ID, TOKEN_DOC, "commander", "main"]);
+    expect(cards?.params).not.toContain("maybeboard");
+  });
+
+  it("a One Piece deck reads its leader and main zones (MAYBE-LIST: One Piece has no Maybe)", async () => {
+    deckRow = row("public", 2, 2);
+    await loadDeckOgData("abcdefgh2345");
+    const cards = calls.find((c) => c.sql.includes('from "deck_cards"'));
+    expect(cards?.params).toEqual([DECK_ID, TOKEN_DOC, "leader", "main"]);
+  });
+
+  it("a format the registry can't name reads every non-token row, as before", async () => {
+    deckRow = row("public", 1, 99);
+    await loadDeckOgData("abcdefgh2345");
+    const cards = calls.find((c) => c.sql.includes('from "deck_cards"'));
+    expect(cards?.sql).not.toContain('"deck_cards"."zone" in');
     expect(cards?.params).toEqual([DECK_ID, TOKEN_DOC]);
   });
 

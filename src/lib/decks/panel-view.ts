@@ -56,7 +56,7 @@ export interface SnapshotBody {
  * the leader-zone ids in entry order (the decks row's `leader_ids` order)
  * and every other PLAYABLE entry with its copies (the ranker's curve counts
  * them; DECK-TOKENS: the body carries no zones, so a token here would land
- * in the server's main deck) —
+ * in the server's main deck, and so would a Maybe card, MAYBE-LIST) —
  * built from the same (card, zone, qty) facts deckStateKey keys on, so an
  * unchanged draft never asks twice. `budgetUsd` is the GET's `budget`;
  * absent = no budget. `goals` (Y6a) rides along when there are any.

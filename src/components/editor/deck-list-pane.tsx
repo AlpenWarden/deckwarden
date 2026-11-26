@@ -98,6 +98,15 @@
  * the precon's own list and the list on screen; the line arrives with the
  * precon line, and keeps its height when the first change lands. The Tokens
  * section takes no marks: tokens count toward no size.
+ *
+ * MAYBE-LIST: the format's Maybe zone follows Tokens as the Maybe section
+ * (maybe-section.tsx), closed until opened, its open state kept with the
+ * view preferences; it waits for the first card like Tokens does, unless it
+ * holds one. Its rows are `aside`'s rows of that zone, so nothing in it is
+ * counted, grouped, validated or dealt; "Move to deck" is the editor's
+ * (`onMoveToDeck`, "Swap in…" at the maximum, `deckFull`). A deck with
+ * Maybe cards and none in the deck reads "No cards yet" with a hint that
+ * names Maybe as a way in.
  */
 import { ChevronDownIcon, PlusIcon } from "lucide-react";
 import Link from "next/link";
@@ -108,6 +117,7 @@ import { CompletionRing } from "@/components/deck/completion-ring";
 import { DeckGridView } from "@/components/deck/deck-grid-view";
 import { DeckTextView } from "@/components/deck/deck-text-view";
 import { LeaderZone } from "@/components/deck/leader-zone";
+import { MaybeSection } from "@/components/deck/maybe-section";
 import { SampleHand } from "@/components/deck/sample-hand";
 import { TokensSection } from "@/components/deck/tokens-section";
 import { useTokenFill } from "@/components/deck/use-token-fill";
@@ -128,7 +138,8 @@ import {
   type EditorEntry,
 } from "@/lib/decks/editor-state";
 import { deckProgress, progressLine, toGoPhrase } from "@/lib/decks/progress";
-import { tokenZoneOf } from "@/lib/decks/playable";
+import { MAYBE_COPY } from "@/lib/decks/maybe-copy";
+import { maybeZoneOf, tokenZoneOf } from "@/lib/decks/playable";
 import type { StartDoor } from "@/lib/decks/start-doors";
 import { issueSeverityByCard } from "@/lib/decks/validation";
 import {
@@ -219,6 +230,10 @@ interface DeckListPaneProps {
   /** TOKEN-FILL: hide a derived token / show hidden ones again — the editor's own PATCH. */
   onHideToken?: (key: string) => void;
   onShowTokens?: (keys: string[]) => void;
+  /** MAYBE-LIST: a Maybe row's "Move to deck" — the editor's; absent = the section is read-only. */
+  onMoveToDeck?: (cardId: string) => string | undefined;
+  /** MAYBE-LIST: the deck is at its maximum — the Maybe rows' move is "Swap in…". */
+  deckFull?: boolean;
 }
 
 export function DeckListPane({
@@ -258,6 +273,8 @@ export function DeckListPane({
   hiddenTokens = null,
   onHideToken,
   onShowTokens,
+  onMoveToDeck,
+  deckFull = false,
 }: DeckListPaneProps) {
   // Stored preference wins; absent fields fall back (group to the adapter's
   // default). Read once — this pane only mounts client-side, after deck load.
@@ -268,6 +285,7 @@ export function DeckListPane({
   );
   const [sortBy, setSortBy] = useState<SortKey>(stored.sortBy ?? "name");
   const [tokensOpen, setTokensOpen] = useState(stored.tokensOpen ?? false);
+  const [maybeOpen, setMaybeOpen] = useState(stored.maybeOpen ?? false);
   const [error, setError] = useState<string | null>(null);
 
   // The badge pop (F3): the one row whose quantity grew since the previous
@@ -286,8 +304,9 @@ export function DeckListPane({
     groupBy?: GroupKey;
     sortBy?: SortKey;
     tokensOpen?: boolean;
+    maybeOpen?: boolean;
   }) => {
-    saveViewPrefs({ view, groupBy, sortBy, tokensOpen, ...next });
+    saveViewPrefs({ view, groupBy, sortBy, tokensOpen, maybeOpen, ...next });
   };
 
   const total = deckSizeCount(entries, format);
@@ -305,6 +324,12 @@ export function DeckListPane({
   const tokenZone = tokenZoneOf(format);
   const tokenItems = aside.flatMap((entry) => {
     const card = entry.zone === tokenZone?.id ? cards.get(entry.cardId) : undefined;
+    return card ? [{ entry, card }] : [];
+  });
+  // MAYBE-LIST: the Maybe zone's rows, set aside like the tokens.
+  const maybeZone = maybeZoneOf(format);
+  const maybeItems = aside.flatMap((entry) => {
+    const card = entry.zone === maybeZone?.id ? cards.get(entry.cardId) : undefined;
     return card ? [{ entry, card }] : [];
   });
   // TOKEN-FILL: the tokens the cards make, derived here; their cards load once the section opens.
@@ -535,7 +560,7 @@ export function DeckListPane({
         <EmptyState
           className="mt-4"
           title="No cards yet"
-          hint="Add them from Search."
+          hint={maybeItems.length > 0 ? MAYBE_COPY.emptyDeckHint : "Add them from Search."}
           mark
           action={emptyActions(
             [
@@ -669,6 +694,26 @@ export function DeckListPane({
             onHide: onHideToken,
             onShow: onShowTokens,
           }}
+        />
+      )}
+
+      {/* MAYBE-LIST: after Tokens, never part of the deck; waits for the first card unless it holds one. */}
+      {maybeZone && (listed || maybeItems.length > 0) && (
+        <MaybeSection
+          className="mt-2"
+          adapter={adapter}
+          zone={maybeZone}
+          items={maybeItems}
+          open={maybeOpen}
+          onOpenChange={(open) => {
+            setMaybeOpen(open);
+            persist({ maybeOpen: open });
+          }}
+          onPreview={onPreview}
+          owned={owned}
+          onMove={onMoveToDeck}
+          deckFull={deckFull}
+          onRemove={onMoveToDeck ? onRemove : undefined}
         />
       )}
 
