@@ -428,6 +428,55 @@ describe("SearchPane — the title and the two-line selected row (FRESH-UI-EDITO
     expect(rest.className).toContain("active:bg-accent");
   });
 
+  it("a hovered row keeps its mark (×N, In Maybe) beside the actions, which take a fourth column on that row; only the pips step aside", async () => {
+    const vault: CardWire = {
+      ...card({
+        name: "Mana Vault",
+        attrs: { type_line: "Artifact", oracle_text: "", mana_cost: "{1}" },
+      }),
+      image: null,
+    };
+    render(
+      <SearchPane
+        adapter={mtg}
+        format={COMMANDER}
+        inDeckQty={new Map([[sol.id, 1]])}
+        inMaybe={new Set([signet.id])}
+        onAdd={vi.fn()}
+        onMaybe={vi.fn()}
+        onPreview={() => {}}
+      />,
+    );
+    const input = screen.getByRole("combobox", { name: "Card search" });
+    // Mana Vault first, so the marked rows are unselected ones.
+    respond([vault, sol, signet]);
+    type(input, "a");
+    await settle();
+    const [vaultRow, solRow, signetRow] = screen.getAllByRole("option");
+    expect(vaultRow.getAttribute("aria-selected")).toBe("true");
+    const parts = (row: HTMLElement) => {
+      const [, , meta, actions] = [...row.children] as HTMLElement[];
+      const pips = meta.lastElementChild as HTMLElement;
+      return { meta, actions, pips };
+    };
+    for (const [row, mark] of [
+      [solRow, "×1"],
+      [signetRow, "In Maybe"],
+    ] as const) {
+      const { meta, actions, pips } = parts(row);
+      expect(meta.textContent).toContain(mark);
+      // The cell stays for its mark; the pips leave under the pointer.
+      expect(meta.className).not.toContain("group-hover/row:hidden");
+      expect(pips.className).toContain("pointer-fine:group-hover/row:hidden");
+      expect(actions.className).toContain("pointer-fine:group-hover/row:col-start-4");
+      expect(actions.className).not.toContain("col-start-3");
+    }
+    // The selected row hides nothing on hover; a row with no mark gives its cell up whole.
+    const sel = parts(vaultRow);
+    expect(sel.meta.className).not.toContain("group-hover/row:");
+    expect(sel.pips.className).not.toContain("group-hover/row:");
+  });
+
   it("×N rides the meta cell beside the pips, after the name and before the actions", async () => {
     render(
       <SearchPane

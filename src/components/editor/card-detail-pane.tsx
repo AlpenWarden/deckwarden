@@ -33,7 +33,7 @@
  * the editor hands over `sheet`: a fixed header row (the name, then the
  * type line and cost on one muted line, the frame's Close at its end), then
  * a scrolling column that grows with the point the sheet rests at: the
- * actions at the peek (Add / Remove / Swap…, each only where it applies),
+ * actions at the peek (Add / Maybe / Remove / Swap…, each only where it applies),
  * the card image from the half, and the text, tags, the footer line,
  * Alternatives and Printings at the full point. Rendering by point (not
  * clipping) keeps the column shorter than the sheet below full, so a drag

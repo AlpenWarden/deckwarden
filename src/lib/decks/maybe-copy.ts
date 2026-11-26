@@ -1,7 +1,8 @@
 /**
  * The Maybe list's words (MAYBE-LIST), in one place: the editor's toasts and
  * refusals, the section's heading line, its rows' and tiles' actions, the
- * Suggestions and search rows' button, the search row's mark. Game-ignorant: "the deck", never a
+ * Maybe button of the Suggestions, search and Combos rows and of the card sheet, the
+ * rows' "In Maybe" mark, the search box's Shift+Enter. Game-ignorant: "the deck", never a
  * game's own size or zone names (the section's heading is the zone's label,
  * `ZoneDef.label`, Magic's "Maybe").
  */

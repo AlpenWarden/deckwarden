@@ -2165,7 +2165,8 @@ export function DeckEditor({
   );
 
   // MAYBE-LIST: a Suggestions row's Maybe, and a search row's (with the
-  // box's quantity). The card is parked in the format's Maybe zone, which
+  // box's quantity, by its button or Shift+Enter); since LATER 538 also a
+  // Combos one-away row's and the phone card sheet's. The card is parked in the format's Maybe zone, which
   // counts toward no size, so it is offered at any size (the owner's
   // decision 1: beside "Swap in…" at the maximum). A card the deck plays, or
   // one already parked, is refused with its sentence; the toast's Undo takes
@@ -2519,7 +2520,7 @@ export function DeckEditor({
     () => (format ? playableQty(entries, format) : new Map<string, number>()),
     [entries, format],
   );
-  // The cards parked in Maybe: Suggestions' "In Maybe" and the search row's mark.
+  // The cards parked in Maybe: the "In Maybe" of Suggestions and Combos, and the search row's mark.
   const inMaybe = useMemo(
     () => (format ? maybeCardIds(entries, format) : new Set<string>()),
     [entries, format],

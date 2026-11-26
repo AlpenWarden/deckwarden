@@ -66,7 +66,9 @@
  * pointer would change the row under it, and the name truncates under the
  * pointer. Hover shows the main add and Maybe only (the owner's second
  * answer, on measured widths): with the leader's button too, the name kept
- * 17 px at the maximum. The selected row and touch keep all three.
+ * 17 px at the maximum. The selected row and touch keep all three. Hover
+ * hides only the pips: a row's mark (×N, "In Maybe") stays beside the
+ * actions, which then take a fourth column on that row alone.
  *
  * Game knowledge (zone ids/labels, leader noun, pips, subtitles) comes off the
  * adapter — this component never mentions a specific game.
@@ -335,6 +337,8 @@ export function SearchPane({
           const owned = inDeckQty.get(card.id) ?? 0;
           const thumb = thumbnailUrl(card.image);
           const selected = i === sel;
+          // The row's mark, which hover keeps beside the actions (×N, or "In Maybe").
+          const marked = owned > 0 || (inMaybe?.has(card.id) ?? false);
           return (
             <li
               key={card.id}
@@ -384,12 +388,14 @@ export function SearchPane({
               </span>
               {/* The meta cell: ×N and the pips together, at the row's right edge like
                   every other row's pips, whichever line the actions take. A hovered
-                  unselected row on a fine pointer gives the cell to its actions. */}
+                  unselected row on a fine pointer hides its pips for its actions; a
+                  row with a mark (×N, "In Maybe") keeps the mark, and its actions take
+                  a fourth column, which the grid makes for that row alone. */}
               <span
                 data-slot="search-meta"
                 className={cn(
                   "flex shrink-0 items-center gap-2",
-                  !selected && "pointer-fine:group-hover/row:hidden",
+                  !selected && !marked && "pointer-fine:group-hover/row:hidden",
                 )}
               >
                 {owned > 0 && (
@@ -403,7 +409,13 @@ export function SearchPane({
                     {MAYBE_COPY.inMaybe}
                   </span>
                 )}
-                <CostPips html={adapter.display.costHtml(card)} className="shrink-0 text-xs" />
+                <CostPips
+                  html={adapter.display.costHtml(card)}
+                  className={cn(
+                    "shrink-0 text-xs",
+                    !selected && "pointer-fine:group-hover/row:hidden",
+                  )}
+                />
               </span>
               {/* Actions on the active row and on touch: selected or on touch they
                   take the second row, right-aligned. Hover on a fine pointer shows
@@ -415,7 +427,11 @@ export function SearchPane({
                   "shrink-0 gap-1",
                   selected
                     ? "col-start-2 col-end-4 row-start-2 flex justify-self-end"
-                    : "hidden pointer-coarse:col-start-2 pointer-coarse:col-end-4 pointer-coarse:row-start-2 pointer-coarse:flex pointer-coarse:justify-self-end pointer-fine:group-hover/row:col-start-3 pointer-fine:group-hover/row:row-start-1 pointer-fine:group-hover/row:flex",
+                    : "hidden pointer-coarse:col-start-2 pointer-coarse:col-end-4 pointer-coarse:row-start-2 pointer-coarse:flex pointer-coarse:justify-self-end pointer-fine:group-hover/row:row-start-1 pointer-fine:group-hover/row:flex",
+                  !selected &&
+                    (marked
+                      ? "pointer-fine:group-hover/row:col-start-4"
+                      : "pointer-fine:group-hover/row:col-start-3"),
                 )}
               >
                 {mainZone && (

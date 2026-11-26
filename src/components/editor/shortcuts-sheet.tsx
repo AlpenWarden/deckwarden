@@ -4,7 +4,8 @@
  * The `?` shortcut sheet (R3, F7): the keyboard script, as keycaps, in a
  * Modal (a Base UI Dialog — focus trapped, Escape closes, focus returns to
  * whatever had it). The Sheet primitive was considered and passed over: a
- * seven-row reference reads better centred than docked to an edge, and the
+ * seven-row reference (eight with a Maybe list's Shift+Enter, LATER 549)
+ * reads better centred than docked to an edge, and the
  * Modal already carries the dialog contract every editor dialog shares.
  */
 import { Fragment, type ReactNode } from "react";

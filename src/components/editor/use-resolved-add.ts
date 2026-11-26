@@ -19,7 +19,8 @@
  * twice; a failure still lands on the panel's live line.
  *
  * MAYBE-LIST: `onMaybe` gives a second action over the same resolve and
- * cache — Suggestions' Maybe button, `maybe(target)` — with its own pending
+ * cache — the Maybe buttons of Suggestions and of Combos' one-away rows
+ * (LATER 538), `maybe(target)` — with its own pending
  * card, so a row's Add and Maybe never both read "Adding…".
  */
 import { useRef, useState } from "react";
