@@ -2017,13 +2017,14 @@ export function DeckEditor({
     [format, handleAdd],
   );
 
-  // MAYBE-LIST: a Suggestions row's Maybe. The card is parked in the
-  // format's Maybe zone, which counts toward no size, so it is offered at
-  // any size (the owner's decision 1: beside "Swap in…" at the maximum).
-  // A card the deck plays, or one already parked, is refused with its
-  // sentence; the toast's Undo takes it out again.
+  // MAYBE-LIST: a Suggestions row's Maybe, and a search row's (with the
+  // box's quantity). The card is parked in the format's Maybe zone, which
+  // counts toward no size, so it is offered at any size (the owner's
+  // decision 1: beside "Swap in…" at the maximum). A card the deck plays, or
+  // one already parked, is refused with its sentence; the toast's Undo takes
+  // it out again.
   const handleMaybeAdd = useCallback(
-    (card: EditorCard): string | undefined => {
+    (card: EditorCard, qty = 1): string | undefined => {
       if (!format) return "Deck not loaded yet";
       const zone = maybeZoneOf(format);
       if (!zone) return "This deck has no Maybe list";
@@ -2036,9 +2037,9 @@ export function DeckEditor({
       }
       setCards((prev) => (prev.has(card.id) ? prev : new Map(prev).set(card.id, card)));
       setPreview(card);
-      const error = applyEdit(addCard(before, format, zone.id, card.id, 1));
+      const error = applyEdit(addCard(before, format, zone.id, card.id, qty));
       if (error) return error;
-      notify(MAYBE_COPY.added(card.name), () =>
+      notify(MAYBE_COPY.added(card.name, qty), () =>
         applyEdit(setQty(entriesRef.current, format, zone.id, card.id, 0)),
       );
       return undefined;
@@ -3296,6 +3297,7 @@ export function DeckEditor({
           inDeckQty={inDeckQty}
           inMaybe={inMaybe}
           onAdd={handleAdd}
+          onMaybe={maybeZoneOf(load.format) ? handleMaybeAdd : undefined}
           onPreview={showCard}
           onInspect={inspectCard}
           swapIn={deckFull}

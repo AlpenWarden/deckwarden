@@ -42,6 +42,15 @@
  * passing under it show through, softened, and the ambient art with them;
  * solid for a reader who asked for less transparency or more contrast.
  *
+ * MAYBE-LIST (the owner's follow-up): with `onMaybe` (a format with a Maybe
+ * list) a row whose card is in neither the deck nor Maybe has a "Maybe"
+ * button after the main add and before the leader's, at any deck size —
+ * beside "Swap in…" at the maximum, where it parks a card without a swap.
+ * It parks the box's quantity and, like an add, clears the box and takes
+ * focus back; a refusal lands on the live line. A parked card's row says
+ * "In Maybe" in its meta cell instead. No key: Enter and Ctrl/Cmd+Enter
+ * keep their adds.
+ *
  * FRESH-UI-EDITOR (the Codex editor half, reconciled): the pane has a
  * visible title, "Find a card", in the deck pane's heading class and, like
  * its "Deck", sr-only on phones where the tab bar is the title (U4a). A
@@ -99,6 +108,11 @@ interface SearchPaneProps {
   inMaybe?: ReadonlySet<string>;
   /** Returns an error message when the add is rejected (e.g. zone full). */
   onAdd: (card: EditorCard, zoneId: string, qty: number) => string | undefined;
+  /**
+   * MAYBE-LIST: park the card in the format's Maybe list — passed only for a
+   * format that has one. Returns a refusal's sentence, like `onAdd`.
+   */
+  onMaybe?: (card: EditorCard, qty: number) => string | undefined;
   /** Passive: the first result of a response, the row under the arrow keys. */
   onPreview: (card: EditorCard) => void;
   /** Explicit: a click or tap on a row (R4); defaults to `onPreview`. */
@@ -116,6 +130,7 @@ export function SearchPane({
   inDeckQty,
   inMaybe,
   onAdd,
+  onMaybe,
   onPreview,
   onInspect,
   swapIn = false,
@@ -183,15 +198,21 @@ export function SearchPane({
     };
   }, [query, requestId, adapter.id, format.code]);
 
-  const add = (card: EditorCard, zoneId: string | undefined, count: number) => {
-    if (!zoneId) return;
-    const error = onAdd(card, zoneId, count);
+  // An add's outcome, and a Maybe's: a refusal lands on the live line and the
+  // box keeps its query; otherwise the box clears and takes focus back.
+  const settleAdd = (error: string | undefined) => {
     if (error) {
       dispatch({ type: "notice", notice: { text: error, tone: "err" } });
       return;
     }
     dispatch({ type: "added" });
     inputRef.current?.focus();
+  };
+  const add = (card: EditorCard, zoneId: string | undefined, count: number) => {
+    if (zoneId) settleAdd(onAdd(card, zoneId, count));
+  };
+  const maybe = (card: EditorCard, count: number) => {
+    if (onMaybe) settleAdd(onMaybe(card, count));
   };
   // The main-list add, or — at the deck's maximum — the swap-in sheet (Y7b).
   const swapping = swapIn && onSwapIn !== undefined;
@@ -379,6 +400,21 @@ export function SearchPane({
                     }}
                   >
                     {swapping ? "Swap in…" : "Add"}
+                  </Button>
+                )}
+                {/* MAYBE-LIST: at any deck size, while the card is in neither list. */}
+                {onMaybe && owned === 0 && !inMaybe?.has(card.id) && (
+                  <Button
+                    size="xs"
+                    variant="secondary"
+                    className="pointer-coarse:h-11 pointer-coarse:px-3"
+                    aria-label={MAYBE_COPY.buttonLabel(card.name)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      maybe(card, qty);
+                    }}
+                  >
+                    {MAYBE_COPY.button}
                   </Button>
                 )}
                 {leaderZone && (

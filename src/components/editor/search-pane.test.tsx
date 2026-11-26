@@ -9,7 +9,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { CardWire } from "@/lib/decks/editor-state";
+import { MAX_ENTRIES_ERROR, type CardWire } from "@/lib/decks/editor-state";
 import { COMMANDER } from "@/lib/games/mtg/formats";
 import { card } from "@/lib/games/mtg/test-fixtures";
 import { getAdapter } from "@/lib/games/registry";
@@ -417,5 +417,126 @@ describe("SearchPane — the title and the two-line selected row (FRESH-UI-EDITO
     const meta = document.querySelector<HTMLElement>("[data-slot=search-meta]")!;
     expect(meta.textContent).toContain("×2");
     expect(meta.nextElementSibling?.getAttribute("data-slot")).toBe("search-actions");
+  });
+});
+
+describe("SearchPane — Maybe (MAYBE-LIST, the owner's follow-up)", () => {
+  type Handler = (...args: unknown[]) => string | undefined;
+  function renderMaybe({
+    inDeckQty = new Map<string, number>(),
+    inMaybe = new Set<string>(),
+    onMaybe = vi.fn<Handler>(),
+    swapIn = false,
+  }: {
+    inDeckQty?: Map<string, number>;
+    inMaybe?: Set<string>;
+    onMaybe?: ReturnType<typeof vi.fn<Handler>>;
+    swapIn?: boolean;
+  } = {}) {
+    const onAdd = vi.fn<Handler>();
+    const onSwapIn = vi.fn();
+    const onInspect = vi.fn();
+    render(
+      <SearchPane
+        adapter={mtg}
+        format={COMMANDER}
+        inDeckQty={inDeckQty}
+        inMaybe={inMaybe}
+        onAdd={onAdd}
+        onMaybe={onMaybe}
+        onPreview={() => {}}
+        onInspect={onInspect}
+        swapIn={swapIn}
+        onSwapIn={onSwapIn}
+      />,
+    );
+    const input = screen.getByRole("combobox", { name: "Card search" }) as HTMLInputElement;
+    return { input, onAdd, onMaybe, onSwapIn, onInspect };
+  }
+  const actionsOf = (row: HTMLElement) =>
+    [...row.querySelector("[data-slot=search-actions]")!.children].map((b) => b.textContent);
+
+  it("without onMaybe (a format with no Maybe list) no row offers Maybe", async () => {
+    const { input } = renderPane();
+    respond([sol]);
+    type(input, "sol");
+    await settle();
+    expect(actionsOf(screen.getByRole("option"))).toEqual(["Add", "Commander"]);
+    expect(screen.queryByRole("button", { name: "Add Sol Ring to Maybe" })).toBeNull();
+  });
+
+  it("a row in neither list offers Maybe between the main add and the leader's, a 44 px target on touch; it parks the box's quantity, then clears and refocuses the box", async () => {
+    const { input, onAdd, onMaybe, onInspect } = renderMaybe();
+    respond([sol]);
+    type(input, "4 sol");
+    await settle();
+    expect(actionsOf(screen.getByRole("option"))).toEqual(["Add", "Maybe", "Commander"]);
+    const button = screen.getByRole("button", { name: "Add Sol Ring to Maybe" });
+    expect(button.className).toContain("pointer-coarse:h-11 pointer-coarse:px-3");
+    fireEvent.click(button);
+    expect(onMaybe).toHaveBeenCalledTimes(1);
+    expect(onMaybe).toHaveBeenCalledWith(expect.objectContaining({ name: "Sol Ring" }), 4);
+    expect(onAdd).not.toHaveBeenCalled();
+    // The row's own click (an inspection) never ran: the button is not a row tap.
+    expect(onInspect).not.toHaveBeenCalled();
+    expect(input.value).toBe("");
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("at the deck's maximum Maybe sits beside Swap in… and parks the card without opening the swap sheet", async () => {
+    const { input, onMaybe, onSwapIn } = renderMaybe({ swapIn: true });
+    respond([sol]);
+    type(input, "sol");
+    await settle();
+    expect(actionsOf(screen.getByRole("option"))).toEqual(["Swap in…", "Maybe", "Commander"]);
+    fireEvent.click(screen.getByRole("button", { name: "Add Sol Ring to Maybe" }));
+    expect(onMaybe).toHaveBeenCalledWith(expect.objectContaining({ name: "Sol Ring" }), 1);
+    expect(onSwapIn).not.toHaveBeenCalled();
+    expect(input.value).toBe("");
+  });
+
+  it("a card the deck holds, or one parked in Maybe, offers no Maybe; the parked one's row says In Maybe", async () => {
+    const { input } = renderMaybe({
+      inDeckQty: new Map([[sol.id, 1]]),
+      inMaybe: new Set([signet.id]),
+    });
+    respond([sol, signet]);
+    type(input, "s");
+    await settle();
+    const [solRow, signetRow] = screen.getAllByRole("option");
+    expect(actionsOf(solRow)).toEqual(["Add", "Commander"]);
+    expect(actionsOf(signetRow)).toEqual(["Add", "Commander"]);
+    expect(solRow.querySelector("[data-slot=search-meta]")?.textContent).toContain("×1");
+    expect(solRow.querySelector("[data-slot=in-maybe]")).toBeNull();
+    expect(signetRow.querySelector("[data-slot=in-maybe]")?.textContent).toBe("In Maybe");
+  });
+
+  it("a refusal lands on the live line and the box keeps its query and its rows", async () => {
+    const { input } = renderMaybe({ onMaybe: vi.fn<Handler>(() => MAX_ENTRIES_ERROR) });
+    respond([sol]);
+    type(input, "sol");
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Add Sol Ring to Maybe" }));
+    const live = screen.getByText(MAX_ENTRIES_ERROR);
+    expect(live.getAttribute("aria-live")).toBe("polite");
+    expect(live.className).toContain("text-destructive");
+    expect(input.value).toBe("sol");
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+  });
+
+  it("the keys keep their adds: Enter and Ctrl+Enter never park a card", async () => {
+    const { input, onAdd, onMaybe } = renderMaybe();
+    respond([sol]);
+    type(input, "sol");
+    await settle();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onAdd).toHaveBeenLastCalledWith(expect.anything(), "main", 1);
+    respond([sol]);
+    type(input, "sol");
+    await settle();
+    fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
+    expect(onAdd).toHaveBeenLastCalledWith(expect.anything(), "commander", 1);
+    expect(onMaybe).not.toHaveBeenCalled();
   });
 });

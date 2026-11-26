@@ -963,7 +963,7 @@ describe("DeckListPane — the Maybe section (MAYBE-LIST)", () => {
     fireEvent.click(trigger());
     expect(
       within(maybe()).getByText(
-        "Nothing here yet. Suggestions can park a card here with Maybe; it won’t count toward the deck.",
+        "Nothing here yet. Search and Suggestions can park a card here with Maybe; it won’t count toward the deck.",
       ),
     ).toBeTruthy();
   });

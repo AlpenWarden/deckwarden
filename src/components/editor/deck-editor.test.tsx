@@ -6791,6 +6791,71 @@ describe("DeckEditor — Maybe (MAYBE-LIST)", () => {
     ]);
   });
 
+  it("search (the owner's follow-up): at 100 / 100 a row offers Swap in…, Maybe and Commander; Maybe parks the box's quantity — still 100 / 100, ONE PUT, the box cleared; the next search says In Maybe, and a deck card's row offers none", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) =>
+      String(input).startsWith("/api/cards/search")
+        ? ok({ results: [vault, sol] })
+        : maybeRoute(input, init),
+    );
+    stubViewport(1440);
+    render(<DeckEditor deckId="deck-1" />);
+    await loaded();
+    expect(deckSize()).toBe("100 / 100 cards");
+    const input = screen.getByRole("combobox", { name: "Card search" }) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "2 sol" } });
+    await settle();
+    const actionsOf = (name: RegExp) =>
+      [
+        ...screen.getByRole("option", { name }).querySelector("[data-slot=search-actions]")!
+          .children,
+      ].map((b) => b.textContent);
+    // Mana Vault is in the deck: its row says ×1 and parks nothing.
+    expect(actionsOf(/Mana Vault/)).toEqual(["Swap in…", "Commander"]);
+    expect(actionsOf(/Sol Ring/)).toEqual(["Swap in…", "Maybe", "Commander"]);
+    fireEvent.click(screen.getByRole("button", { name: "Add Sol Ring to Maybe" }));
+    await toastOf("Added 2× Sol Ring to Maybe");
+    expect(deckSize()).toBe("100 / 100 cards");
+    expect(maybeTrigger().textContent).toBe("Maybe2");
+    expect(input.value).toBe("");
+    // Parking is no swap: the sheet never opened.
+    expect(screen.queryByRole("dialog", { name: "Swap in Sol Ring" })).toBeNull();
+    await save();
+    expect(puts()).toBe(1);
+    expect(lastPut()).toEqual([
+      "commander:Kozilek, the Great Distortion ×1",
+      "main:Mana Vault ×1",
+      "main:Wastes ×98",
+      "maybeboard:Sol Ring ×2",
+    ]);
+    fireEvent.change(input, { target: { value: "sol" } });
+    await settle();
+    expect(
+      within(screen.getByRole("option", { name: /Sol Ring/ })).getByText("In Maybe"),
+    ).toBeTruthy();
+    expect(actionsOf(/Sol Ring/)).toEqual(["Swap in…", "Commander"]);
+  });
+
+  it("a format with no Maybe list (One Piece) offers no Maybe on its search rows; a Magic draft does", async () => {
+    stubViewport(1440);
+    const { unmount } = render(
+      <DeckEditor deckId={null} draftGame="optcg" draftFormat="standard" />,
+    );
+    fireEvent.change(screen.getByRole("combobox", { name: "Card search" }), {
+      target: { value: "sol" },
+    });
+    await settle();
+    expect(screen.getAllByRole("option")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Add Sol Ring to Deck" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /to Maybe$/ })).toBeNull();
+    unmount();
+    render(<DeckEditor deckId={null} draftGame="mtg" draftFormat="commander" />);
+    fireEvent.change(screen.getByRole("combobox", { name: "Card search" }), {
+      target: { value: "sol" },
+    });
+    await settle();
+    expect(screen.getByRole("button", { name: "Add Sol Ring to Maybe" })).toBeTruthy();
+  });
+
   it("a Suggestions Add of a parked card moves it into the deck, and its Undo puts it back in Maybe", async () => {
     state = { wastes: 97, maybe: [sol] };
     stubViewport(1440);
