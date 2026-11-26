@@ -132,6 +132,20 @@
  * list against the collection's set alone, the ownership line's own: the
  * precon's copies are already out of that list.
  *
+ * FIRST-LIST (the owner's ask and four calls of 2026-11-26): the same line,
+ * marks and sheet ("first-list-changes") for a deck with no precon lineage,
+ * counted from its baseline (first-list.ts), the first full list. The
+ * editor sets it, and its own PATCH body `{baseline}` stores it, the goals'
+ * way: the save that first sends a full list sets it to that list
+ * (`firstListStamp`, in save() and in the keepalive copy), and a deck
+ * already full on load with none takes the list it loaded, saved with its
+ * next edit's save (the owner's call 4). Until a baseline exists a full list
+ * says "No changes from your first full list yet." "I've made these
+ * changes" in the sheet makes the list on screen the baseline
+ * (`source: "owner"`), with a toast and an Undo that puts the previous one
+ * back. The owner's GET carries the cards the list no longer holds
+ * (`baselineCards`), so their names are in the card map from the load.
+ *
  * AUTOFILL-TARGET (the owner's note of 2026-11-15): the Autofill sheet has
  * Your target's choice. The pick is the sheet's own until Add, and then
  * `handleAutofillApply` stores it as the deck's target in the same burst as
@@ -203,7 +217,7 @@ import {
 } from "@/components/editor/editor-layout";
 import { HistoryDialog } from "@/components/editor/history-dialog";
 import { ExportDialog, ImportDialog } from "@/components/editor/import-export";
-import { PreconChangesSheet } from "@/components/editor/precon-changes-sheet";
+import { ChangesSheet, PreconChangesSheet } from "@/components/editor/precon-changes-sheet";
 import { RecommendationsPanel } from "@/components/editor/recommendations-panel";
 import { SearchPane, type SearchPaneHandle } from "@/components/editor/search-pane";
 import { SwapInSheet, SwapSheet } from "@/components/editor/swap-sheet";
@@ -265,7 +279,15 @@ import {
   withTotal,
   type DeckGoals,
 } from "@/lib/decks/goals";
-import { beyondPrecon, preconChanges } from "@/lib/decks/precon-changes";
+import {
+  baselineDate,
+  baselineOf,
+  baselinePatchBody,
+  listComplete,
+  type DeckBaseline,
+} from "@/lib/decks/first-list";
+import { FIRST_LIST_COPY } from "@/lib/decks/first-list-copy";
+import { beyondPrecon, preconChanges, type PreconChanges } from "@/lib/decks/precon-changes";
 import {
   ownedForPricing,
   ownedPreconCopies,
@@ -323,6 +345,8 @@ interface DeckResponse {
     hiddenTokens?: string[] | null;
     /** The precon the deck started from and the answer (PRECON-OWNED) — the owner's wire alone. */
     precon?: DeckPrecon | null;
+    /** The list a hand-built deck's changes count from (FIRST-LIST) — the owner's wire alone. */
+    baseline?: DeckBaseline | null;
   };
   cards: {
     cardId: string;
@@ -336,6 +360,24 @@ interface DeckResponse {
   owned: string[];
   /** Whether the requester has imported a collection at all (P3.7). */
   hasCollection: boolean;
+  /** FIRST-LIST: the baseline's cards the list no longer holds — the owner's wire alone. */
+  baselineCards?: CardWire[];
+}
+
+/**
+ * FIRST-LIST: the baseline a save sets, or null. A deck with none, no precon
+ * lineage and a full list takes that list as its first full list (the
+ * owner's call 1); every other save sets nothing. Pure over its inputs, so
+ * save() and the keepalive copy call the one rule.
+ */
+function firstListStamp(
+  baseline: DeckBaseline | null,
+  precon: DeckPrecon | null,
+  format: FormatDef | null,
+  entries: readonly EditorEntry[],
+): DeckBaseline | null {
+  if (baseline || precon || !format || !listComplete(entries, format)) return null;
+  return baselineOf(entries, format, "complete", new Date().toISOString());
 }
 
 type LoadState =
@@ -525,6 +567,8 @@ export function DeckEditor({
   const [hiddenTokens, setHiddenTokens] = useState<string[] | null>(null);
   // The precon the deck started from and its answer (PRECON-OWNED): a setting, its own PATCH.
   const [precon, setPrecon] = useState<DeckPrecon | null>(null);
+  // The list a hand-built deck's changes count from (FIRST-LIST): a setting, its own PATCH.
+  const [baseline, setBaseline] = useState<DeckBaseline | null>(null);
   const [entries, setEntries] = useState<EditorEntry[]>([]);
   const [cards, setCards] = useState<ReadonlyMap<string, EditorCard>>(new Map());
   const [preview, setPreview] = useState<EditorCard | null>(null);
@@ -604,6 +648,13 @@ export function DeckEditor({
   const goalsRef = useRef<DeckGoals | null>(null);
   const hiddenRef = useRef<string[] | null>(null);
   const preconRef = useRef<DeckPrecon | null>(null);
+  const baselineRef = useRef<DeckBaseline | null>(null);
+  // FIRST-LIST, the owner's call 4: true while the baseline is the list a
+  // full deck loaded with, unsaved. It goes out with the first save that
+  // sends the list (a target or a rename alone is no change to the deck).
+  const baselineWaitsRef = useRef(false);
+  // FIRST-LIST: the format the save's stamp counts a full list by (the draft's now, a loaded deck's at hydrate).
+  const formatRef = useRef<FormatDef | null>(load.state === "ready" ? load.format : null);
   const lastSavedRef = useRef({
     cards: JSON.stringify({ cards: toSavePayload([]) }),
     meta: metaPatchBody({ name: "", description: "", notes: "" }),
@@ -613,6 +664,8 @@ export function DeckEditor({
     hidden: hiddenTokensPatchBody(null),
     // PRECON-OWNED: the precon answer's own baseline, the same way.
     precon: ownsPreconPatchBody(null),
+    // FIRST-LIST: the changes' baseline list, the same way.
+    baseline: baselinePatchBody(null),
   });
 
   // The live deck id: the prop for existing decks, set by ensureDeck once a
@@ -740,6 +793,18 @@ export function DeckEditor({
       clearTimeout(timer);
       if (keepaliveRef.current === pending) keepaliveRef.current = null;
     }
+    // FIRST-LIST: the save that first sends a full list sets the baseline to
+    // it; its PATCH follows the list's PUT below.
+    const stamped = firstListStamp(
+      baselineRef.current,
+      preconRef.current,
+      formatRef.current,
+      entriesRef.current,
+    );
+    if (stamped) {
+      baselineRef.current = stamped;
+      setBaseline(stamped);
+    }
     const headers = writeHeaders(deckId);
     const cardsBody = JSON.stringify({ cards: toSavePayload(entriesRef.current) });
     if (cardsBody !== lastSavedRef.current.cards) {
@@ -750,6 +815,7 @@ export function DeckEditor({
       });
       if (!res.ok) throw new Error(`Card save failed (${res.status})`);
       lastSavedRef.current.cards = cardsBody;
+      baselineWaitsRef.current = false;
     }
     const metaBody = metaPatchBody(metaRef.current);
     if (metaBody !== lastSavedRef.current.meta) {
@@ -797,6 +863,18 @@ export function DeckEditor({
       });
       if (!res.ok) throw new Error(`Save failed (${res.status})`);
       lastSavedRef.current.precon = preconBody;
+    }
+    // The baseline (FIRST-LIST): the same kind of body, the same rule. It
+    // needs a full list, which mints the row, so a draft needs no create change.
+    const baselineBody = baselinePatchBody(baselineRef.current);
+    if (baselineBody !== lastSavedRef.current.baseline && !baselineWaitsRef.current) {
+      const res = await fetch(`/api/decks/${deckId}`, {
+        method: "PATCH",
+        headers,
+        body: baselineBody,
+      });
+      if (!res.ok) throw new Error(`Save failed (${res.status})`);
+      lastSavedRef.current.baseline = baselineBody;
     }
   }, [isBlankDraft, ensureDeck]);
 
@@ -856,18 +934,35 @@ export function DeckEditor({
     goalsRef.current = readGoals(json.deck.goals);
     hiddenRef.current = normalizeHiddenTokens(json.deck.hiddenTokens);
     preconRef.current = json.deck.precon ?? null;
+    formatRef.current = format;
+    baselineRef.current = json.deck.baseline ?? null;
     lastSavedRef.current = {
       cards: JSON.stringify({ cards: toSavePayload(loadedEntries) }),
       meta: metaPatchBody(metaRef.current),
       goals: goalsPatchBody(goalsRef.current),
       hidden: hiddenTokensPatchBody(hiddenRef.current),
       precon: ownsPreconPatchBody(preconRef.current?.owns ?? null),
+      baseline: baselinePatchBody(baselineRef.current),
     };
+    // FIRST-LIST, the owner's call 4: a list already full with no baseline
+    // keeps itself as it loaded. Not saved here (a load writes nothing): it
+    // differs from the saved body, so the next edit's save sends it.
+    if (!baselineRef.current) {
+      baselineRef.current = firstListStamp(null, preconRef.current, format, loadedEntries);
+    }
+    baselineWaitsRef.current = baselineRef.current !== null && !json.deck.baseline;
     setEntries(loadedEntries);
     setGoals(goalsRef.current);
     setHiddenTokens(hiddenRef.current);
     setPrecon(preconRef.current);
-    setCards(new Map(json.cards.map((c) => [c.cardId, toEditorCard(c.card)])));
+    setBaseline(baselineRef.current);
+    // FIRST-LIST: the baseline's cut cards join the map, so "Take out" names them.
+    setCards(
+      new Map([
+        ...(json.baselineCards ?? []).map((c) => [c.id, toEditorCard(c)] as const),
+        ...json.cards.map((c) => [c.cardId, toEditorCard(c.card)] as const),
+      ]),
+    );
     setDeckName(json.deck.name);
     setDetails({ description: json.deck.description ?? "", notes: json.deck.notes ?? "" });
     setShare({
@@ -1283,8 +1378,26 @@ export function DeckEditor({
       if (!deckId) return;
       const headers = writeHeaders(deckId);
       const copies: Promise<void>[] = [];
+      // FIRST-LIST: a list going out full for the first time sets the
+      // baseline here too (save()'s rule), so a tab closed on its 100th card
+      // keeps it. Only with that list: a hidden tab with nothing to send writes nothing.
+      const cardsBody = JSON.stringify({ cards: toSavePayload(entriesRef.current) });
+      if (cardsBody !== lastSavedRef.current.cards) {
+        // The list goes: a baseline a full deck loaded with goes with it (call 4).
+        baselineWaitsRef.current = false;
+        const stamped = firstListStamp(
+          baselineRef.current,
+          preconRef.current,
+          formatRef.current,
+          entriesRef.current,
+        );
+        if (stamped) {
+          baselineRef.current = stamped;
+          setBaseline(stamped);
+        }
+      }
       const send = (
-        field: "cards" | "meta" | "goals" | "hidden" | "precon",
+        field: "cards" | "meta" | "goals" | "hidden" | "precon" | "baseline",
         url: string,
         method: "PUT" | "PATCH",
         body: string,
@@ -1301,12 +1414,7 @@ export function DeckEditor({
           })(),
         );
       };
-      send(
-        "cards",
-        `/api/decks/${deckId}/cards`,
-        "PUT",
-        JSON.stringify({ cards: toSavePayload(entriesRef.current) }),
-      );
+      send("cards", `/api/decks/${deckId}/cards`, "PUT", cardsBody);
       send("meta", `/api/decks/${deckId}`, "PATCH", metaPatchBody(metaRef.current));
       send("goals", `/api/decks/${deckId}`, "PATCH", goalsPatchBody(goalsRef.current));
       send("hidden", `/api/decks/${deckId}`, "PATCH", hiddenTokensPatchBody(hiddenRef.current));
@@ -1316,6 +1424,11 @@ export function DeckEditor({
         "PATCH",
         ownsPreconPatchBody(preconRef.current?.owns ?? null),
       );
+      // A deck loaded full holds its baseline unsaved until the list's own
+      // copy goes (the owner's call 4); any other baseline goes as it is.
+      if (!baselineWaitsRef.current) {
+        send("baseline", `/api/decks/${deckId}`, "PATCH", baselinePatchBody(baselineRef.current));
+      }
       if (copies.length === 0) return;
       const settled: Promise<void> = Promise.all([keepaliveRef.current, ...copies]).then(() => {
         if (keepaliveRef.current === settled) keepaliveRef.current = null;
@@ -1950,6 +2063,37 @@ export function DeckEditor({
     setDialogFromMenu(false);
     setDialog("precon-changes");
   }, []);
+  // FIRST-LIST: the same, from the hand-built deck's line.
+  const openFirstListChanges = useCallback(() => {
+    closeFocusRef.current = () =>
+      document.querySelector<HTMLElement>("[data-slot=first-list-line] button");
+    setDialogFromMenu(false);
+    setDialog("first-list-changes");
+  }, []);
+  // FIRST-LIST, the owner's call 2: "I've made these changes" — the list on
+  // screen becomes the baseline. A setting like the goals (its own PATCH, the
+  // next save), with a toast whose Undo puts the previous baseline back.
+  // The sheet closes; the line then has no "See changes", so focus goes to
+  // its words, which now say there is nothing to change.
+  const handleResetBaseline = useCallback(() => {
+    const fmt = formatRef.current;
+    if (!fmt) return;
+    const previous = baselineRef.current;
+    const next = baselineOf(entriesRef.current, fmt, "owner", new Date().toISOString());
+    baselineRef.current = next;
+    baselineWaitsRef.current = false;
+    setBaseline(next);
+    markDirty();
+    closeFocusRef.current = () =>
+      document.querySelector<HTMLElement>("[data-slot=first-list-line] [tabindex='-1']");
+    setDialog(null);
+    notify(FIRST_LIST_COPY.resetToast, () => {
+      baselineRef.current = previous;
+      baselineWaitsRef.current = false;
+      setBaseline(previous);
+      markDirty();
+    });
+  }, [markDirty, notify]);
 
   // Whole-list swap with Undo (W9b): Import and Autofill both land here.
   // The previous list is captured for the toast's Undo, which restores it
@@ -2661,10 +2805,31 @@ export function DeckEditor({
     () => (preconList && format ? preconChanges(preconList, entries, format) : null),
     [preconList, entries, format],
   );
-  const preconBeyond = useMemo(
-    () => (preconDiff ? (beyondPrecon(preconDiff) ?? undefined) : undefined),
-    [preconDiff],
-  );
+  // FIRST-LIST: the same difference for a deck with no precon lineage, from
+  // its baseline; a full list with none yet has nothing changed (the save
+  // sets it). Null = no line.
+  const firstListDiff = useMemo((): PreconChanges | null => {
+    if (precon || !format) return null;
+    if (baseline) return preconChanges(baseline.cards, entries, format);
+    return listComplete(entries, format) ? { out: [], in: [], outQty: 0, inQty: 0 } : null;
+  }, [precon, format, baseline, entries]);
+  // The baseline's words: "your first full list", or "your list of Nov 26".
+  const firstListWords = useMemo(() => {
+    const source = baseline?.source ?? "complete";
+    const when = baseline ? baselineDate(baseline.setAt) : "";
+    return {
+      changed: (out: number, added: number) => FIRST_LIST_COPY.changed(source, when, out, added),
+      none: FIRST_LIST_COPY.noChanges(source, when),
+      title: FIRST_LIST_COPY.title(source, when),
+      lead: FIRST_LIST_COPY.lead(source, when),
+      mark: (beyond: number, qty: number) => FIRST_LIST_COPY.rowMark(source, when, beyond, qty),
+    };
+  }, [baseline]);
+  // The rows' marks, from whichever baseline the deck has.
+  const preconBeyond = useMemo(() => {
+    const diff = preconDiff ?? firstListDiff;
+    return diff ? (beyondPrecon(diff) ?? undefined) : undefined;
+  }, [preconDiff, firstListDiff]);
   // "You own N/100 · missing ≈ $Y" (P3.7): pure math over the same entries,
   // card prices and owned set; null (nothing rendered) without a collection
   // or an owned precon, whose copies count up to its own quantities. And
@@ -3280,6 +3445,22 @@ export function DeckEditor({
               onClose={() => setDialog(null)}
             />
           )}
+          {/* FIRST-LIST: the same sheet from a hand-built deck's line, counted from its baseline. */}
+          {dialog === "first-list-changes" && firstListDiff && (
+            <ChangesSheet
+              adapter={load.adapter}
+              baseline="first-list"
+              title={firstListWords.title}
+              lead={firstListWords.lead}
+              changes={firstListDiff}
+              cards={cards}
+              owned={hasCollection ? owned : null}
+              phone={tier === "phone"}
+              finalFocus={sheetFinalFocus}
+              onClose={() => setDialog(null)}
+              onReset={handleResetBaseline}
+            />
+          )}
           {dialog === "shortcuts" && (
             <ShortcutsSheet
               mainZoneLabel={mainZone?.label ?? "the deck"}
@@ -3351,6 +3532,9 @@ export function DeckEditor({
           preconChanges={preconDiff}
           onSeePreconChanges={openPreconChanges}
           beyondPrecon={preconBeyond}
+          firstList={firstListDiff ? { changes: firstListDiff, words: firstListWords } : null}
+          onSeeFirstListChanges={openFirstListChanges}
+          beyondLabel={preconDiff ? undefined : firstListWords.mark}
           onAddTokens={tokenZoneOf(load.format) ? handleAddTokens : undefined}
           hiddenTokens={hiddenTokens}
           onHideToken={handleHideToken}

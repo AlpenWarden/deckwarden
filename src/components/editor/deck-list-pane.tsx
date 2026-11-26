@@ -99,6 +99,12 @@
  * precon line, and keeps its height when the first change lands. The Tokens
  * section takes no marks: tokens count toward no size.
  *
+ * FIRST-LIST: on a deck with no precon lineage, `firstList` puts the same
+ * line in the same place ("Changed from your first full list: 3 out, 3
+ * in.") once the list has a baseline, its words the editor's, and
+ * `beyondPrecon` marks the rows the baseline did not hold, named by
+ * `beyondLabel`.
+ *
  * MAYBE-LIST: the format's Maybe zone follows Tokens as the Maybe section
  * (maybe-section.tsx), closed until opened, its open state kept with the
  * view preferences; it waits for the first card like Tokens does, unless it
@@ -189,6 +195,15 @@ interface DeckListPaneProps {
   onSeePreconChanges?: () => void;
   /** PRECON-CHANGES: identity → the copies the list holds beyond the precon's; absent = no marks. */
   beyondPrecon?: ReadonlyMap<string, number>;
+  /** FIRST-LIST: a hand-built deck's line, its counts and its words; absent = no line. */
+  firstList?: {
+    changes: { outQty: number; inQty: number };
+    words: { changed: (out: number, added: number) => string; none: string };
+  } | null;
+  /** FIRST-LIST: the line's "See changes" — the editor's sheet. */
+  onSeeFirstListChanges?: () => void;
+  /** The rows' mark name; the precon's words when absent (FIRST-LIST passes its own). */
+  beyondLabel?: (beyond: number, qty: number) => string;
   /**
    * "Add cards" (R4): the phone's way into Search — the summary row's
    * primary action (phones only) and the empty state's action (every tier;
@@ -258,6 +273,9 @@ export function DeckListPane({
   preconChanges = null,
   onSeePreconChanges,
   beyondPrecon,
+  firstList = null,
+  onSeeFirstListChanges,
+  beyondLabel,
   onAddCards,
   onAutofill,
   doors = [],
@@ -516,6 +534,16 @@ export function DeckListPane({
           onSee={onSeePreconChanges}
         />
       )}
+      {/* FIRST-LIST: what a hand-built list changed from its first full list, in the same place. */}
+      {!precon && firstList && (
+        <PreconChangesLine
+          className="mt-3"
+          slot="first-list-line"
+          changes={firstList.changes}
+          words={firstList.words}
+          onSee={onSeeFirstListChanges}
+        />
+      )}
 
       {/* A quiet first screen (Y2a): nothing to view, group or sort yet.
           U3a: "View" is the group's name, not a label (Text / Grid says it).
@@ -652,6 +680,7 @@ export function DeckListPane({
           onPreview={onPreview}
           owned={owned}
           beyondPrecon={beyondPrecon}
+          beyondLabel={beyondLabel}
           stickyHeaders
           pop={pop}
         />
@@ -662,6 +691,7 @@ export function DeckListPane({
           onPreview={onPreview}
           owned={owned}
           beyondPrecon={beyondPrecon}
+          beyondLabel={beyondLabel}
           adapter={adapter}
           stickyHeaders
         />

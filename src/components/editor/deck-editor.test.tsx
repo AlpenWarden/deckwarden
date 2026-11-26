@@ -4393,6 +4393,8 @@ describe("DeckEditor — your target and the answers (Y4b)", () => {
       fetchMock.mock.calls.filter(
         ([url, i]) => String(url) === "/api/decks/autofill" && i?.method === "POST",
       ).length;
+    /** The goals PATCHes alone: a list Autofill fills also stores its first full list (FIRST-LIST). */
+    const goalsBodies = () => patchBodies().filter((b) => "goals" in (b as object));
     async function openSavedSheet() {
       fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) =>
         String(input) === "/api/decks/autofill"
@@ -4437,17 +4439,33 @@ describe("DeckEditor — your target and the answers (Y4b)", () => {
       await settle(1500);
       await act(async () => {});
       expect(puts()).toBe(1);
-      expect(lastPutEntries().some((e) => e.cardId === sol.id)).toBe(true);
-      expect(patchBodies()).toEqual([{ goals: { v: 1, targetLevel: 4 } }]);
+      // The PUT's rows carry their zone and copies too (lastPutEntries types the two it reads).
+      const filled = lastPutEntries() as { cardId: string; zone: string; qty: number }[];
+      expect(filled.some((e) => e.cardId === sol.id)).toBe(true);
+      // FIRST-LIST (the owner's call 4): the deck loaded full with no
+      // baseline, so its first list edit stores the list it loaded (the Add's
+      // card left out) as its first full list, in the same save.
+      const firstFull = {
+        baseline: {
+          source: "complete",
+          setAt: expect.any(String),
+          cards: filled
+            .filter((e) => (e.zone === "commander" || e.zone === "main") && e.cardId !== sol.id)
+            .map((e) => ({ cardId: e.cardId, qty: e.qty }))
+            .sort((a, b) => (a.cardId < b.cardId ? -1 : a.cardId > b.cardId ? 1 : 0)),
+        },
+      };
+      expect(patchBodies()).toEqual([{ goals: { v: 1, targetLevel: 4 } }, firstFull]);
       expect(posts()).toBe(0);
 
-      // Undo: the list goes back in one PUT; the target stays, so no second PATCH.
+      // Undo: the list goes back in one PUT; the target stays, so no second
+      // goals PATCH, and the first full list stays too.
       fireEvent.click(within(toastEl).getByRole("button", { name: "Undo" }));
       await settle(1500);
       await act(async () => {});
       expect(puts()).toBe(2);
       expect(lastPutEntries().some((e) => e.cardId === sol.id)).toBe(false);
-      expect(patchBodies()).toEqual([{ goals: { v: 1, targetLevel: 4 } }]);
+      expect(patchBodies()).toEqual([{ goals: { v: 1, targetLevel: 4 } }, firstFull]);
       await lineIs("Your target: Bracket 4 · the cards say 3 or 4, one card is your call Why?");
     });
 
@@ -4460,7 +4478,7 @@ describe("DeckEditor — your target and the answers (Y4b)", () => {
       await settle(1500);
       await act(async () => {});
       expect(puts()).toBe(1);
-      expect(patchBodies()).toEqual([]);
+      expect(goalsBodies()).toEqual([]);
     });
 
     it("AUTOFILL-TARGET on a saved deck: Not set on a deck with a target clears it on Add, the exceptions kept", async () => {
@@ -4481,7 +4499,7 @@ describe("DeckEditor — your target and the answers (Y4b)", () => {
       );
       await settle(1500);
       await act(async () => {});
-      expect(patchBodies()).toEqual([{ goals: { v: 1, exceptions: "ask me" } }]);
+      expect(goalsBodies()).toEqual([{ goals: { v: 1, exceptions: "ask me" } }]);
     });
   });
 

@@ -13,6 +13,13 @@
  *          the cards (precons.ts' loadDeckPrecon); null for the owner of any
  *          other deck; absent from every visitor's wire, like the lineage
  *          and the answer themselves (deckMetaJson never names them).
+ *          FIRST-LIST: for the OWNER of a deck with no precon lineage,
+ *          `deck.baseline` = { source, setAt, cards: [{cardId, qty}] }, the
+ *          list its changes count from (null = none set yet), and
+ *          `baselineCards`, the CardWires of its identities the list no
+ *          longer holds, so "Take out" names every card with no ask of its
+ *          own (one read, and one more only when such a card exists);
+ *          absent from every visitor's wire.
  * PATCH  — meta (name / description / notes / visibility / folder) and, Y4b,
  *          `goals` — the whole goals object, null clears, its target range
  *          and question keys off the deck's adapter (One Piece takes no
@@ -26,6 +33,11 @@
  *          this precon?" (true, false, or null for not asked), the same
  *          rule; a 400 on a deck that didn't start from a precon, before
  *          anything is written.
+ *          FIRST-LIST: `baseline` — the list a hand-built deck's changes
+ *          count from, whole (null deletes it), stored in deck_baselines,
+ *          the same rule: a setting, never an edit. A 400 on a deck with a
+ *          precon lineage (its precon is its baseline), before anything is
+ *          written.
  * DELETE — hard delete; deck_cards + deck_versions cascade. Owner only.
  *          Fork-safe (P3.6, fired LATER row): forks' upstream pointers are
  *          NULLed in the same transaction — the self-FK has no ON DELETE.
@@ -54,11 +66,14 @@ import { deckOwnedForViewer } from "@/lib/collection/owned";
 import { loadFolder } from "@/lib/decks/folders";
 import { deleteDecksForkSafe, forkCredit } from "@/lib/decks/forks";
 import { goalsSchema, normalizeGoals, type DeckGoals } from "@/lib/decks/goals";
+import { loadDeckBaseline, writeDeckBaseline } from "@/lib/decks/baselines";
+import { baselineSchema, normalizeBaseline } from "@/lib/decks/first-list";
 import { ownsPreconSchema, type DeckPrecon } from "@/lib/decks/precon-owned";
 import { loadDeckPrecon } from "@/lib/decks/precons";
 import { hiddenTokensSchema, normalizeHiddenTokens } from "@/lib/decks/token-fill";
 import { deckFormat, requireOwnedDeckWrite, requireReadableDeck } from "@/lib/decks/route-helpers";
 import { deckMetaJson } from "@/lib/decks/serialize";
+import { loadCardWires } from "@/lib/cards/wire";
 import { revalidateDeckListings } from "@/lib/hub/paths";
 import { RATE_LIMITS } from "@/lib/rate-limit";
 
@@ -80,8 +95,10 @@ export async function GET(request: NextRequest, ctx: RouteContext<"/api/decks/[i
   // upstream credits without name/link). One extra query, forks only.
   // The precon (PRECON-OWNED): the owner's alone, one extra query, decks
   // started from a precon only.
+  // The baseline (FIRST-LIST): the owner's alone, one read, decks with no
+  // precon lineage only.
   const format = deckFormat(deck)?.format;
-  const [cards, forkedFrom, precon] = await Promise.all([
+  const [cards, forkedFrom, precon, baseline] = await Promise.all([
     fetchDeckCardsWire(deck),
     deck.forkedFromDeckId
       ? forkCredit(deck, { token: deckTokenFrom(request.headers), userId })
@@ -89,7 +106,18 @@ export async function GET(request: NextRequest, ctx: RouteContext<"/api/decks/[i
     isOwner && deck.preconDeckId && format
       ? loadDeckPrecon(deck.preconDeckId, format)
       : Promise.resolve(null),
+    isOwner && !deck.preconDeckId ? loadDeckBaseline(deck.id) : Promise.resolve(null),
   ]);
+  // The baseline's cards the list no longer holds: "Take out" names them.
+  const listed = new Set(cards.map((c) => c.cardId));
+  const cut = baseline ? baseline.cards.filter((c) => !listed.has(c.cardId)) : [];
+  const baselineCards =
+    cut.length > 0
+      ? await loadCardWires(
+          cut.map((c) => c.cardId),
+          deck.formatId,
+        )
+      : [];
   // Owned badges (P3.7): the requester's own collection against this deck's
   // cards — one LIMIT 1 + one deck-sized join for signed-in users, nothing
   // for guests.
@@ -104,9 +132,10 @@ export async function GET(request: NextRequest, ctx: RouteContext<"/api/decks/[i
     deck: {
       ...deckMetaJson(deck, { isOwner }),
       forkedFrom,
-      ...(isOwner ? { precon: preconWire } : {}),
+      ...(isOwner ? { precon: preconWire, baseline } : {}),
     },
     cards,
+    ...(isOwner ? { baselineCards } : {}),
     owned,
     hasCollection,
   });
@@ -129,6 +158,8 @@ function patchBody(brackets: Parameters<typeof goalsSchema>[0]) {
       hiddenTokens: hiddenTokensSchema.nullable(),
       /** PRECON-OWNED: "Do you own this precon?" — null = not asked. Never bumps updated_at. */
       ownsPrecon: ownsPreconSchema,
+      /** FIRST-LIST: the list a hand-built deck's changes count from — null deletes. Never bumps updated_at. */
+      baseline: baselineSchema,
     })
     .partial()
     .refine((b) => Object.keys(b).length > 0, { message: "No fields to update" });
@@ -163,22 +194,29 @@ export async function PATCH(request: NextRequest, ctx: RouteContext<"/api/decks/
     return noStoreJson({ error: "This deck didn't start from a precon" }, { status: 400 });
   }
 
-  // Goals, hidden tokens and the precon answer are settings, not edits: a
-  // body of theirs alone leaves updated_at (and so the deck's place in every
-  // "recent" order) alone.
-  const { goals, hiddenTokens, ownsPrecon, ...meta } = body;
+  // A deck with a precon lineage counts its changes from the precon (FIRST-LIST).
+  if (body.baseline !== undefined && access.deck.preconDeckId !== null) {
+    return noStoreJson({ error: "This deck counts its changes from its precon" }, { status: 400 });
+  }
+
+  // Goals, hidden tokens, the precon answer and the baseline are settings,
+  // not edits: a body of theirs alone leaves updated_at (and so the deck's
+  // place in every "recent" order) alone.
+  const { goals, hiddenTokens, ownsPrecon, baseline, ...meta } = body;
+  if (baseline !== undefined) await writeDeckBaseline(access.deck.id, normalizeBaseline(baseline));
+  const changes = {
+    ...meta,
+    ...(goals !== undefined ? { goals: normalizeGoals(goals as DeckGoals | null) } : {}),
+    ...(hiddenTokens !== undefined ? { hiddenTokens: normalizeHiddenTokens(hiddenTokens) } : {}),
+    ...(ownsPrecon !== undefined ? { ownsPrecon } : {}),
+    ...(Object.keys(meta).length > 0 ? { updatedAt: new Date() } : {}),
+  };
   const db = getDb();
-  const [updated] = await db
-    .update(decks)
-    .set({
-      ...meta,
-      ...(goals !== undefined ? { goals: normalizeGoals(goals as DeckGoals | null) } : {}),
-      ...(hiddenTokens !== undefined ? { hiddenTokens: normalizeHiddenTokens(hiddenTokens) } : {}),
-      ...(ownsPrecon !== undefined ? { ownsPrecon } : {}),
-      ...(Object.keys(meta).length > 0 ? { updatedAt: new Date() } : {}),
-    })
-    .where(eq(decks.id, access.deck.id))
-    .returning();
+  // A baseline alone writes no decks column: the row as read answers.
+  const [updated] =
+    Object.keys(changes).length > 0
+      ? await db.update(decks).set(changes).where(eq(decks.id, access.deck.id)).returning()
+      : [access.deck];
 
   // A deck entering or leaving `public` joins or leaves the hub shelves and the
   // sitemap, whose ISR copies only a render refreshes (lib/hub/paths.ts).

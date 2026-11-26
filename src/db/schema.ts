@@ -706,6 +706,54 @@ export const deckGames = pgTable(
 );
 
 /**
+ * Who set a deck's baseline (FIRST-LIST): `complete` = the editor, the first
+ * time the list reached its format's full size (or, for a deck already full
+ * when the package shipped, the list as it stood before its next edit);
+ * `owner` = the owner's "I've made these changes".
+ */
+export const DECK_BASELINE_SOURCES = ["complete", "owner"] as const;
+export type DeckBaselineSource = (typeof DECK_BASELINE_SOURCES)[number];
+
+/**
+ * The list a deck built by hand counts its changes from (FIRST-LIST, the
+ * owner's ask of 2026-11-26: "view the list of changes … from the first
+ * time you get your 100 cards built"): PRECON-CHANGES' "Take out / Add"
+ * for a deck with no precon to count from. One row per deck at most.
+ *
+ * - `cards` = [{cardId, qty}], one per identity over the format's counted
+ *   zones (precon-owned.ts `preconCards`, the precon list's own shape), so
+ *   the two features share one difference and one sheet.
+ * - A table of its own, not a `decks` column: /account and /api/decks/mine
+ *   select whole deck rows, and a ~5 KB list per row would ride every
+ *   listing for nothing. Not a deck version either (the owner's call): it
+ *   is not in History and never counts toward MAX_VERSIONS_PER_DECK.
+ * - Written only by the owner's PATCH /api/decks/[id] `{baseline}` (the
+ *   editor sends it the way it sends the goals), refused on a deck with a
+ *   precon lineage, whose precon is its baseline. Never moves updated_at;
+ *   never copied on fork (a fork starts with none and stamps its own); not
+ *   versioned; the owner's GET alone reads it.
+ *
+ * Lifecycle: ON DELETE CASCADE from decks — the single delete, account
+ * deletion and the anon purge take it with no new delete code.
+ *
+ * Neon math, out loud: a 100-identity list is ~5 KB of JSONB (~2–3 KB on
+ * disk once TOAST compresses it), one row per finished deck: 10,000 decks
+ * is ~30 MB at worst.
+ */
+export const deckBaselines = pgTable(
+  "deck_baselines",
+  {
+    deckId: uuid("deck_id")
+      .primaryKey()
+      .references(() => decks.id, { onDelete: "cascade" }),
+    source: text("source").$type<DeckBaselineSource>().notNull(),
+    cards: jsonb("cards").$type<{ cardId: string; qty: number }[]>().notNull(),
+    setAt: timestamp("set_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [check("deck_baselines_source_check", sql`${t.source} in ('complete','owner')`)],
+);
+
+/**
  * Product metadata for kind='precon' decks (W8a) — one row per ingested
  * Commander preconstructed deck, keyed to its deck row (CASCADE: deleting
  * the deck row is the rollback path and must take the meta with it).

@@ -37,9 +37,25 @@
  *   the phone's Drawer is full height from the start, so its top stays put.
  *
  * Read-only: opening, loading and copying write nothing to the deck.
+ *
+ * FIRST-LIST (the owner's ask of 2026-11-26): the same sheet for a deck built
+ * by hand, `ChangesSheet` with the first full list (or the owner's later
+ * list) as its baseline: its own title and lead, no ask for names (the
+ * owner's GET carries the cut cards: "Take out" is ready on open), and a
+ * last section, "I've made these changes", which hands the list on screen
+ * to the editor as the new baseline. That one button is the sheet's only
+ * write, and it is the editor's to make (`onReset`).
  */
 import { CirclePlusIcon } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from "react";
 
 import { CopyStatus, useCopyToClipboard } from "@/components/copy-status";
 import { CardNamePreview } from "@/components/deck/card-name-preview";
@@ -47,6 +63,7 @@ import { SheetShell, type SheetFinalFocus } from "@/components/editor/sheet-shel
 import { Button } from "@/components/ui/button";
 import { BRACKET_COPY } from "@/lib/brackets/copy";
 import { PRECON_COPY } from "@/lib/collection/precon-copy";
+import { FIRST_LIST_COPY } from "@/lib/decks/first-list-copy";
 import { toEditorCard, type CardWire, type EditorCard } from "@/lib/decks/editor-state";
 import {
   preconAddCost,
@@ -83,20 +100,52 @@ const INLINE_ACTION =
 
 const usd = (n: number) => `$${n.toFixed(2)}`;
 
+/** The precon's sheet: its title, its lead, and its own list for the names this session hasn't seen. */
 export function PreconChangesSheet({
-  adapter,
   precon,
+  ...rest
+}: Omit<ComponentProps<typeof ChangesSheet>, "title" | "lead" | "namesFrom" | "baseline"> & {
+  /** The precon the deck started from: its slug (the one request's key) and its name. */
+  precon: { slug: string; name: string };
+}) {
+  return (
+    <ChangesSheet
+      {...rest}
+      baseline="precon"
+      title={PRECON_COPY.changesTitle(precon.name)}
+      lead={PRECON_COPY.changesLead}
+      namesFrom={precon.slug}
+    />
+  );
+}
+
+/** The sheet itself, for either baseline (FIRST-LIST). */
+export function ChangesSheet({
+  adapter,
+  baseline,
+  title,
+  lead,
+  namesFrom,
   changes,
   cards,
   owned,
   phone,
   finalFocus,
   onClose,
+  onReset,
 }: {
   adapter: GameAdapter;
-  /** The precon the deck started from: its slug (the one request's key) and its name. */
-  precon: { slug: string; name: string };
-  /** What the list on screen changed from the box (precon-changes.ts). */
+  /** What the list is compared with: the precon, or the first full list (FIRST-LIST). */
+  baseline: "precon" | "first-list";
+  title: string;
+  lead: string;
+  /**
+   * The precon's slug, whose public list names the cut cards this session
+   * hasn't seen (the one request's key); absent = every name is in `cards`,
+   * and a card it lacks is listed as "Unknown card".
+   */
+  namesFrom?: string;
+  /** What the list on screen changed from its baseline (precon-changes.ts). */
   changes: PreconChanges;
   /** Every card the editor has seen this session. */
   cards: ReadonlyMap<string, EditorCard>;
@@ -106,9 +155,15 @@ export function PreconChangesSheet({
   /** Where focus goes on close, over Base UI's default (the editor names "See changes"). */
   finalFocus?: SheetFinalFocus;
   onClose: () => void;
+  /** FIRST-LIST's "I've made these changes": the list on screen becomes the baseline. */
+  onReset?: () => void;
 }) {
-  // A cut card the editor never saw (after a reload) has no name here yet.
-  const needed = useMemo(() => changes.out.some((c) => !cards.has(c.cardId)), [changes, cards]);
+  // A cut card the editor never saw (after a reload) has no name here yet,
+  // and only a precon's list can name it.
+  const needed = useMemo(
+    () => namesFrom !== undefined && changes.out.some((c) => !cards.has(c.cardId)),
+    [namesFrom, changes, cards],
+  );
   const [load, setLoad] = useState<Load>({ status: "loading" });
   const [nonce, setNonce] = useState(0);
   // The ask whose answer landed: a re-run of the effect never asks it again.
@@ -117,11 +172,11 @@ export function PreconChangesSheet({
   // ONE GET for the precon's own list, only when a name is missing. The list
   // can't change under a modal; closing aborts, and an aborted ask writes nothing.
   useEffect(() => {
-    if (!needed || settledRef.current === nonce) return;
+    if (!needed || namesFrom === undefined || settledRef.current === nonce) return;
     const controller = new AbortController();
     void (async () => {
       try {
-        const res = await fetch(`/api/precons/${encodeURIComponent(precon.slug)}`, {
+        const res = await fetch(`/api/precons/${encodeURIComponent(namesFrom)}`, {
           signal: controller.signal,
         });
         if (!res.ok) throw new Error(`Precon failed (${res.status})`);
@@ -139,7 +194,7 @@ export function PreconChangesSheet({
       }
     })();
     return () => controller.abort();
-  }, [needed, nonce, precon.slug]);
+  }, [needed, nonce, namesFrom]);
 
   const retry = () => {
     setLoad({ status: "loading" });
@@ -176,16 +231,14 @@ export function PreconChangesSheet({
   const copy = useCopyToClipboard();
 
   return (
-    <SheetShell
-      title={PRECON_COPY.changesTitle(precon.name)}
-      phone={phone}
-      wide
-      tall
-      finalFocus={finalFocus}
-      onClose={onClose}
-    >
-      <div data-slot="precon-changes-sheet" data-out-state={outState} className="space-y-3">
-        <p className="text-muted-foreground text-sm">{PRECON_COPY.changesLead}</p>
+    <SheetShell title={title} phone={phone} wide tall finalFocus={finalFocus} onClose={onClose}>
+      <div
+        data-slot="precon-changes-sheet"
+        data-baseline={baseline}
+        data-out-state={outState}
+        className="space-y-3"
+      >
+        <p className="text-muted-foreground text-sm">{lead}</p>
 
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
           <div className="min-w-0 flex-1 basis-56 space-y-0.5">
@@ -265,6 +318,27 @@ export function PreconChangesSheet({
             />
           )}
         </div>
+
+        {/* FIRST-LIST: after the swaps are made in the physical deck, the list on screen is the new baseline. */}
+        {onReset && (
+          <div
+            data-slot="baseline-reset"
+            className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t pt-3"
+          >
+            <div className="min-w-0 flex-1 basis-56 space-y-0.5">
+              <p className="text-sm">{FIRST_LIST_COPY.resetLead}</p>
+              <p className="text-muted-foreground text-xs">{FIRST_LIST_COPY.resetNote}</p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="ml-auto pointer-coarse:min-h-11"
+              onClick={onReset}
+            >
+              {FIRST_LIST_COPY.reset}
+            </Button>
+          </div>
+        )}
 
         {/* The polite word for the one wait: the names landed, or they didn't. */}
         <span role="status" data-slot="precon-changes-status" className="sr-only">

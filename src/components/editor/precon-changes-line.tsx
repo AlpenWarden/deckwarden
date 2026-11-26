@@ -19,11 +19,18 @@
  * The control follows the words after a gap, underlined (U9, the precon
  * line's way). The toast already announces a swap, so the line is not a
  * live region.
+ *
+ * FIRST-LIST: the same line for a deck built by hand, under the leader zone
+ * where it is the only line ("Changed from your first full list: 3 out, 3
+ * in."): its words come in `words`, and its `slot` names it for the focus
+ * that comes back when its sheet closes.
  */
 import { useId } from "react";
 
 import { PRECON_COPY } from "@/lib/collection/precon-copy";
 import { cn } from "@/lib/utils";
+
+const PRECON_WORDS = { changed: PRECON_COPY.changed, none: PRECON_COPY.noChanges };
 
 const ACTION =
   "text-foreground shrink-0 cursor-pointer font-medium underline underline-offset-4 hover:no-underline pointer-coarse:min-h-11 pointer-coarse:min-w-11";
@@ -31,27 +38,34 @@ const ACTION =
 export function PreconChangesLine({
   changes,
   onSee,
+  words = PRECON_WORDS,
+  slot = "precon-changes-line",
   className,
 }: {
   /** Copies out of the box and copies added to it (precon-changes.ts). */
   changes: { outQty: number; inQty: number };
   /** Opens the sheet; absent = the words alone. */
   onSee?: () => void;
+  /** The line's two sentences; the precon's by default (FIRST-LIST passes its own). */
+  words?: { changed: (out: number, added: number) => string; none: string };
+  /** The line's data-slot, which the editor's focus return looks up. */
+  slot?: string;
   className?: string;
 }) {
   const textId = useId();
   const changed = changes.outQty > 0 || changes.inQty > 0;
   return (
     <p
-      data-slot="precon-changes-line"
+      data-slot={slot}
       data-state={changed ? "changed" : "none"}
       className={cn(
         "text-muted-foreground flex items-center gap-x-1.5 text-xs pointer-coarse:min-h-11",
         className,
       )}
     >
-      <span id={textId} className="min-w-0 tabular-nums">
-        {changed ? PRECON_COPY.changed(changes.outQty, changes.inQty) : PRECON_COPY.noChanges}
+      {/* Focusable from script only: where focus lands when a sheet's change leaves no "See changes" (FIRST-LIST's reset). */}
+      <span id={textId} tabIndex={-1} className="min-w-0 tabular-nums">
+        {changed ? words.changed(changes.outQty, changes.inQty) : words.none}
       </span>
       {changed && onSee && (
         <>

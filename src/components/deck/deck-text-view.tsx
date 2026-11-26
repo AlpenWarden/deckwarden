@@ -233,6 +233,11 @@ interface DeckTextViewProps {
    * (precon-changes.ts `beyondPrecon`); absent = no precon lineage, no marks.
    */
   beyondPrecon?: ReadonlyMap<string, number>;
+  /**
+   * The mark's name ("Not in the precon"); FIRST-LIST passes "Not in your
+   * first full list". The precon's words when absent.
+   */
+  beyondLabel?: (beyond: number, qty: number) => string;
   /** Editor: group headers stick to the top of the scrolling pane (C12). */
   stickyHeaders?: boolean;
   /** The row ("zone:cardId") whose quantity badge pops, with a nonce so each pop remounts (F3). */
@@ -263,6 +268,7 @@ export function DeckTextView({
   onPreview,
   owned,
   beyondPrecon,
+  beyondLabel = PRECON_COPY.rowMark,
   stickyHeaders = false,
   pop = null,
   preview = false,
@@ -330,8 +336,8 @@ export function DeckTextView({
                     <span
                       role="img"
                       data-slot="precon-mark"
-                      aria-label={PRECON_COPY.rowMark(beyond, entry.qty)}
-                      title={PRECON_COPY.rowMark(beyond, entry.qty)}
+                      aria-label={beyondLabel(beyond, entry.qty)}
+                      title={beyondLabel(beyond, entry.qty)}
                       className="text-foreground shrink-0"
                     >
                       <CirclePlusIcon aria-hidden className="size-3.5" />

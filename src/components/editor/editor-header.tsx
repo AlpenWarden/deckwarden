@@ -112,7 +112,9 @@ export type EditorDialog =
   // Y9a: the Games dialog — More's "Games…" (live decks, games with a journal).
   | "games"
   // PRECON-CHANGES: the "Changes from <precon>" sheet — the deck pane's "See changes".
-  | "precon-changes";
+  | "precon-changes"
+  // FIRST-LIST: the "Changes from your first full list" sheet — the deck pane's "See changes".
+  | "first-list-changes";
 
 export function EditorHeader({
   adapter,

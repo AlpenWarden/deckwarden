@@ -586,3 +586,217 @@ describe("the ISR listings follow a visibility move and a delete (the audit's hu
     expect(slugReads()).toEqual([]);
   });
 });
+
+describe("PATCH {baseline} (FIRST-LIST)", () => {
+  const A = "aaaaaaaa-1111-4111-8111-00000000000a";
+  const B = "aaaaaaaa-1111-4111-8111-00000000000b";
+  const baselineWrites = () =>
+    statements.filter((s) => /^(insert into|delete from) "deck_baselines"/.test(s.sql));
+
+  it("a baseline-only body upserts deck_baselines and leaves the decks row alone — updated_at stays", async () => {
+    answers = [[deckRow()]];
+    const res = await PATCH(
+      patch({
+        baseline: {
+          source: "owner",
+          setAt: "2026-11-26T10:00:00.000Z",
+          // A repeated id folds into one row, and the rows sort by id.
+          cards: [
+            { cardId: B, qty: 1 },
+            { cardId: A, qty: 2 },
+            { cardId: B, qty: 3 },
+          ],
+        },
+      }),
+      ctx,
+    );
+    expect(res.status).toBe(200);
+    expect(updates()).toEqual([]);
+    const [write] = baselineWrites();
+    expect(write.sql).toMatch(
+      /^insert into "deck_baselines" .* on conflict \("deck_id"\) do update/,
+    );
+    expect(write.params).toEqual(
+      expect.arrayContaining([
+        DECK,
+        "owner",
+        JSON.stringify([
+          { cardId: A, qty: 2 },
+          { cardId: B, qty: 4 },
+        ]),
+      ]),
+    );
+    expect((await res.json()).deck.updatedAt).toBe(UPDATED);
+  });
+
+  it("a set time in the future is stored as now", async () => {
+    answers = [[deckRow()]];
+    const before = Date.now();
+    await PATCH(
+      patch({ baseline: { source: "complete", setAt: "2099-01-01T00:00:00.000Z", cards: [] } }),
+      ctx,
+    );
+    const stored = baselineWrites()[0].params.find(
+      (p) => typeof p === "string" && /^\d{4}-\d\d-\d\dT/.test(p),
+    ) as string;
+    expect(new Date(stored).getTime()).toBeGreaterThanOrEqual(before);
+    expect(new Date(stored).getTime()).toBeLessThanOrEqual(Date.now());
+  });
+
+  it("null deletes it", async () => {
+    answers = [[deckRow()]];
+    expect((await PATCH(patch({ baseline: null }), ctx)).status).toBe(200);
+    const [write] = baselineWrites();
+    expect(write.sql).toMatch(
+      /^delete from "deck_baselines" where "deck_baselines"\."deck_id" = \$1/,
+    );
+    expect(write.params).toEqual([DECK]);
+  });
+
+  it("a deck with a precon lineage: 400, nothing written — its precon is its baseline", async () => {
+    answers = [[deckRow({ preconDeckId: "55555555-5555-4555-8555-555555555555" })]];
+    const res = await PATCH(
+      patch({ baseline: { source: "owner", setAt: "2026-11-26T10:00:00.000Z", cards: [] } }),
+      ctx,
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "This deck counts its changes from its precon" });
+    expect(baselineWrites()).toEqual([]);
+    expect(updates()).toEqual([]);
+  });
+
+  it("a malformed baseline is a 400, nothing written", async () => {
+    const at = "2026-11-26T10:00:00.000Z";
+    for (const bad of [
+      { source: "someone", setAt: at, cards: [] },
+      { source: "owner", setAt: "yesterday", cards: [] },
+      { source: "owner", setAt: at, cards: [{ cardId: "Sol Ring", qty: 1 }] },
+      { source: "owner", setAt: at, cards: [{ cardId: A, qty: 0 }] },
+      {
+        source: "owner",
+        setAt: at,
+        cards: Array.from({ length: 501 }, () => ({ cardId: A, qty: 1 })),
+      },
+      { source: "owner", cards: [] },
+    ]) {
+      answers = [[deckRow()]];
+      expect(
+        (await PATCH(patch({ baseline: bad }), ctx)).status,
+        JSON.stringify(bad).slice(0, 60),
+      ).toBe(400);
+    }
+    expect(baselineWrites()).toEqual([]);
+  });
+
+  it("owner only: someone else's deck is 403 before the body is checked", async () => {
+    session.userId = "99999999-9999-4999-8999-999999999999";
+    answers = [[deckRow()]];
+    const res = await PATCH(
+      patch({ baseline: { source: "owner", setAt: "2026-11-26T10:00:00.000Z", cards: [] } }),
+      ctx,
+    );
+    expect(res.status).toBe(403);
+    expect(baselineWrites()).toEqual([]);
+  });
+});
+
+describe("GET — the baseline (FIRST-LIST)", () => {
+  const A = "aaaaaaaa-1111-4111-8111-00000000000a";
+  const B = "aaaaaaaa-1111-4111-8111-00000000000b";
+  const get = () => new NextRequest(`http://localhost:3000/api/decks/${DECK}`);
+  const baselineReads = () => statements.filter((s) => s.sql.includes('from "deck_baselines"'));
+  /** wireSelect's row: id … attrs, then the default printing's id, override and back. */
+  const wireRow = (id: string, name: string) => [
+    id,
+    name,
+    name.toLowerCase(),
+    `key-${name}`,
+    "Sorcery",
+    1,
+    0,
+    0,
+    "0.25",
+    1,
+    false,
+    false,
+    {},
+    null,
+    null,
+    false,
+  ];
+
+  it("the owner: deck.baseline as stored, and the cut cards' wires in baselineCards", async () => {
+    routed = [
+      {
+        match: /from "deck_baselines"/,
+        rows: [
+          [
+            "complete",
+            "2026-11-20T12:00:00.000Z",
+            [
+              { cardId: A, qty: 1 },
+              { cardId: B, qty: 2 },
+            ],
+          ],
+        ],
+      },
+      {
+        match: /from "card_identities" left join/,
+        rows: [wireRow(A, "Divination"), wireRow(B, "Opt")],
+      },
+    ];
+    answers = [[deckRow()]];
+    const json = await (await GET(get(), ctx)).json();
+    expect(json.deck.baseline).toEqual({
+      source: "complete",
+      setAt: "2026-11-20T12:00:00.000Z",
+      cards: [
+        { cardId: A, qty: 1 },
+        { cardId: B, qty: 2 },
+      ],
+    });
+    // The list holds neither card (the fake deck_cards read is empty), so both are cut.
+    expect(json.baselineCards.map((c: { id: string; name: string }) => [c.id, c.name])).toEqual([
+      [A, "Divination"],
+      [B, "Opt"],
+    ]);
+    expect(baselineReads()).toHaveLength(1);
+    expect(baselineReads()[0].params).toEqual([DECK, 1]);
+  });
+
+  it("none stored: baseline null, no cut cards, no wire read", async () => {
+    answers = [[deckRow()]];
+    const json = await (await GET(get(), ctx)).json();
+    expect(json.deck.baseline).toBeNull();
+    expect(json.baselineCards).toEqual([]);
+    expect(statements.filter((s) => s.sql.includes('from "card_identities" left join'))).toEqual(
+      [],
+    );
+  });
+
+  it("a deck with a precon lineage reads none", async () => {
+    answers = [[deckRow({ preconDeckId: "55555555-5555-4555-8555-555555555555" })]];
+    const json = await (await GET(get(), ctx)).json();
+    expect(json.deck.baseline).toBeNull();
+    expect(baselineReads()).toEqual([]);
+  });
+
+  it("a visitor: no baseline key, no cut cards, and no read", async () => {
+    session.userId = null;
+    routed = [
+      {
+        match: /from "deck_baselines"/,
+        rows: [["complete", "2026-11-20T12:00:00.000Z", [{ cardId: A, qty: 1 }]]],
+      },
+    ];
+    answers = [[deckRow()]];
+    const res = await GET(get(), ctx);
+    const text = await res.text();
+    const json = JSON.parse(text);
+    expect(json.deck.isOwner).toBe(false);
+    expect(json.deck).not.toHaveProperty("baseline");
+    expect(json).not.toHaveProperty("baselineCards");
+    expect(text).not.toContain(A);
+    expect(baselineReads()).toEqual([]);
+  });
+});

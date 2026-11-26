@@ -193,6 +193,17 @@ const calls = (pred: (url: string, method: string) => boolean) =>
 const posts = () => calls((u, m) => u === "/api/decks" && m === "POST").length;
 const puts = () => calls((_u, m) => m === "PUT").length;
 const patches = () => calls((u, m) => u === "/api/decks/deck-1" && m === "PATCH").length;
+const patchBodies = () =>
+  calls((u, m) => u === "/api/decks/deck-1" && m === "PATCH").map(
+    ([, init]) => JSON.parse((init as RequestInit).body as string) as unknown,
+  );
+/** FIRST-LIST: the deck pane's line for a deck built by hand. */
+const firstListLine = () => document.querySelector("[data-slot=first-list-line]");
+/** The list as a baseline stores it: one row per identity, sorted by id. */
+const baselineCardsOf = (list: readonly { cardId: string; qty: number }[]) =>
+  list
+    .map(({ cardId, qty }) => ({ cardId, qty }))
+    .sort((a, b) => (a.cardId < b.cardId ? -1 : a.cardId > b.cardId ? 1 : 0));
 const altCalls = () => calls((u, m) => u === "/api/alternatives" && m === "POST");
 const lastPutEntries = () =>
   (
@@ -306,7 +317,22 @@ describe("DeckEditor — Swap to fit (BRACKET-FIT)", () => {
       { cardId: arena.id, zone: "main", qty: 1, tags: [] },
       ORIGINAL[3],
     ]);
-    expect([posts(), patches()]).toEqual([0, 0]);
+    // FIRST-LIST (the owner's call 4): the deck loaded full with no baseline,
+    // so the swap to fit's save stores the list it loaded as its first full list
+    // (ONE PATCH beside the PUT), and the deck pane counts the swaps from it.
+    expect(posts()).toBe(0);
+    expect(patchBodies()).toEqual([
+      {
+        baseline: {
+          source: "complete",
+          setAt: expect.any(String),
+          cards: baselineCardsOf(ORIGINAL),
+        },
+      },
+    ]);
+    expect(firstListLine()?.textContent).toContain(
+      "Changed from your first full list: 2 out, 2 in.",
+    );
 
     // One Undo for the batch: the whole list back exactly, the tags included.
     fireEvent.click(within(toastEl).getByRole("button", { name: "Undo" }));
@@ -314,6 +340,9 @@ describe("DeckEditor — Swap to fit (BRACKET-FIT)", () => {
     await act(async () => {});
     expect(puts()).toBe(2);
     expect(lastPutEntries()).toEqual(ORIGINAL);
+    // The baseline stays where it is: the list is back to it.
+    expect(patches()).toBe(1);
+    expect(firstListLine()?.textContent).toContain("No changes from your first full list yet.");
   });
 
   it("Escape closes the fit sheet, asks nothing more and writes nothing; focus goes back to Why?", async () => {

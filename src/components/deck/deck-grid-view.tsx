@@ -49,6 +49,11 @@ interface DeckGridViewProps {
    * (precon-changes.ts `beyondPrecon`); absent = no precon lineage, no badges.
    */
   beyondPrecon?: ReadonlyMap<string, number>;
+  /**
+   * The mark's name ("Not in the precon"); FIRST-LIST passes "Not in your
+   * first full list". The precon's words when absent.
+   */
+  beyondLabel?: (beyond: number, qty: number) => string;
   /** For the printed-id badge (C13); absent = no id badges. */
   adapter?: GameAdapter;
   /** Editor: group headers stick to the top of the scrolling pane (C12). */
@@ -68,6 +73,7 @@ export function DeckGridView({
   onPreview,
   owned,
   beyondPrecon,
+  beyondLabel = PRECON_COPY.rowMark,
   adapter,
   stickyHeaders = false,
   headings = true,
@@ -147,7 +153,7 @@ export function DeckGridView({
                     <span
                       role="img"
                       data-slot="precon-mark"
-                      aria-label={PRECON_COPY.rowMark(beyond, entry.qty)}
+                      aria-label={beyondLabel(beyond, entry.qty)}
                       className={cn(
                         BADGE_CLASS,
                         "absolute left-1 inline-flex items-center gap-1",
