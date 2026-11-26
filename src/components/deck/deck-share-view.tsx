@@ -85,7 +85,8 @@
  *
  * MAYBE-LIST: a deck holding Maybe cards shows its Maybe section after
  * Tokens, the same way (the owner's decision 4: visitors see it, closed),
- * in text rows with no legality mark: nothing in it is validated, counted,
+ * in the View's rows or tiles (amended: tiles in the grid, as Tokens'),
+ * read-only and with no legality mark: nothing in it is validated, counted,
  * read for the bracket, exported (Copy list) or bought (the buy menu reads
  * the counted zones).
  */
@@ -805,6 +806,7 @@ export function DeckShareView({
             adapter={adapter}
             zone={maybeZone}
             items={maybeItems}
+            view={view}
             open={maybeOpen}
             onOpenChange={setMaybeOpen}
             onPreview={onPreview}

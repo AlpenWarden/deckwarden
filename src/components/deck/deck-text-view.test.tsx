@@ -645,3 +645,55 @@ describe("DeckTextView — the precon mark (PRECON-CHANGES)", () => {
     expect(screen.getByRole("button", { name: "Sol Ring" })).toBeTruthy();
   });
 });
+
+describe("DeckTextView — a row's action (MAYBE-LIST, amended)", () => {
+  it("a row with an action puts it and the remove in one span; on touch that span takes a second line and the row wraps", () => {
+    const onRemove = vi.fn();
+    render(
+      <DeckTextView
+        adapter={mtg}
+        groups={group([{ card: sol }])}
+        severity={new Map()}
+        onRemove={onRemove}
+        removeLabel={(c) => `Remove ${c.name} from Maybe`}
+        onPreview={() => {}}
+        rowAction={(_e, c) => <button type="button">Move {c.name}</button>}
+      />,
+    );
+    const action = screen.getByRole("button", { name: "Move Sol Ring" });
+    const span = action.closest<HTMLElement>("[data-slot=row-actions]")!;
+    expect(span.className).toContain("pointer-coarse:basis-full pointer-coarse:justify-end");
+    const remove = screen.getByRole("button", { name: "Remove Sol Ring from Maybe" });
+    expect(remove.parentElement).toBe(span);
+    expect(action.compareDocumentPosition(remove) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const row = span.closest("li")!;
+    expect(row.className).toContain("pointer-coarse:flex-wrap");
+    // The first line keeps a 44 px target on touch: the name holds it.
+    expect(screen.getByRole("button", { name: "Sol Ring" }).className).toContain(
+      "pointer-coarse:min-h-11",
+    );
+    // The pips stay on the first line, before the span.
+    expect(row.querySelector("[data-slot=pips]")!.nextElementSibling).toBe(span);
+    fireEvent.click(remove);
+    expect(onRemove).toHaveBeenCalledWith("main", sol.id);
+  });
+
+  it("the deck's rows (no action) are as they were: no span, no wrap, the remove last", () => {
+    render(
+      <DeckTextView
+        adapter={mtg}
+        groups={group([{ card: sol }])}
+        severity={new Map()}
+        onSetQty={() => {}}
+        onRemove={() => {}}
+        onPreview={() => {}}
+      />,
+    );
+    expect(document.querySelector("[data-slot=row-actions]")).toBeNull();
+    const remove = screen.getByRole("button", { name: "Remove Sol Ring" });
+    const row = remove.closest("li")!;
+    expect(row.className).not.toContain("flex-wrap");
+    expect(screen.getByRole("button", { name: "Sol Ring" }).className).not.toContain("min-h-11");
+    expect(row.lastElementChild).toBe(remove);
+  });
+});

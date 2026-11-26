@@ -142,3 +142,41 @@ describe("DeckGridView — the precon badge (PRECON-CHANGES)", () => {
     expect(container.querySelector("[data-slot=precon-mark]")).toBeNull();
   });
 });
+
+describe("DeckGridView — a tile's footer and its count's name (MAYBE-LIST amended)", () => {
+  it("tileFooter renders under each tile's image, in the tile's flow; countLabel names the ×N badge", () => {
+    render(
+      <DeckGridView
+        groups={groups}
+        severity={new Map()}
+        onPreview={() => {}}
+        countLabel={(qty) => `${qty} in Maybe`}
+        tileFooter={(e, c) => (
+          <div data-slot="footer" data-card={c.id} data-zone={e.zone}>
+            {c.name}
+          </div>
+        )}
+      />,
+    );
+    const footers = [...document.querySelectorAll<HTMLElement>("[data-slot=footer]")];
+    expect(footers.map((f) => f.dataset.card)).toEqual([solRing.id, bolt.id, flash.id]);
+    expect(footers.every((f) => f.dataset.zone === mainZone)).toBe(true);
+    for (const footer of footers) {
+      const tile = footer.closest("li")!;
+      const image = tile.querySelector("button")!;
+      expect(image.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      // The tile's last child: after the badges, which sit over the image's top corners.
+      expect(tile.lastElementChild).toBe(footer);
+    }
+    expect(screen.getAllByLabelText("1 in Maybe")).toHaveLength(3);
+  });
+
+  it("without them: no footer, and the badge says in deck", () => {
+    render(<DeckGridView groups={groups} severity={new Map()} onPreview={() => {}} />);
+    expect(document.querySelector("[data-slot=footer]")).toBeNull();
+    expect(screen.getAllByLabelText("1 in deck")).toHaveLength(3);
+    for (const tile of document.querySelectorAll("li")) {
+      expect(tile.lastElementChild?.tagName).not.toBe("DIV");
+    }
+  });
+});

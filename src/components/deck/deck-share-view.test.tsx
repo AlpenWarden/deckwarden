@@ -1351,6 +1351,24 @@ describe("DeckShareView — the Maybe section (MAYBE-LIST)", () => {
     expect(within(section).queryByLabelText("Has a problem")).toBeNull();
   });
 
+  it("in the grid view the Maybe cards are tiles too, read-only: no move, no remove, no mark (the amendment)", () => {
+    render(<DeckShareView deck={deck} cards={withMaybe} />);
+    const cardsRegion = screen.getByRole("region", { name: "Cards" });
+    fireEvent.click(
+      within(within(cardsRegion).getByRole("group", { name: "View" })).getByText("Grid"),
+    );
+    fireEvent.click(within(maybe()!).getByRole("button", { name: /^Maybe\d+$/ }));
+    const section = maybe()!;
+    expect(within(section).getByRole("button", { name: "Show Lightning Bolt" })).toBeTruthy();
+    expect(within(section).getByRole("button", { name: "Show Arcane Signet" })).toBeTruthy();
+    expect(within(section).getAllByLabelText("1 in Maybe")).toHaveLength(2);
+    expect(section.querySelector("[data-slot=maybe-tile-actions]")).toBeNull();
+    expect(
+      within(section).queryByRole("button", { name: /to the deck|from Maybe|Swap in/ }),
+    ).toBeNull();
+    expect(within(section).queryByText("Has a problem")).toBeNull();
+  });
+
   it("Copy decklist carries the deck alone (the owner's decision 3: exports leave Maybe out)", async () => {
     render(<DeckShareView deck={deck} cards={withMaybe} />);
     fireEvent.click(screen.getByRole("button", { name: "Copy decklist" }));

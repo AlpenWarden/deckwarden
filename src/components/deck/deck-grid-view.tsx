@@ -25,9 +25,15 @@
  * "Not in the precon", in the top-left corner under the id and owned
  * badges (a badge of its own, so their row is as it was). The share page
  * passes nothing.
+ *
+ * MAYBE-LIST (the grid's Maybe tiles): `tileFooter` puts the caller's
+ * controls under a tile's image, in the tile's own flow, never over the
+ * card (the frame's bottom carries the artist / © line), and `countLabel`
+ * names the ×N badge for a list that is not the deck ("1 in Maybe"). The
+ * deck's own tiles, Tokens and the share page pass neither.
  */
 import { CirclePlusIcon } from "lucide-react";
-import { useId } from "react";
+import { useId, type ReactNode } from "react";
 
 import { CardImage } from "@/components/cards/card-image";
 import { GroupHeading } from "@/components/deck/deck-text-view";
@@ -62,6 +68,10 @@ interface DeckGridViewProps {
   headings?: boolean;
   /** False = no ×N badge (TOKEN-FILL: a derived token carries no quantity). */
   counts?: boolean;
+  /** The ×N badge's accessible name; default "N in deck". */
+  countLabel?: (qty: number) => string;
+  /** MAYBE-LIST: controls under each tile's image (the Maybe tiles' move and remove); absent = none. */
+  tileFooter?: (entry: EditorEntry, card: EditorCard) => ReactNode;
 }
 
 const BADGE_CLASS =
@@ -78,6 +88,8 @@ export function DeckGridView({
   stickyHeaders = false,
   headings = true,
   counts = true,
+  countLabel = (qty) => `${qty} in deck`,
+  tileFooter,
 }: DeckGridViewProps) {
   const idPrefix = useId();
   return (
@@ -127,7 +139,7 @@ export function DeckGridView({
                   )}
                   {counts && (
                     <span
-                      aria-label={`${entry.qty} in deck`}
+                      aria-label={countLabel(entry.qty)}
                       className={cn(BADGE_CLASS, "absolute top-1 right-1")}
                     >
                       ×{entry.qty}
@@ -164,6 +176,7 @@ export function DeckGridView({
                       {PRECON_COPY.added}
                     </span>
                   )}
+                  {tileFooter?.(entry, card)}
                 </li>
               );
             })}

@@ -6807,6 +6807,64 @@ describe("DeckEditor — Maybe (MAYBE-LIST)", () => {
     ]);
   });
 
+  it("grid view (the owner's ask): a Maybe tile's Swap in… at 100 / 100 opens the swap sheet, and the swap takes the card out of Maybe", async () => {
+    state.maybe = [sol];
+    stubViewport(1440);
+    render(<DeckEditor deckId="deck-1" />);
+    await loaded();
+    fireEvent.click(within(screen.getByRole("group", { name: "View" })).getByText("Grid"));
+    const opened = await openMaybe();
+    const tile = within(opened).getByRole("button", { name: "Show Sol Ring" }).closest("li")!;
+    const swap = within(tile).getByRole("button", { name: "Swap in Sol Ring…" });
+    expect(swap.textContent).toBe("Swap in…");
+    fireEvent.click(swap);
+    const sheetEl = await pollFor(() => screen.queryByRole("dialog", { name: "Swap in Sol Ring" }));
+    fireEvent.click(within(sheetEl).getByRole("button", { name: "Swap Mana Vault for Sol Ring" }));
+    const toastEl = await toastOf("Swapped Mana Vault → Sol Ring");
+    expect(within(toastEl).getByText("Taken out of Maybe.")).toBeTruthy();
+    expect(deckSize()).toBe("100 / 100 cards");
+    expect(maybeTrigger().textContent).toBe("Maybe0");
+    await save();
+    expect(puts()).toBe(1);
+    expect(lastPut()).toEqual([
+      "commander:Kozilek, the Great Distortion ×1",
+      "main:Sol Ring ×1",
+      "main:Wastes ×98",
+    ]);
+  });
+
+  it("grid view below the maximum: a tile's Move to deck moves the card in with one PUT, and a tile's remove takes a card out of Maybe with its Undo", async () => {
+    state = { wastes: 97, maybe: [sol, bolt] };
+    stubViewport(1440);
+    render(<DeckEditor deckId="deck-1" />);
+    await loaded();
+    fireEvent.click(within(screen.getByRole("group", { name: "View" })).getByText("Grid"));
+    const opened = await openMaybe();
+    expect(maybeTrigger().textContent).toBe("Maybe2");
+    fireEvent.click(within(opened).getByRole("button", { name: "Move Sol Ring to the deck" }));
+    await toastOf("Moved Sol Ring to the deck");
+    expect(deckSize()).toBe("100 / 100 cards");
+    await save();
+    expect(puts()).toBe(1);
+    expect(lastPut()).toEqual([
+      "commander:Kozilek, the Great Distortion ×1",
+      "main:Mana Vault ×1",
+      "main:Wastes ×97",
+      "maybeboard:Lightning Bolt ×1",
+      "main:Sol Ring ×1",
+    ]);
+    // At 100 now: the tile left in Maybe offers Swap in…, and its remove still works.
+    const left = maybeSection()!;
+    expect(within(left).getByRole("button", { name: "Swap in Lightning Bolt…" })).toBeTruthy();
+    fireEvent.click(within(left).getByRole("button", { name: "Remove Lightning Bolt from Maybe" }));
+    const removed = await toastOf("Removed Lightning Bolt from Maybe");
+    await save();
+    expect(lastPut()).not.toContain("maybeboard:Lightning Bolt ×1");
+    fireEvent.click(within(removed).getByRole("button", { name: "Undo" }));
+    await save();
+    expect(lastPut()).toContain("maybeboard:Lightning Bolt ×1");
+  });
+
   it("a search add of a parked card takes it out of Maybe and says so; Undo puts it back in Maybe", async () => {
     state = { wastes: 97, maybe: [sol] };
     stubViewport(1440);

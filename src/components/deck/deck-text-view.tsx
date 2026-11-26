@@ -69,6 +69,11 @@
  * button (the Maybe section's "Move to deck"), and `removeLabel` names the
  * remove ("Remove Sol Ring from Maybe"). A row with an action is editable
  * for touch sizing, like a row with steppers; the share page passes neither.
+ * Amended (the owner's ask: the button in words, always shown): the action
+ * and the remove share one span, and on touch a row with an action wraps,
+ * so that span takes a second line, right-aligned, and the name keeps its
+ * width and its 44 px target; on a fine pointer the row is one line as
+ * before.
  */
 import { ArrowLeftRightIcon, CirclePlusIcon, XIcon } from "lucide-react";
 import {
@@ -307,6 +312,9 @@ export function DeckTextView({
                   className={cn(
                     "flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 text-left hover:underline",
                     editable && "pointer-coarse:self-stretch",
+                    // A row with an action wraps on touch (below), so its first line
+                    // holds no 44 px control: the name keeps the 44 px target itself.
+                    rowAction && "pointer-coarse:min-h-11",
                   )}
                 >
                   {severity.has(card.id) && (
@@ -360,12 +368,24 @@ export function DeckTextView({
                   )}
                 </button>
               );
+              const removeButton = onRemove && (
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label={removeLabel ? removeLabel(card) : `Remove ${card.name}`}
+                  className={REVEAL_CLASS}
+                  onClick={() => onRemove(entry.zone, entry.cardId)}
+                >
+                  <XIcon />
+                </Button>
+              );
               return (
                 <li
                   key={rowKey}
                   className={cn(
                     "group/row hover:bg-muted/60 flex items-center gap-1 rounded-md px-1 py-0.5 text-sm",
                     editable && "pointer-coarse:min-h-11",
+                    rowAction && "pointer-coarse:flex-wrap",
                   )}
                 >
                   {onSetQty ? (
@@ -440,17 +460,16 @@ export function DeckTextView({
                     ) : (
                       <span aria-hidden className="size-6 shrink-0 pointer-coarse:size-11" />
                     ))}
-                  {rowAction?.(entry, card)}
-                  {onRemove && (
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      aria-label={removeLabel ? removeLabel(card) : `Remove ${card.name}`}
-                      className={REVEAL_CLASS}
-                      onClick={() => onRemove(entry.zone, entry.cardId)}
+                  {rowAction ? (
+                    <span
+                      data-slot="row-actions"
+                      className="flex shrink-0 items-center gap-1 pointer-coarse:basis-full pointer-coarse:justify-end"
                     >
-                      <XIcon />
-                    </Button>
+                      {rowAction(entry, card)}
+                      {removeButton}
+                    </span>
+                  ) : (
+                    removeButton
                   )}
                 </li>
               );

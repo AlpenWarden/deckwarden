@@ -896,9 +896,19 @@ describe("DeckListPane — the Maybe section (MAYBE-LIST)", () => {
     ).toBeTruthy();
     expect(within(section).getByRole("button", { name: "Lightning Bolt" })).toBeTruthy();
     expect(within(section).queryByLabelText("Has a problem")).toBeNull();
-    fireEvent.click(
-      within(section).getByRole("button", { name: "Move Lightning Bolt to the deck" }),
-    );
+    const move = within(section).getByRole("button", { name: "Move Lightning Bolt to the deck" });
+    // The owner's answer: the button in words, always shown (no hover reveal).
+    expect(move.textContent).toBe("Move to deck");
+    expect(move.className).not.toContain("opacity-0");
+    // The remove keeps the deck rows' reveal; on touch both take a second line.
+    const actions = move.closest<HTMLElement>("[data-slot=row-actions]")!;
+    expect(actions.className).toContain("pointer-coarse:basis-full pointer-coarse:justify-end");
+    expect(actions.closest("li")!.className).toContain("pointer-coarse:flex-wrap");
+    const remove = within(actions).getByRole("button", {
+      name: "Remove Lightning Bolt from Maybe",
+    });
+    expect(remove.className).toContain("opacity-0 group-hover/row:opacity-100");
+    fireEvent.click(move);
     expect(onMoveToDeck).toHaveBeenCalledWith(bolt.id);
     fireEvent.click(
       within(section).getByRole("button", { name: "Remove Lightning Bolt from Maybe" }),
@@ -920,10 +930,60 @@ describe("DeckListPane — the Maybe section (MAYBE-LIST)", () => {
     maybePane({ onMoveToDeck, deckFull: true });
     fireEvent.click(trigger());
     const swap = within(maybe()).getByRole("button", { name: "Swap in Lightning Bolt…" });
-    // The swap's own icon (the deck rows' Swap…), and its words on hover.
-    expect(swap.querySelector("svg.lucide-arrow-left-right")).toBeTruthy();
-    expect(swap.getAttribute("title")).toBe("Swap in…");
+    // In words, always shown (the owner's answer), where it was an icon on hover.
+    expect(swap.textContent).toBe("Swap in…");
+    expect(swap.className).not.toContain("opacity-0");
+    expect(swap.querySelector("svg")).toBeNull();
     fireEvent.click(swap);
+    expect(
+      within(maybe()).getByText("A deck can hold 500 lines at most, Maybe and Tokens included"),
+    ).toBeTruthy();
+  });
+
+  it("grid view (the owner's ask): the Maybe cards are tiles, each with its words under the image and a remove beside it; the badge counts Maybe, and no mark", () => {
+    const onMoveToDeck = vi.fn(() => undefined);
+    const onRemove = vi.fn();
+    maybePane({ onMoveToDeck, onRemove });
+    fireEvent.click(within(screen.getByRole("group", { name: "View" })).getByText("Grid"));
+    fireEvent.click(trigger());
+    const section = maybe();
+    // A tile, not a row: the image's button shows the card.
+    const show = within(section).getByRole("button", { name: "Show Lightning Bolt" });
+    expect(within(section).queryAllByRole("button", { name: "Lightning Bolt" })).toHaveLength(0);
+    const tile = show.closest("li")!;
+    expect(within(tile).getByLabelText("1 in Maybe").textContent).toBe("×1");
+    expect(within(tile).queryByText("Has a problem")).toBeNull();
+    // Under the image, in the tile's own flow: never laid over the card.
+    const footer = tile.querySelector<HTMLElement>("[data-slot=maybe-tile-actions]")!;
+    expect(show.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(footer.className).not.toMatch(/(^|\s)absolute/);
+    const move = within(footer).getByRole("button", { name: "Move Lightning Bolt to the deck" });
+    expect(move.textContent).toBe("Move to deck");
+    expect(move.className).toContain("flex-1");
+    const remove = within(footer).getByRole("button", { name: "Remove Lightning Bolt from Maybe" });
+    // Always shown on a tile (a tile's click only shows the card), 44 px on touch.
+    expect(remove.className).not.toContain("opacity-0");
+    expect(remove.className).toContain("pointer-coarse:size-11");
+    fireEvent.click(move);
+    expect(onMoveToDeck).toHaveBeenCalledWith(bolt.id);
+    fireEvent.click(remove);
+    expect(onRemove).toHaveBeenCalledWith("maybeboard", bolt.id);
+    // The deck's own tiles carry no such controls.
+    expect(document.querySelectorAll("[data-slot=maybe-tile-actions]")).toHaveLength(1);
+  });
+
+  it("grid view at the maximum: the tile's button is Swap in…, and a refused move says why", () => {
+    const onMoveToDeck = vi.fn(
+      () => "A deck can hold 500 lines at most, Maybe and Tokens included",
+    );
+    maybePane({ onMoveToDeck, deckFull: true });
+    fireEvent.click(within(screen.getByRole("group", { name: "View" })).getByText("Grid"));
+    fireEvent.click(trigger());
+    const swap = within(maybe()).getByRole("button", { name: "Swap in Lightning Bolt…" });
+    expect(swap.textContent).toBe("Swap in…");
+    expect(swap.closest("[data-slot=maybe-tile-actions]")).toBeTruthy();
+    fireEvent.click(swap);
+    expect(onMoveToDeck).toHaveBeenCalledWith(bolt.id);
     expect(
       within(maybe()).getByText("A deck can hold 500 lines at most, Maybe and Tokens included"),
     ).toBeTruthy();

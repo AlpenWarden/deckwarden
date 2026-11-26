@@ -112,7 +112,8 @@
  * counted, grouped, validated or dealt; "Move to deck" is the editor's
  * (`onMoveToDeck`, "Swap in…" at the maximum, `deckFull`). A deck with
  * Maybe cards and none in the deck reads "No cards yet" with a hint that
- * names Maybe as a way in.
+ * names Maybe as a way in. Amended: the section follows the pane's View
+ * (`view`), tiles in the grid, as Tokens do.
  */
 import { ChevronDownIcon, PlusIcon } from "lucide-react";
 import Link from "next/link";
@@ -734,6 +735,7 @@ export function DeckListPane({
           adapter={adapter}
           zone={maybeZone}
           items={maybeItems}
+          view={view}
           open={maybeOpen}
           onOpenChange={(open) => {
             setMaybeOpen(open);

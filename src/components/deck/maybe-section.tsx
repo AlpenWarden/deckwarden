@@ -8,43 +8,52 @@
  * as the Tokens section's is (Base UI's Collapsible trigger inside an h3,
  * the zone's label beside its count).
  *
- * The rows are the text view's rows in either View (a Maybe list is a list
- * to act on; grid tiles there are LATER), with no legality mark of any kind:
- * a Maybe card is not checked, so a banned or off-color card here reads like
- * any other (the acceptance's line). The editor's rows carry "Move to deck"
- * (`onMove`: the editor's handleMoveToDeck; "Swap in…" at the deck's
- * maximum, `deckFull`) before Remove, revealed on hover and always shown on
- * touch like the deck's own row actions; the share page passes neither, and
- * renders the section only when it holds a card (the owner's decision 4:
- * visitors see it, closed).
+ * The cards follow the pane's View, as Tokens do (MAYBE-LIST amended, the
+ * owner's ask: "view the maybe list in the grid format as well"): the text
+ * view's rows, or the grid's tiles, with no legality mark of any kind (a
+ * Maybe card is not checked, so a banned or off-color card here reads like
+ * any other). In the editor each card carries its way into the deck as a
+ * button in words, always shown (the owner's answer: "Labeled button,
+ * always"): "Move to deck" (`onMove`, the editor's handleMoveToDeck), or
+ * "Swap in…" at the deck's maximum (`deckFull`), which opens the swap
+ * sheet. A row puts it before its remove (revealed on hover like the deck's
+ * own, and on touch both take a second line); a tile puts it under its
+ * image with an always-shown remove beside it, since a tile's click only
+ * shows the card. The share page passes neither, and renders the section
+ * only when it holds a card (the owner's decision 4: visitors see it,
+ * closed).
  */
-import { ArrowLeftRightIcon, ArrowUpToLineIcon, ChevronDownIcon } from "lucide-react";
+import { ChevronDownIcon, XIcon } from "lucide-react";
 import { useState } from "react";
 
-import { DeckTextView, GROUP_HEADER_CLASS, REVEAL_CLASS } from "@/components/deck/deck-text-view";
+import { DeckGridView } from "@/components/deck/deck-grid-view";
+import { DeckTextView, GROUP_HEADER_CLASS } from "@/components/deck/deck-text-view";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { EditorCard, EditorEntry } from "@/lib/decks/editor-state";
 import { MAYBE_COPY } from "@/lib/decks/maybe-copy";
 import type { DeckGroup, ViewItem } from "@/lib/decks/view-model";
+import type { DeckViewMode } from "@/lib/decks/view-prefs";
 import type { GameAdapter, ZoneDef } from "@/lib/games/types";
 
-/** Nothing in Maybe is checked: no row carries a severity dot. */
+/** Nothing in Maybe is checked: no row or tile carries a severity. */
 const NO_SEVERITY: ReadonlyMap<string, "error" | "warning"> = new Map();
 
 interface MaybeSectionProps {
   adapter: GameAdapter;
   zone: ZoneDef;
   items: ViewItem<EditorEntry, EditorCard>[];
+  /** The pane's View: text rows or grid tiles. */
+  view: DeckViewMode;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onPreview: (card: EditorCard) => void;
   owned?: ReadonlySet<string>;
-  /** Editor: "Move to deck" on each row — an error sentence, or nothing. Absent = read-only (share page). */
+  /** Editor: "Move to deck" on each card — an error sentence, or nothing. Absent = read-only (share page). */
   onMove?: (cardId: string) => string | undefined;
   /** Editor: the deck is at its maximum, so the move is "Swap in…". */
   deckFull?: boolean;
-  /** Editor: the row's remove (the editor's Undo path). */
+  /** Editor: the card's remove (the editor's Undo path). */
   onRemove?: (zoneId: string, cardId: string) => void;
   /** Share page: hover and focus previews on the names. */
   preview?: boolean;
@@ -55,6 +64,7 @@ export function MaybeSection({
   adapter,
   zone,
   items,
+  view,
   open,
   onOpenChange,
   onPreview,
@@ -75,6 +85,20 @@ export function MaybeSection({
     items: [...items].sort((a, b) => a.card.name.localeCompare(b.card.name)),
   };
   const editor = onMove !== undefined;
+  // The way into the deck, in words: the row's control and the tile's.
+  const moveButton = (card: EditorCard, className?: string) =>
+    onMove && (
+      <Button
+        variant="secondary"
+        size="xs"
+        aria-label={deckFull ? MAYBE_COPY.swapInLabel(card.name) : MAYBE_COPY.moveLabel(card.name)}
+        data-maybe-move={card.id}
+        className={className}
+        onClick={() => setError(onMove(card.id) ?? null)}
+      >
+        <span className="truncate">{deckFull ? MAYBE_COPY.swapIn : MAYBE_COPY.move}</span>
+      </Button>
+    );
 
   return (
     <Collapsible
@@ -105,38 +129,55 @@ export function MaybeSection({
             <p className="text-muted-foreground text-xs">
               {editor ? MAYBE_COPY.note : MAYBE_COPY.visitorNote}
             </p>
-            <DeckTextView
-              adapter={adapter}
-              groups={[group]}
-              severity={NO_SEVERITY}
-              onRemove={onRemove}
-              removeLabel={(card) => MAYBE_COPY.removeLabel(card.name)}
-              onPreview={onPreview}
-              owned={owned}
-              preview={preview}
-              headings={false}
-              rowAction={
-                onMove
-                  ? (entry, card) => (
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label={
-                          deckFull
-                            ? MAYBE_COPY.swapInLabel(card.name)
-                            : MAYBE_COPY.moveLabel(card.name)
-                        }
-                        title={deckFull ? "Swap in…" : MAYBE_COPY.move}
-                        data-maybe-move={card.id}
-                        className={REVEAL_CLASS}
-                        onClick={() => setError(onMove(entry.cardId) ?? null)}
-                      >
-                        {deckFull ? <ArrowLeftRightIcon /> : <ArrowUpToLineIcon />}
-                      </Button>
-                    )
-                  : undefined
-              }
-            />
+            {view === "grid" ? (
+              <DeckGridView
+                groups={[group]}
+                severity={NO_SEVERITY}
+                onPreview={onPreview}
+                owned={owned}
+                adapter={adapter}
+                headings={false}
+                countLabel={MAYBE_COPY.countLabel}
+                tileFooter={
+                  onMove
+                    ? (entry, card) => (
+                        <div
+                          data-slot="maybe-tile-actions"
+                          className="mt-1 flex items-center gap-1"
+                        >
+                          {moveButton(card, "min-w-0 flex-1")}
+                          {onRemove && (
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
+                              aria-label={MAYBE_COPY.removeLabel(card.name)}
+                              className="pointer-coarse:size-11"
+                              onClick={() => onRemove(entry.zone, entry.cardId)}
+                            >
+                              <XIcon />
+                            </Button>
+                          )}
+                        </div>
+                      )
+                    : undefined
+                }
+              />
+            ) : (
+              <DeckTextView
+                adapter={adapter}
+                groups={[group]}
+                severity={NO_SEVERITY}
+                onRemove={onRemove}
+                removeLabel={(card) => MAYBE_COPY.removeLabel(card.name)}
+                onPreview={onPreview}
+                owned={owned}
+                preview={preview}
+                headings={false}
+                rowAction={
+                  onMove ? (_entry, card) => moveButton(card, "pointer-coarse:px-3") : undefined
+                }
+              />
+            )}
           </>
         )}
         {error && (

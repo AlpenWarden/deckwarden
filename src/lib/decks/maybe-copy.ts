@@ -1,7 +1,7 @@
 /**
  * The Maybe list's words (MAYBE-LIST), in one place: the editor's toasts and
- * refusals, the section's heading line and row actions, the Suggestions and
- * search rows' button, the search row's mark. Game-ignorant: "the deck", never a
+ * refusals, the section's heading line, its rows' and tiles' actions, the
+ * Suggestions and search rows' button, the search row's mark. Game-ignorant: "the deck", never a
  * game's own size or zone names (the section's heading is the zone's label,
  * `ZoneDef.label`, Magic's "Maybe").
  */
@@ -18,10 +18,14 @@ export const MAYBE_COPY = {
   /** A Maybe add of a card the deck plays, or one already parked. */
   alreadyInDeck: "Already in the deck",
   alreadyInMaybe: "Already in Maybe",
-  /** The Maybe row's way into the deck, and its toast. */
+  /** A Maybe row's and tile's way into the deck (its words, always shown), and its toast. */
   move: "Move to deck",
   moveLabel: (name: string) => `Move ${name} to the deck`,
+  /** The same button at the deck's maximum, which opens the swap sheet. */
+  swapIn: "Swap in…",
   swapInLabel: (name: string) => `Swap in ${name}…`,
+  /** A Maybe tile's ×N badge, named for the list it counts. */
+  countLabel: (qty: number) => `${qty} in Maybe`,
   moved: (name: string, qty: number) => `Moved ${qty > 1 ? `${qty}× ` : ""}${name} to the deck`,
   /** The Maybe row's remove, the card sheet's, and its toast. */
   remove: "Remove from Maybe",
