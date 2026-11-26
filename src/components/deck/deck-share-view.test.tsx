@@ -362,8 +362,10 @@ describe("DeckShareView — F12", () => {
     expect(DECK_HEADER.cards).toContain("md:-mt-28");
     fireEvent.click(leader);
     expect(push).toHaveBeenCalledWith(`/cards/${atraxa.id}`);
-    // The Leader block is gone: no "Commander" group heading anywhere.
-    expect(screen.queryByRole("heading", { level: 3, name: /^Commander/ })).toBeNull();
+    // The Leader block is gone: no "Commander" group heading anywhere. (DECK-FACTS'
+    // "Commander staples" tile in Analytics is a stat's title, not a group.)
+    expect(screen.queryByRole("heading", { level: 3, name: /^Commander(?! staples$)/ })).toBeNull();
+    expect(screen.getByRole("heading", { level: 3, name: "Commander staples" })).toBeTruthy();
   });
 
   it("a leader with a problem keeps its ring and says so (R6): the error ring and 'Has a problem'", () => {
@@ -457,6 +459,65 @@ describe("DeckShareView — the heading tree and the blocks (U6, WAVE5 D7)", () 
     expect(cardsRegion.querySelector("[data-slot=pips]")?.className).toContain(
       "[--pip-size:0.8em]",
     );
+  });
+
+  it("DECK-FACTS: the Analytics stat row ends with the deck's type and its Commander staples, each a count with its source", () => {
+    const edgar = card({
+      name: "Edgar Markov",
+      costValue: 6,
+      isLeaderCandidate: true,
+      popularity: 1200,
+      attrs: {
+        type_line: "Legendary Creature — Vampire Knight",
+        oracle_text:
+          "Eminence — Whenever you cast another Vampire spell, if Edgar Markov is in the command zone or on the battlefield, create a 1/1 black Vampire creature token.",
+      },
+    });
+    const vampires = Array.from({ length: 10 }, (_, i) =>
+      card({
+        name: `Vampire ${i + 1}`,
+        costValue: 2,
+        popularity: i < 4 ? 500 : 9000,
+        attrs: { type_line: "Creature — Vampire", oracle_text: "" },
+      }),
+    );
+    render(
+      <DeckShareView
+        deck={{ ...deck, name: "Vampires", leaderIds: [edgar.id], ciMask: 0 }}
+        cards={[
+          wire(edgar, commanderZone),
+          ...vampires.map((c) => wire(c, mainZone)),
+          ...basicLands(5).map((c) => wire(c, mainZone)),
+        ]}
+      />,
+    );
+    const analytics = screen.getByRole("region", { name: "Analytics" });
+    const tile = (title: string) =>
+      [
+        ...within(analytics).getByRole("heading", { level: 3, name: title }).parentElement!
+          .children,
+      ].map((el) => el.textContent);
+    const titles = within(analytics)
+      .getAllByRole("heading", { level: 3 })
+      .map((h) => h.textContent);
+    expect(titles.slice(0, 5)).toEqual([
+      "Avg. mana value",
+      "Lands",
+      "Est. price",
+      "Vampire cards",
+      "Commander staples",
+    ]);
+    // Edgar and his ten Vampires are the nonland cards; Edgar and four Vampires rank 2,000 or better.
+    expect(tile("Vampire cards")).toEqual([
+      "Vampire cards",
+      "11 of 11",
+      "Nonland cards, by type line",
+    ]);
+    expect(tile("Commander staples")).toEqual([
+      "Commander staples",
+      "5 of 11",
+      "Nonland cards in EDHREC's top 2,000",
+    ]);
   });
 
   it("Analytics in the share variant: thin curve bars, one stacked bar per breakdown with its legend, no tracks", () => {

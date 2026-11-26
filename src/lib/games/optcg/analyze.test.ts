@@ -277,6 +277,11 @@ describe("analyzeOptcg", () => {
     for (const x of blocks) expect(["histogram", "breakdown", "stat", "table"]).toContain(x.kind);
   });
 
+  it("DECK-FACTS: a rank on every card adds no tile; the deck facts are Magic's, and the adapter's set stays frozen", () => {
+    const ranked = cards.map((c) => ({ ...c, popularity: 1 }));
+    expect(optcgAdapter.analyze(deck, cardMap(ranked))).toEqual(blocks);
+  });
+
   it("buckets the DON!! curve with '0' for alt-cost events (U9: no en dash) and 8+ folded", () => {
     const curve = block(blocks, "don-curve");
     if (curve.kind !== "histogram") throw new Error("wrong kind");

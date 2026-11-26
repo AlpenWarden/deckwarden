@@ -49,9 +49,14 @@ vi.mock("./queries", () => ({
 }));
 vi.mock("@/lib/combos/queries", () => ({ loadCompleteCombos: mocks.loadCompleteCombos }));
 
-const { gatherSignals, recommendForSnapshot, POOL_LIMIT } = await import("./engine");
+const { gatherSignals, recommendForSnapshot, snapshotThemes, POOL_LIMIT } =
+  await import("./engine");
 const { THEME_POOL_LIMIT, THEME_POOL_THEMES } = await import("./themes");
 const { mtgAdapter } = await import("@/lib/games/mtg/adapter");
+const { analyzeMtg } = await import("@/lib/games/mtg/analyze");
+const { mtgThemes } = await import("@/lib/games/mtg/themes");
+const { card, cardMap, commanderDeck, entry } = await import("@/lib/games/mtg/test-fixtures");
+type Fixture = ReturnType<typeof card>;
 
 const LEADER = "10000000-0000-4000-8000-000000000000";
 const facts = (name: string, flags: Record<string, unknown> = {}): ReadFacts => ({
@@ -422,5 +427,136 @@ describe("the owned hook — the player reaches every candidate statement (OWNED
       expect(loader.mock.calls.length).toBeGreaterThan(0);
       for (const [filter] of loader.mock.calls) expect(filter.ownedBy).toBeUndefined();
     }
+  });
+});
+
+describe("DECK-FACTS — the type tile prints the count a Suggestions row prints", () => {
+  /** The saved list as the server reads it: the snapshot, and the one statement's rows. */
+  function serverRead(leaders: Fixture[], main: { card: Fixture; qty: number }[]) {
+    const ids = new Set(leaders.map((c) => c.id));
+    const all = [...leaders.map((c) => ({ card: c, qty: 1 })), ...main];
+    mocks.loadThemeRows.mockResolvedValue(
+      [...new Map(all.map((e) => [e.card.id, e.card])).values()].map((c) => ({
+        id: c.id,
+        name: c.name,
+        text: c.attrs.type_line,
+        rules: ids.has(c.id) ? c.attrs.oracle_text : null,
+      })),
+    );
+    return snapshotThemes(mtgAdapter, {
+      gameId: GAME_ID.mtg,
+      formatId: findFormat("mtg", "commander")!.id,
+      ciMask: 0,
+      leaderIds: [...ids],
+      entries: all.map((e) => ({
+        cardId: e.card.id,
+        qty: e.qty,
+        primaryType: e.card.primaryType,
+        costValue: e.card.costValue,
+        zone: ids.has(e.card.id) ? "commander" : "main",
+      })),
+    });
+  }
+
+  function tile(leaders: Fixture[], main: { card: Fixture; qty: number }[]) {
+    const blocks = analyzeMtg(
+      commanderDeck(
+        leaders,
+        main.map((e) => entry(e.card, e.qty)),
+      ),
+      cardMap([...leaders, ...main.map((e) => e.card)]),
+    );
+    const b = blocks.find((x) => x.id === "deck-type");
+    return b?.kind === "stat" ? b : null;
+  }
+
+  it('a type the commander names: one count, the row\'s "N of your cards share it"', async () => {
+    const edgar = card({
+      name: "Edgar Markov",
+      costValue: 6,
+      attrs: {
+        type_line: "Legendary Creature — Vampire Knight",
+        oracle_text:
+          "Eminence — Whenever you cast another Vampire spell, if Edgar Markov is in the command zone or on the battlefield, create a 1/1 black Vampire creature token.",
+      },
+    });
+    const main = [
+      ...Array.from({ length: 11 }, (_, i) => ({
+        card: card({
+          name: `Vampire ${i + 1}`,
+          attrs: { type_line: "Creature — Vampire", oracle_text: "" },
+        }),
+        qty: 1,
+      })),
+      // Copies, and a two-faced card whose back carries the type.
+      {
+        card: card({
+          name: "Bloodline Keeper",
+          attrs: { type_line: "Creature — Vampire", oracle_text: "" },
+        }),
+        qty: 2,
+      },
+      {
+        card: card({
+          name: "Westvale Initiate // Lord of Lineage",
+          attrs: { type_line: "Creature — Human // Creature — Vampire", oracle_text: "" },
+        }),
+        qty: 1,
+      },
+      {
+        card: card({ name: "Elf 1", attrs: { type_line: "Creature — Elf", oracle_text: "" } }),
+        qty: 1,
+      },
+    ];
+    const themes = await serverRead([edgar], main);
+    const t = tile([edgar], main);
+    expect(themes[0].word).toBe("Vampire");
+    expect(themes[0].namedBy).toBe("Edgar Markov");
+    expect(t).toMatchObject({ title: "Vampire cards", value: `${themes[0].count} of 16` });
+    expect(themes[0].count).toBe(15); // Edgar, 11 Vampires, two copies, the back face
+    expect(mtgThemes.evidence(themes[0]).howOften).toBe("15 of your cards share it");
+  });
+
+  it('a type counted on the list: one count, the row\'s "Shares the Sliver type with N of your cards"', async () => {
+    const commander = card({
+      name: "Test Commander",
+      attrs: { type_line: "Legendary Creature — Human Wizard", oracle_text: "Flying" },
+    });
+    const main = Array.from({ length: 12 }, (_, i) => ({
+      card: card({
+        name: `Sliver ${i + 1}`,
+        attrs: { type_line: "Creature — Sliver", oracle_text: "" },
+      }),
+      qty: 1,
+    }));
+    const themes = await serverRead([commander], main);
+    const t = tile([commander], main);
+    expect(themes.map((x) => x.word)).toEqual(["Sliver"]);
+    expect(t).toMatchObject({ title: "Sliver cards", value: "12 of 13" });
+    expect(mtgThemes.evidence(themes[0]).why).toBe("Shares the Sliver type with 12 of your cards");
+  });
+
+  it("a card in two zones: its copies summed per card, as the server sums them, and read once as a leader", async () => {
+    const edgar = card({
+      name: "Edgar Markov",
+      costValue: 6,
+      attrs: {
+        type_line: "Legendary Creature — Vampire Knight",
+        oracle_text: "Eminence — Whenever you cast another Vampire spell, create a Vampire token.",
+      },
+    });
+    const main = [
+      { card: edgar, qty: 1 },
+      ...Array.from({ length: 3 }, (_, i) => ({
+        card: card({
+          name: `Vampire ${i + 1}`,
+          attrs: { type_line: "Creature — Vampire", oracle_text: "" },
+        }),
+        qty: 1,
+      })),
+    ];
+    const themes = await serverRead([edgar], main);
+    expect(themes[0]).toMatchObject({ word: "Vampire", count: 5, namedBy: "Edgar Markov" });
+    expect(tile([edgar], main)).toMatchObject({ title: "Vampire cards", value: "5 of 5" });
   });
 });

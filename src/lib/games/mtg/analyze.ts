@@ -2,15 +2,48 @@
  * Commander deck analytics — declarative blocks (histogram/breakdown/stat),
  * never components (build plan §3). Pure, qty-weighted, lands excluded from
  * curve math. colorVar names are CSS custom properties the core's theme defines.
+ *
+ * DECK-FACTS (2026-11-26, the owner's idea 2 of 2026-11-24, "a metric of how
+ * fun the deck is", and their answer that day: facts about the list, never a
+ * score): two counted facts close the stat row, each with its denominator and
+ * its source and no word that judges (`DECK_FACTS_WORDS`; "never one
+ * authoritative number", types.ts). Both count the nonland cards the curve
+ * and "Avg. mana value" count, so "Lands" and "of N" add up to the deck. The
+ * type tile is the theme reader's first type with the count a Suggestions row
+ * prints (the reader's input built as the server's `snapshotThemes` builds
+ * it); the staples tile is the cards at `STAPLE_RANK` or better, the cut-off
+ * the site already calls a staple (measured to spread the 174 precon lists
+ * apart: 24 to 53 % between the 10th and 90th percentile). Nothing new is
+ * read from card text. The snapshot is the playable list (`toDeckSnapshot`),
+ * so a token or a Maybe card is in neither.
  */
 import { COLOR_BIT } from "../colors";
 import { typeGroupRank } from "../type-order";
 import type { AnalyticsBlock, CardData, DeckSnapshot } from "../types";
 import type { MtgAttrs } from "./attrs";
-import { MTG_CURVE_TEMPLATE } from "./recommend";
+import { MTG_CURVE_TEMPLATE, STAPLE_RANK } from "./recommend";
+import { mtgThemes } from "./themes";
 import { MTG_TYPE_ORDER } from "./type-order";
 
 type MtgCard = CardData<MtgAttrs>;
+
+/**
+ * DECK-FACTS' words, in one place: a count and what it is out of, a title
+ * naming what is counted, and a quiet line naming where the count comes from.
+ * A test bans "fun", "boring", "generic" and "score" in them.
+ */
+export const DECK_FACTS_WORDS = {
+  typeTitle: (word: string) => `${word} cards`,
+  typeHint: "Nonland cards, by type line",
+  staplesTitle: "Commander staples",
+  staplesHint: `Nonland cards in EDHREC's top ${STAPLE_RANK.toLocaleString("en-US")}`,
+  count: (n: number, of: number) => `${n} of ${of}`,
+} as const;
+
+/** A card's text at an attrs key the reader takes, "" when it holds none (core's `attrText`). */
+function textOf(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
 
 const COLOR_SLICES = [
   { bit: 1, label: "White", colorVar: "--mana-w" },
@@ -58,6 +91,7 @@ export function analyzeMtg(
   let landQty = 0;
   let priceSum = 0;
   let pricedQty = 0;
+  let stapleQty = 0;
   const typeQty = new Map<string, number>();
   const colorQty = new Map<string, number>();
   // label → [land qty, other qty] of cards producing that color.
@@ -90,6 +124,8 @@ export function analyzeMtg(
       continue;
     }
     nonlandQty += qty;
+    // DECK-FACTS: a card with no rank is in no top 2,000.
+    if (typeof card.popularity === "number" && card.popularity <= STAPLE_RANK) stapleQty += qty;
     const mv = card.costValue ?? 0;
     mvSum += mv * qty;
     curve[Math.min(mv, 7)] += qty;
@@ -99,7 +135,7 @@ export function analyzeMtg(
     }
   }
 
-  return [
+  const blocks: AnalyticsBlock[] = [
     {
       kind: "histogram",
       id: "mana-curve",
@@ -164,4 +200,45 @@ export function analyzeMtg(
           : "Cheapest printings",
     },
   ];
+
+  // DECK-FACTS, the type tile: the list as the server's `snapshotThemes`
+  // hands it to the reader (copies summed per card; each commander once more
+  // as a leader, with its rules text), so its count is a Suggestions row's.
+  const held = new Map<string, { card: MtgCard; qty: number }>();
+  for (const { qty, card } of entries) {
+    const row = held.get(card.id);
+    if (row) row.qty += qty;
+    else held.set(card.id, { card, qty });
+  }
+  const leaderIds = new Set(commanders.map((c) => c.id));
+  const theme = mtgThemes.read({
+    leaders: [...held.values()]
+      .filter(({ card }) => leaderIds.has(card.id))
+      .map(({ card }) => ({
+        name: card.name,
+        text: textOf(card.attrs.type_line),
+        rules: textOf(card.attrs.oracle_text),
+      })),
+    cards: [...held.values()].map(({ card, qty }) => ({ text: textOf(card.attrs.type_line), qty })),
+  })[0];
+  if (theme && theme.count > 0) {
+    blocks.push({
+      kind: "stat",
+      id: "deck-type",
+      title: DECK_FACTS_WORDS.typeTitle(theme.word),
+      value: DECK_FACTS_WORDS.count(theme.count, nonlandQty),
+      hint: DECK_FACTS_WORDS.typeHint,
+    });
+  }
+  // DECK-FACTS, the staples tile: nothing to count without a nonland card.
+  if (nonlandQty > 0) {
+    blocks.push({
+      kind: "stat",
+      id: "staples",
+      title: DECK_FACTS_WORDS.staplesTitle,
+      value: DECK_FACTS_WORDS.count(stapleQty, nonlandQty),
+      hint: DECK_FACTS_WORDS.staplesHint,
+    });
+  }
+  return blocks;
 }

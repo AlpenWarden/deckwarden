@@ -628,6 +628,36 @@ describe("DeckEditor — the phone card sheet (U4b)", () => {
     expect(posts()).toBe(0);
   });
 
+  it("DECK-FACTS: the phone's Analytics tab ends its stat row with Commander staples, out of the nonland cards; no type found, no type tile", async () => {
+    stubViewport(375);
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/decks/deck-7" && (init?.method ?? "GET") === "GET") {
+        const body = smallDeck();
+        // Sol Ring ranks first on EDHREC; Arcane Signet carries no rank here.
+        body.cards[0] = { ...body.cards[0], card: { ...sol, popularity: 1 } };
+        return ok(body);
+      }
+      return route(input, init);
+    });
+    render(<DeckEditor deckId="deck-7" />);
+    await act(async () => {});
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("tab", { name: "Tools" }));
+    const strip = screen.getByRole("tablist", { name: "Right pane view" });
+    const tab = within(strip).getByRole("tab", { name: "Analytics" });
+    fireEvent.click(tab);
+    const panel = document.getElementById(tab.getAttribute("aria-controls")!)!;
+    const staples = within(panel).getByRole("heading", { level: 3, name: "Commander staples" });
+    expect([...staples.parentElement!.children].map((el) => el.textContent)).toEqual([
+      "Commander staples",
+      "1 of 2",
+      "Nonland cards in EDHREC's top 2,000",
+    ]);
+    // Two artifacts are no deck type: the tile is absent, not empty.
+    expect(within(panel).queryByText("Nonland cards, by type line")).toBeNull();
+    expect(posts()).toBe(0);
+  });
+
   it("the phone strip starts at its left edge and fades the edge with more tabs past it; the wide list keeps neither (LATER row 244)", () => {
     const viewport = stubViewport(375);
     render(<DeckEditor deckId={null} draftGame="mtg" draftFormat="commander" />);
