@@ -634,20 +634,17 @@ export function buildShell(input: ShellInput): ShellDraft {
       group === "base" ? baseOrdered : (byBucket[Number(group.slice("curve-".length))] ?? []);
 
     // What the fit moves: the picks (`draft.picks`, with `chosen` beside
-    // them), which cards are in the list and which the fit took out, the
-    // base's counts, and the deck's cost with fillers at `fillerCents`.
+    // them), which cards are in the list, the base's counts, and the deck's
+    // cost with fillers at `fillerCents`.
     let cost = keptCents + (needBase - baseTaken) * (fillerCents ?? 0);
     for (const p of draft.picks) cost += centsOf(p.cheapestUsd) ?? 0;
     let held = new Set(draft.picks.map((p) => p.cardId));
-    /** Cards the fit took out: none comes back as a stand-in, so every run ends. */
-    let gone = new Set<string>();
     let swapped = 0;
     let toFillers = 0;
     const snapshot = () => ({
       picks: [...draft.picks],
       chosen: [...chosen],
       held: new Set(held),
-      gone: new Set(gone),
       colorlessUsed,
       baseTaken,
       cost,
@@ -659,7 +656,6 @@ export function buildShell(input: ShellInput): ShellDraft {
       chosen.length = 0;
       chosen.push(...s.chosen);
       held = s.held;
-      gone = s.gone;
       colorlessUsed = s.colorlessUsed;
       baseTaken = s.baseTaken;
       cost = s.cost;
@@ -676,6 +672,13 @@ export function buildShell(input: ShellInput): ShellDraft {
      * swap never leaves the list shorter of its target than it was: a card
      * the target needs (without it the list would be shorter) leaves only
      * for a cheaper card that counts and makes the list whole again.
+     *
+     * A card the run takes out does not come back in it, so a run's
+     * candidates only ever get fewer. The next run starts from every card
+     * not in the list: what the run with the target kept took out may stand
+     * in for a card the target needs once the total wins (before 2026-11-26
+     * it could not, and a list could end over its total with a cheaper one
+     * in reach).
      *
      * The goals are asked as seldom as the rule allows, since each ask reads
      * the whole list. A pick is judged only once a cheaper candidate turns
@@ -698,6 +701,8 @@ export function buildShell(input: ShellInput): ShellDraft {
       if (!counting) missingOf = null;
       // What the list is short of its target now. No swap here lets it grow.
       let moreNow = missingOf ? (missingOf(chosen)?.more ?? 0) : 0;
+      /** Cards this run took out: none comes back as a stand-in in it. */
+      const gone = new Set<string>();
       /** Picks with nothing cheaper left: done for the run. */
       const spent = new Set<string>();
       /** Picks the target needs that have no stand-in: passed over, for now. */
@@ -840,7 +845,8 @@ export function buildShell(input: ShellInput): ShellDraft {
 
     // First with the target kept: the cards it needs stay and everything
     // else gives way. Where that cannot reach the total, the total wins (the
-    // owner's decision 17): the cards the target needs may leave too.
+    // owner's decision 17): the cards the target needs may leave too, for
+    // any cheaper card, the ones the first run took out among them.
     fitDown(true, totalCents);
     if (cost > totalCents && goals?.missing) fitDown(false, totalCents);
 
@@ -864,18 +870,35 @@ export function buildShell(input: ShellInput): ShellDraft {
         return prices;
       };
       /**
-       * The least the deck could cost with the cards that count held where
-       * they are: each other priced pick at its group's cheapest candidates
-       * (a base slot at a filler's price where that is less). Never more
-       * than the fit can reach, so a try it rules out is skipped unrun.
+       * The least the deck could cost with the cards that count kept: each
+       * of them at the cheapest card of its group that counts, where that is
+       * less (a card the target needs may leave for a cheaper one that
+       * counts), and each other priced pick at its group's cheapest
+       * candidates (a base slot at a filler's price where that is less).
+       * Never more than the fit can reach, so a try it rules out is skipped
+       * unrun. (Until 2026-11-26 the cards that count were held at their own
+       * prices, which is more than the fit can reach where a cheaper one
+       * counts, and a try that would have fit was skipped.)
        */
       const floorWith = (counts: (cardId: string) => boolean): number => {
         let floor = keptCents + (needBase - baseTaken) * (fillerCents ?? 0);
         const open = new Map<string, number>();
+        const leastCounting = new Map<string, number | null>();
+        const leastCountingIn = (group: string): number | null => {
+          if (!leastCounting.has(group)) {
+            let least: number | null = null;
+            for (const r of poolOf(group)) {
+              const c = centsOf(r.cheapestUsd);
+              if (c !== null && (least === null || c < least) && counts(r.cardId)) least = c;
+            }
+            leastCounting.set(group, least);
+          }
+          return leastCounting.get(group) ?? null;
+        };
         for (const p of draft.picks) {
           const price = centsOf(p.cheapestUsd);
           if (price === null) continue;
-          if (counts(p.cardId)) floor += price;
+          if (counts(p.cardId)) floor += Math.min(price, leastCountingIn(p.group) ?? price);
           else open.set(p.group, (open.get(p.group) ?? 0) + 1);
         }
         for (const [group, slots] of open) {
@@ -919,7 +942,6 @@ export function buildShell(input: ShellInput): ShellDraft {
           chosen[chosen.indexOf(left.cardId)] = rec.cardId;
           held.delete(left.cardId);
           held.add(rec.cardId);
-          gone.delete(rec.cardId);
           if (group === "base") {
             colorlessUsed +=
               (colorlessIds.has(rec.cardId) ? 1 : 0) - (colorlessIds.has(left.cardId) ? 1 : 0);

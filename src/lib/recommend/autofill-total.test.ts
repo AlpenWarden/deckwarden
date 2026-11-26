@@ -13,10 +13,16 @@
  *   counted beside the figure;
  * - where the total cannot be reached, every pick is the cheapest its group
  *   holds, and `finishShell` says how far over the deck is and why;
- * - nothing is sampled: `Math.random` never runs and a seed means one list.
+ * - nothing is sampled: `Math.random` never runs and a seed means one list;
+ * - with a target (a stub: some cards count), every run of the fit starts
+ *   from every card not in the list, so a list that ends over its total is
+ *   the cheapest its pools hold, and one that can get under it does; and the
+ *   build-up's floor prices a card that counts at the cheapest of its group
+ *   that counts (the fixes of 2026-11-26: the reported case, the floor's
+ *   case, and 3,000 seeded cases).
  *
- * The target's half (a target kept under a total, and the total winning
- * where both cannot hold) runs over the real Magic adapter in
+ * The rest of the target's half (a target kept under a total, and the total
+ * winning where both cannot hold) runs over the real Magic adapter in
  * ./autofill-goals.test.ts.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -31,6 +37,7 @@ import {
   type ShellInput,
   type ShellTotalInput,
 } from "./autofill";
+import type { ShellGoals } from "./shell-goals";
 import type { Recommendation } from "./types";
 
 const AUTOFILL: AutofillMeta = {
@@ -515,5 +522,201 @@ describe("overTotalNote: the exact words", () => {
       expect(line).not.toMatch(/[—–·]/);
       expect(line).not.toMatch(/Game Changer|Bracket|land|mana/i);
     }
+  });
+});
+
+/**
+ * A target under a total: every run of the fit starts from every card that is
+ * not in the list (found 2026-11-26 by a review of the shipped fit). The cards
+ * one run takes out stay out for the rest of that run, which is what lets it
+ * pass over a pick with nothing cheaper left; the next run may bring them back.
+ * Before, they stayed out of every later run: the run where the total wins could
+ * not put a card the run with the target kept had taken out in a Game Changer's
+ * place, and a list ended over its total, saying no cheaper card fit, although
+ * one under it existed. With that fixed, the corpus showed a second gap the old
+ * runs had hidden: the build-up's floor held a card that counts at its own
+ * price, though the fit may swap it for a cheaper one that counts, so a try
+ * that would fit was skipped and a target that fit was not shown. Goals here
+ * are a stub: some cards count, the target needs a number of them, nothing
+ * conflicts.
+ */
+describe("the fit with a target: every run starts from every card not in the list", () => {
+  const NO_BASE: AutofillMeta = {
+    ...AUTOFILL,
+    base: { ...AUTOFILL.base, count: 0, rankedByColorCount: [0, 0, 0] },
+  };
+  const needs = (n: number, counting: ReadonlySet<string>): ShellGoals => ({
+    conflicts: () => [],
+    missing: (picks) => {
+      const have = picks.filter((id) => counting.has(id)).length;
+      return have >= n ? null : { more: n - have, counts: (id) => counting.has(id) };
+    },
+  });
+
+  it("the reported case: the total wins with a card the first run took out, and no note says nothing fit", () => {
+    // One mana value, two slots. GC ($50) is the only card that counts, and
+    // the target needs one; X ($5) is planned beside it; Y ($3) and Z ($1)
+    // rank behind them, Y first.
+    const gc = rec("GC", 0, "50.00");
+    const x = rec("X", 0, "5.00");
+    const y = alsoRan("Y", 0, "3.00", 1);
+    const z = alsoRan("Z", 0, "1.00", 2);
+    const shell = (over: Partial<ShellInput> = {}) =>
+      buildShell(
+        input({
+          autofill: NO_BASE,
+          curve: { ...CURVE, buckets: [2], bucketOf: () => 0 },
+          slots: 2,
+          pool: [gc, x, y, z],
+          basePool: [],
+          goals: needs(1, new Set([gc.cardId])),
+          ...over,
+        }),
+      );
+    expect(names(shell()).sort()).toEqual(["GC", "X"]);
+
+    // $10: the run with GC kept takes X out for Y, then Y for Z, and still
+    // costs $51; the run where the total wins puts X back in GC's place.
+    const draft = shell(fit(10, 0, null));
+    expect(names(draft).sort()).toEqual(["X", "Z"]);
+    expect(usdOf(draft)).toBe(6);
+    expect(draft.fit).toEqual({ swapped: 3, toFillers: 0 });
+    // The target did not fit, and the list says so; nothing says it is over.
+    expect(draft.reach).toEqual({ added: 0, short: 1 });
+    const finished = finishShell(draft, [], {
+      zone: "main",
+      total: {
+        totalUsd: 10,
+        keptUsd: 0,
+        keptUnpriced: 0,
+        leaderNoun: "Commander",
+        leaders: 1,
+        keptCards: 0,
+      },
+    });
+    expect(finished.deck?.estUsd).toBe(6);
+    expect(finished.notes.join(" ")).not.toMatch(/deck total/);
+
+    // Where the target fits, it is kept: at $54, X gives way to Y and GC stays.
+    const kept = shell(fit(54, 0, null));
+    expect(names(kept).sort()).toEqual(["GC", "Y"]);
+    expect(usdOf(kept)).toBe(53);
+    expect(kept.reach).toBeUndefined();
+  });
+
+  it("the build-up's floor counts a card that counts at the cheapest of its group that counts: one it took may give way to make room for the next", () => {
+    // Four mana values of one slot. The target needs two cards that count.
+    // GX and GY ($50 each) are planned and count; nothing cheaper in their
+    // groups counts. GA ($9) and GA2 ($4) count beside A ($1); GB ($6)
+    // counts beside B ($1).
+    const gx = rec("GX", 0, "50.00");
+    const x2 = alsoRan("X2", 0, "1.00", 1);
+    const gy = rec("GY", 1, "50.00");
+    const y2 = alsoRan("Y2", 1, "1.00", 1);
+    const a = rec("A", 2, "1.00");
+    const ga = alsoRan("GA", 2, "9.00", 1);
+    const ga2 = alsoRan("GA2", 2, "4.00", 2);
+    const b = rec("B", 3, "1.00");
+    const gb = alsoRan("GB", 3, "6.00", 1);
+    const counting = new Set([gx, gy, ga, ga2, gb].map((r) => r.cardId));
+    const shell = (over: Partial<ShellInput> = {}) =>
+      buildShell(
+        input({
+          autofill: NO_BASE,
+          curve: { ...CURVE, buckets: [1, 1, 1, 1], bucketOf: (card) => card.costValue },
+          slots: 4,
+          pool: [gx, x2, gy, y2, a, ga, b, gb, ga2],
+          basePool: [],
+          goals: needs(2, counting),
+          ...over,
+        }),
+      );
+    expect(names(shell()).sort()).toEqual(["A", "B", "GX", "GY"]);
+
+    // $14: the run with the target kept cannot get under it ($102), the
+    // total wins (GX and GY give way: $4), and the build-up brings GA in for
+    // A ($12). GB in B's place costs $17, which fits only if GA gives way to
+    // GA2; the floor of that try is $12, so it runs, and the target shows.
+    const draft = shell(fit(14, 0, null));
+    expect(names(draft).sort()).toEqual(["GA2", "GB", "X2", "Y2"]);
+    expect(usdOf(draft)).toBe(12);
+    expect(draft.reach).toEqual({ added: 2, short: 0 });
+  });
+
+  it("a list that ends over its total is the cheapest its pools hold, and one that can get under it does (3,000 seeded cases)", () => {
+    // Shallow pools, where the runs' set-aside cards matter: one to three
+    // mana values of one to three slots, each with up to two more candidates
+    // a slot, every card priced, a fifth of them counting, a target of one or
+    // two, and a total from 3 % to 130 % of the list planned without one.
+    let state = 20261126;
+    const rand = () => {
+      state = (state + 0x6d2b79f5) | 0;
+      let t = Math.imul(state ^ (state >>> 15), 1 | state);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const int = (lo: number, hi: number) => lo + Math.floor(rand() * (hi - lo + 1));
+    const cents = (r: Recommendation) => Math.round(Number(r.cheapestUsd) * 100);
+
+    let overButReachable = 0;
+    let overAndDearer = 0;
+    let fitted = 0;
+    for (let n = 0; n < 3000; n++) {
+      const buckets = Array.from({ length: int(1, 3) }, () => int(1, 3));
+      const pool: Recommendation[] = [];
+      const byBucket: Recommendation[][] = buckets.map(() => []);
+      buckets.forEach((slots, b) => {
+        const count = slots + int(0, slots * 2);
+        for (let k = 0; k < count; k++) {
+          const card = rec(`B${b}-${k}`, b, (0.1 + rand() * 59.9).toFixed(2), rand());
+          pool.push(card);
+          byBucket[b].push(card);
+        }
+      });
+      const counting = new Set(pool.filter(() => rand() < 0.2).map((r) => r.cardId));
+      const base = {
+        autofill: NO_BASE,
+        curve: {
+          ...CURVE,
+          buckets,
+          bucketOf: (card: { costValue: number | null }) => card.costValue,
+        },
+        slots: buckets.reduce((a, b) => a + b, 0),
+        pool: [...pool].sort((a, b) => b.score - a.score),
+        basePool: [],
+        goals: needs(int(1, 2), counting),
+        seed: n,
+      };
+      const planned = buildShell(input(base));
+      const plannedCents = planned.picks.reduce(
+        (sum, p) => sum + Math.round(Number(p.cheapestUsd) * 100),
+        0,
+      );
+      const totalUsd = Math.max(1, Math.round(plannedCents * (0.03 + rand() * 1.27))) / 100;
+      const draft = buildShell(input({ ...base, ...fit(totalUsd, 0, null) }));
+      fitted += 1;
+
+      // The size holds. (A group's count may not: the build-up can take the
+      // nearest mana value's slot, AUTOFILL-REACH's rule.)
+      expect(draft.picks).toHaveLength(planned.picks.length);
+      // The cheapest list its pools hold, in the shape the fit started from:
+      // each mana value's own cheapest cards. The fit swaps within a group,
+      // so a list the build-up did not reshape ends at it or under its total.
+      let floor = 0;
+      for (const [group, slots] of Object.entries(groupCounts(planned))) {
+        const prices = byBucket[Number(group.slice("curve-".length))]
+          .map(cents)
+          .sort((a, b) => a - b);
+        floor += prices.slice(0, slots).reduce((a, b) => a + b, 0);
+      }
+      const cost = Math.round(usdOf(draft) * 100);
+      const totalCents = Math.round(totalUsd * 100);
+      // Over its total only where that cheapest list is too, and then never
+      // dearer than it: "no cheaper cards fit" is true when the note says it.
+      if (cost > totalCents && floor <= totalCents) overButReachable += 1;
+      if (cost > totalCents && cost > floor) overAndDearer += 1;
+    }
+    expect(fitted).toBe(3000);
+    expect({ overButReachable, overAndDearer }).toEqual({ overButReachable: 0, overAndDearer: 0 });
   });
 });
