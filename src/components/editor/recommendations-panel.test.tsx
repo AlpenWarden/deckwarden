@@ -684,3 +684,457 @@ describe("RecommendationsPanel — goals (Y6a)", () => {
     expect(screen.getByRole("button", { name: "Show" })).toBeTruthy();
   });
 });
+
+// --- A deck total (SUGGEST-TOTAL, the owner's ask of 2026-11-26) ---------------------------
+
+describe("RecommendationsPanel — a deck total (SUGGEST-TOTAL)", () => {
+  let answer: Record<string, unknown>;
+  const saved = (over: Partial<Props> = {}) => props({ deckId: "deck-1", ...over });
+  /** The deck costs $62.38 at its cheapest printings: $37.62 left of a $100 total. */
+  const at62 = { usd: 62.38, unpriced: 0 };
+  const total100 = { v: 1 as const, budget: { totalUsd: 100 } };
+  const totalLine = () => document.querySelector<HTMLElement>("[data-slot=suggest-total-line]");
+  const gets = () => deckGets().map(([url]) => String(url));
+  const field = () => screen.getByRole("textbox", { name: "Deck total" }) as HTMLInputElement;
+  const BASE = "/api/decks/deck-1/recommendations";
+
+  beforeEach(() => {
+    answer = { recommendations: [rec], hidden: [], combosTruncated: false };
+    fetchMock.mockImplementation(async (url: string) =>
+      String(url) === "/api/cards/resolve"
+        ? { ok: true, status: 200, json: async () => resolveWire(rec) }
+        : { ok: true, status: 200, json: async () => answer },
+    );
+  });
+
+  it("a saved total narrows the list to what's left of it: the field reads the total, the ask is for cards up to $37.62, the line says for how many cards", async () => {
+    render(
+      <RecommendationsPanel
+        {...saved({ goals: total100, estimate: at62, onGoalsChange: vi.fn() })}
+      />,
+    );
+    await flush();
+    expect(gets()).toEqual([`${BASE}?budget=37.62`]);
+    expect(field().value).toBe("100");
+    expect(screen.getByRole("button", { name: "$100" }).getAttribute("aria-pressed")).toBe("true");
+    // The commander and Sol Ring are in: 98 to go. The goals line above has the estimate.
+    expect(totalLine()!.textContent).toBe("$37.62 left for 98 more cards");
+    expect(field().getAttribute("aria-describedby")).toBe(totalLine()!.id);
+    expect(document.querySelector("[data-slot=goals-line]")!.textContent).toBe(
+      "Your goals: est. $62 of your $100",
+    );
+    // The deck holds this total already: nothing to save, even pressed again.
+    expect(screen.queryByRole("button", { name: /as this deck's total$/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "$100" }));
+    await flush();
+    expect(screen.queryByRole("button", { name: /as this deck's total$/ })).toBeNull();
+    expect(gets()).toHaveLength(1);
+    expect(screen.getByText("Arcane Signet")).toBeTruthy();
+  });
+
+  it("the tighter limit is the one asked for, and a pick that leaves it as it was asks nothing again", async () => {
+    const view = render(<RecommendationsPanel {...saved({ goals: total100, estimate: at62 })} />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "≤ $5 a card" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "All" }));
+    await flush();
+    expect(gets()).toEqual([`${BASE}?budget=37.62`, `${BASE}?budget=5`, `${BASE}?budget=37.62`]);
+    // The line still says what's left; the tier is the tighter limit for as long as it is pressed.
+    expect(totalLine()!.textContent).toBe("$37.62 left for 98 more cards");
+    view.unmount();
+
+    // $3.50 left: under every tier, so a tier pick moves nothing.
+    fetchMock.mockClear();
+    render(
+      <RecommendationsPanel
+        {...saved({ goals: total100, estimate: { usd: 96.5, unpriced: 0 } })}
+      />,
+    );
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "≤ $5 a card" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "≤ $1 a card" }));
+    await flush();
+    expect(gets()).toEqual([`${BASE}?budget=3.5`, `${BASE}?budget=1`]);
+  });
+
+  it("a total typed in the panel narrows at once and offers its Save, a goals edit; once saved the field follows the deck's and nothing is asked again", async () => {
+    const onGoalsChange = vi.fn();
+    const goals = { v: 1 as const, targetLevel: 2 };
+    const view = render(
+      <RecommendationsPanel {...saved({ goals, estimate: at62, onGoalsChange })} />,
+    );
+    await flush();
+    expect(gets()).toEqual([BASE]);
+    expect(totalLine()).toBeNull();
+    expect(screen.getByRole("button", { name: "Not set" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    // Anything but whole dollars is refused, and nothing is asked.
+    fireEvent.change(field(), { target: { value: "12.50" } });
+    fireEvent.click(screen.getByRole("button", { name: "Set" }));
+    expect(screen.getByRole("alert").textContent).toBe(
+      "Enter a whole number of dollars, at least $1.",
+    );
+    await flush();
+    expect(gets()).toHaveLength(1);
+
+    fireEvent.change(field(), { target: { value: "$100" } });
+    fireEvent.click(screen.getByRole("button", { name: "Set" }));
+    await flush();
+    expect(gets()).toEqual([BASE, `${BASE}?budget=37.62`]);
+    expect(field().value).toBe("100");
+    // A total of the panel's own leads with its own figure: the goals line names none.
+    expect(totalLine()!.textContent).toBe("est. $62 of your $100 · $37.62 left for 98 more cards");
+    expect(onGoalsChange).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save $100 as this deck's total" }));
+    expect(onGoalsChange).toHaveBeenCalledWith({ v: 1, targetLevel: 2, budget: { totalUsd: 100 } });
+    view.rerender(
+      <RecommendationsPanel
+        {...saved({
+          goals: { ...goals, budget: { totalUsd: 100 } },
+          estimate: at62,
+          onGoalsChange,
+        })}
+      />,
+    );
+    await flush();
+    expect(screen.queryByRole("button", { name: "Save $100 as this deck's total" })).toBeNull();
+    expect(totalLine()!.textContent).toBe("$37.62 left for 98 more cards");
+    expect(gets()).toHaveLength(2);
+  });
+
+  it("Not set over a saved total asks with no limit and offers Remove; a preset asks with what's left of it", async () => {
+    const onGoalsChange = vi.fn();
+    const view = render(
+      <RecommendationsPanel {...saved({ goals: total100, estimate: at62, onGoalsChange })} />,
+    );
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Not set" }));
+    await flush();
+    expect(gets()).toEqual([`${BASE}?budget=37.62`, BASE]);
+    expect(field().value).toBe("");
+    expect(totalLine()).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Remove this deck's total" }));
+    expect(onGoalsChange).toHaveBeenLastCalledWith(null);
+    view.rerender(
+      <RecommendationsPanel {...saved({ goals: null, estimate: at62, onGoalsChange })} />,
+    );
+    await flush();
+    expect(screen.queryByRole("button", { name: "Remove this deck's total" })).toBeNull();
+    expect(gets()).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "$150" }));
+    await flush();
+    expect(gets().at(-1)).toBe(`${BASE}?budget=87.62`);
+    expect(screen.getByRole("button", { name: "Save $150 as this deck's total" })).toBeTruthy();
+  });
+
+  it("a saved total that moves from elsewhere (the Fit sheet, Autofill's Add) wins over the panel's pick", async () => {
+    const onGoalsChange = vi.fn();
+    const view = render(
+      <RecommendationsPanel {...saved({ goals: total100, estimate: at62, onGoalsChange })} />,
+    );
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "$250" }));
+    await flush();
+    expect(field().value).toBe("250");
+    view.rerender(
+      <RecommendationsPanel
+        {...saved({ goals: { v: 1, budget: { totalUsd: 150 } }, estimate: at62, onGoalsChange })}
+      />,
+    );
+    await flush();
+    expect(field().value).toBe("150");
+    expect(screen.queryByRole("button", { name: /as this deck's total$/ })).toBeNull();
+    expect(gets()).toEqual([
+      `${BASE}?budget=37.62`,
+      `${BASE}?budget=187.62`,
+      `${BASE}?budget=87.62`,
+    ]);
+    expect(onGoalsChange).not.toHaveBeenCalled();
+  });
+
+  it("nothing fits: the last answer's “hidden by your goals” line and its combo note go with its rows", async () => {
+    answer = {
+      recommendations: [rec],
+      hidden: [
+        hiddenRec(
+          "Rhystic Study",
+          "A Game Changer (Wizards' list). Your Bracket 2 target allows none",
+        ),
+      ],
+      combosTruncated: true,
+    };
+    const goals = { v: 1 as const, targetLevel: 2 };
+    render(<RecommendationsPanel {...saved({ goals, estimate: at62, onGoalsChange: vi.fn() })} />);
+    await flush();
+    expect(screen.getByRole("button", { name: "Show" }).closest("p")!.textContent).toBe(
+      "1 hidden by your goals · Show",
+    );
+    expect(screen.getByText(/Combo checks stopped at the most popular combos/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "$50" }));
+    await flush();
+    expect(gets()).toHaveLength(1);
+    expect(screen.getByText(/^Nothing more fits under your \$50 total\./)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Show" })).toBeNull();
+    expect(screen.queryByText(/Combo checks stopped at the most popular combos/)).toBeNull();
+    expect(screen.queryByText("Arcane Signet")).toBeNull();
+  });
+
+  it("at or over the total nothing is asked: the list's place says nothing more fits, Refresh is off, and Not set asks again", async () => {
+    render(
+      <RecommendationsPanel
+        {...saved({ goals: total100, estimate: { usd: 104.2, unpriced: 0 } })}
+      />,
+    );
+    await flush();
+    expect(gets()).toEqual([]);
+    expect(
+      screen.getByText(
+        "Nothing more fits under your $100 total. Raise it, or choose Not set to drop it.",
+      ),
+    ).toBeTruthy();
+    // The goals line above reads the saved total against the deck; this line adds nothing.
+    expect(document.querySelector("[data-slot=goals-line]")!.textContent).toBe(
+      "Your goals: est. $104 of your $100",
+    );
+    expect(totalLine()).toBeNull();
+    expect((screen.getByRole("button", { name: "Refresh" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Not set" }));
+    await flush();
+    expect(gets()).toEqual([BASE]);
+    expect(screen.getByText("Arcane Signet")).toBeTruthy();
+    expect(screen.queryByText(/Nothing more fits/)).toBeNull();
+  });
+
+  it("an unsaved total the deck is already over: its own figure stays on the line, with its Save", async () => {
+    render(<RecommendationsPanel {...saved({ estimate: at62, onGoalsChange: vi.fn() })} />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "$50" }));
+    await flush();
+    expect(gets()).toEqual([BASE]);
+    expect(totalLine()!.textContent).toBe("est. $62 of your $50");
+    expect(screen.getByText(/^Nothing more fits under your \$50 total\./)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save $50 as this deck's total" })).toBeTruthy();
+  });
+
+  /** The next ask hangs until the panel cuts it short. */
+  const hangNextAsk = () =>
+    fetchMock.mockImplementationOnce(
+      (_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () =>
+            reject(new DOMException("Aborted", "AbortError")),
+          );
+        }),
+    );
+  const refresh = () => screen.getByRole("button", { name: "Refresh" }) as HTMLButtonElement;
+
+  it("an ask cut short by a total that leaves nothing leaves no “Updating…” behind, and coming back to the answered list asks nothing again", async () => {
+    render(<RecommendationsPanel {...saved({ estimate: at62 })} />);
+    await flush();
+    expect(gets()).toEqual([BASE]);
+    hangNextAsk();
+    fireEvent.click(screen.getByRole("button", { name: "$250" }));
+    await flush();
+    expect(screen.getByText("Updating…")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "$50" }));
+    await flush();
+    expect(screen.queryByText("Updating…")).toBeNull();
+    // Back to no total: the list already answered, so nothing is asked again.
+    fireEvent.click(screen.getByRole("button", { name: "Not set" }));
+    await flush();
+    expect(gets()).toEqual([BASE, `${BASE}?budget=187.62`]);
+    expect(screen.queryByText("Updating…")).toBeNull();
+    expect(refresh().disabled).toBe(false);
+    expect(screen.getByText("Arcane Signet")).toBeTruthy();
+  });
+
+  it("a key that comes straight back cuts its ask short with no “Updating…” left and Refresh on: a total, then a tier (older than this build)", async () => {
+    render(<RecommendationsPanel {...saved({ goals: total100, estimate: at62 })} />);
+    await flush();
+    hangNextAsk();
+    fireEvent.click(screen.getByRole("button", { name: "$150" }));
+    await flush();
+    expect(screen.getByText("Updating…")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "$100" }));
+    await flush();
+    expect(screen.queryByText("Updating…")).toBeNull();
+    expect(refresh().disabled).toBe(false);
+    expect(gets()).toEqual([`${BASE}?budget=37.62`, `${BASE}?budget=87.62`]);
+
+    hangNextAsk();
+    fireEvent.click(screen.getByRole("button", { name: "≤ $5 a card" }));
+    await flush();
+    expect(screen.getByText("Updating…")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "All" }));
+    await flush();
+    expect(screen.queryByText("Updating…")).toBeNull();
+    expect(refresh().disabled).toBe(false);
+    expect(gets()).toEqual([`${BASE}?budget=37.62`, `${BASE}?budget=87.62`, `${BASE}?budget=5`]);
+    expect(screen.getByText("Arcane Signet")).toBeTruthy();
+  });
+
+  it("between an Add and the answer its save asks for, a row the deck can no longer afford leaves the list; the card added keeps its row", async () => {
+    const priced = (name: string, usd: string, n: number): Recommendation => ({
+      ...rec,
+      cardId: `7777777${n}-7777-4777-8777-777777777777`,
+      name,
+      cheapestUsd: usd,
+    });
+    const eight = priced("Eight Dollar Card", "8.00", 1);
+    const nine = priced("Nine Dollar Card", "9.00", 2);
+    answer = {
+      recommendations: [eight, nine, rec],
+      hidden: [
+        {
+          ...hiddenRec(
+            "Rhystic Study",
+            "A Game Changer (Wizards' list). Your Bracket 2 target allows none",
+          ),
+          cheapestUsd: "9.00",
+        },
+      ],
+      combosTruncated: false,
+    };
+    const view = render(
+      <RecommendationsPanel {...saved({ goals: total100, estimate: { usd: 90, unpriced: 0 } })} />,
+    );
+    await flush();
+    expect(gets()).toEqual([`${BASE}?budget=10`]);
+    expect(screen.getByText("Nine Dollar Card")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Show" })).toBeTruthy();
+
+    // The $8 card goes in: $2 left at once, its save still to settle.
+    const grown = [...baseEntries, { cardId: eight.cardId, zone: "main", qty: 1 }];
+    view.rerender(
+      <RecommendationsPanel
+        {...saved({
+          goals: total100,
+          estimate: { usd: 98, unpriced: 0 },
+          entries: grown,
+          inDeckQty: new Map([[eight.cardId, 1]]),
+          saveStatus: "dirty",
+        })}
+      />,
+    );
+    await flush();
+    expect(gets()).toHaveLength(1);
+    expect(totalLine()!.textContent).toBe("$2 left for 97 more cards");
+    expect(screen.queryByText("Nine Dollar Card")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Show" })).toBeNull();
+    expect(screen.getByText("Eight Dollar Card").closest("li")!.textContent).toContain("In deck ✓");
+    expect(screen.getByRole("button", { name: "Add Arcane Signet to the deck" })).toBeTruthy();
+  });
+
+  it("a tick the server declined (signed out) filters nothing, so the total narrows the list again and the line says what's left", async () => {
+    fetchMock.mockImplementation(async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        recommendations: [rec],
+        hidden: [],
+        combosTruncated: false,
+        owned: String(url).includes("owned=1")
+          ? { requested: true, applied: false, reason: "signed-out" }
+          : { requested: false, applied: false },
+      }),
+    }));
+    render(
+      <RecommendationsPanel
+        {...saved({ ownedAvailable: true, goals: total100, estimate: at62 })}
+      />,
+    );
+    await flush();
+    fireEvent.click(screen.getByTestId("only-owned-toggle"));
+    await flush();
+    await flush();
+    expect(gets()).toEqual([
+      `${BASE}?budget=37.62`,
+      `${BASE}?owned=1`,
+      `${BASE}?budget=37.62&owned=1`,
+    ]);
+    expect(totalLine()!.textContent).toBe("$37.62 left for 98 more cards");
+    expect(
+      screen.getByText("Sign in to filter by your collection. Showing all suggestions."),
+    ).toBeTruthy();
+  });
+
+  it("a draft asks with what's left in its body, and its goals never carry the total", async () => {
+    render(
+      <RecommendationsPanel
+        {...props({
+          goals: { v: 1, targetLevel: 2, budget: { totalUsd: 100 } },
+          estimate: { usd: 62.38, unpriced: 2 },
+        })}
+      />,
+    );
+    await flush();
+    const body = JSON.parse((snapshotCalls()[0][1] as RequestInit).body as string);
+    expect(body.budget).toBe(37.62);
+    expect(body.goals).toEqual({ v: 1, targetLevel: 2 });
+    expect(deckGets()).toHaveLength(0);
+  });
+
+  it("“Only cards I own” ticked: the total narrows nothing, its line says why, and the tier still asks", async () => {
+    render(
+      <RecommendationsPanel
+        {...saved({
+          ownedAvailable: true,
+          goals: total100,
+          estimate: { usd: 104.2, unpriced: 0 },
+        })}
+      />,
+    );
+    await flush();
+    expect(gets()).toEqual([]);
+    fireEvent.click(screen.getByTestId("only-owned-toggle"));
+    await flush();
+    expect(gets()).toEqual([`${BASE}?owned=1`]);
+    expect(totalLine()!.textContent).toBe(
+      "Cards you own cost nothing to add, so the total doesn't narrow this list.",
+    );
+    expect(screen.queryByText(/Nothing more fits/)).toBeNull();
+    expect(screen.getByText("Arcane Signet")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "≤ $1 a card" }));
+    await flush();
+    expect(gets().at(-1)).toBe(`${BASE}?budget=1&owned=1`);
+  });
+
+  it("an empty answer under what's left says so in the total's words", async () => {
+    answer = { recommendations: [], hidden: [], combosTruncated: false };
+    render(
+      <RecommendationsPanel
+        {...saved({ goals: total100, estimate: { usd: 96.5, unpriced: 0 } })}
+      />,
+    );
+    await flush();
+    expect(screen.getByText("No suggestions fit the $3.50 left of your $100 total.")).toBeTruthy();
+  });
+
+  it("an add that moves what's left asks once, after its save, with the new limit", async () => {
+    const view = render(<RecommendationsPanel {...saved({ goals: total100, estimate: at62 })} />);
+    await flush();
+    const grown = [...baseEntries, { cardId: rec.cardId, zone: "main", qty: 1 }];
+    const after = { usd: 62.78, unpriced: 0 };
+    view.rerender(
+      <RecommendationsPanel
+        {...saved({ goals: total100, estimate: after, entries: grown, saveStatus: "dirty" })}
+      />,
+    );
+    await flush();
+    expect(gets()).toHaveLength(1);
+    view.rerender(
+      <RecommendationsPanel {...saved({ goals: total100, estimate: after, entries: grown })} />,
+    );
+    await flush();
+    expect(gets()).toEqual([`${BASE}?budget=37.62`, `${BASE}?budget=37.22`]);
+    expect(totalLine()!.textContent).toBe("$37.22 left for 97 more cards");
+  });
+});

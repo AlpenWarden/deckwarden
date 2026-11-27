@@ -76,7 +76,10 @@ export function zoneQty(entries: readonly EditorEntry[], zoneId: string): number
 }
 
 /** Deck size = total across countsTowardSize zones (Commander: 100 incl. commander). */
-export function deckSizeCount(entries: readonly EditorEntry[], format: FormatDef): number {
+export function deckSizeCount(
+  entries: readonly Pick<EditorEntry, "zone" | "qty">[],
+  format: FormatDef,
+): number {
   const counted = new Set(format.zones.filter((z) => z.countsTowardSize).map((z) => z.id));
   return entries.reduce((sum, e) => (counted.has(e.zone) ? sum + e.qty : sum), 0);
 }

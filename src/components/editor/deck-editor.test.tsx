@@ -5746,6 +5746,44 @@ describe("DeckEditor — Fit my budget (Y8, WAVE4 D9)", () => {
     expect(altCalls()).toHaveLength(0);
   });
 
+  // ------------------------------------------------------------- SUGGEST-TOTAL --
+  it("SUGGEST-TOTAL: the saved total narrows Suggestions to what's left; a preset there asks again; its Save is ONE goals PATCH, no PUT, the goals line reads it, and Suggestions ask nothing again", async () => {
+    deckGoals = { v: 1, budget: { totalUsd: 200 } };
+    stubViewport(1440);
+    render(<DeckEditor deckId="deck-1" />);
+    fireEvent.click(await pollFor(() => screen.queryByRole("tab", { name: "Suggestions" })));
+    const recGets = () =>
+      fetchMock.mock.calls
+        .map(([url]) => String(url))
+        .filter((url) => url.startsWith("/api/decks/deck-1/recommendations"));
+    const totalLine = () =>
+      document.querySelector<HTMLElement>("[data-slot=suggest-total-line]")?.textContent;
+    const goalsLine = () =>
+      document.querySelector<HTMLElement>("[data-slot=goals-line]")?.textContent;
+    await pollFor(() => (recGets().length > 0 ? true : null));
+    // $200 less est. $118 at the cheapest printings: $82 left for the 66 cards to go.
+    expect(recGets()).toEqual(["/api/decks/deck-1/recommendations?budget=82"]);
+    expect(totalLine()).toBe("$82 left for 66 more cards");
+    expect(goalsLine()).toBe("Your goals: est. $118 of your $200 Change");
+
+    fireEvent.click(screen.getByRole("button", { name: "$150" }));
+    await pollFor(() => (recGets().length > 1 ? true : null));
+    expect(recGets()[1]).toBe("/api/decks/deck-1/recommendations?budget=32");
+    expect(totalLine()).toBe("est. $118 of your $150 · $32 left for 66 more cards");
+    // Picking is no edit: nothing saved yet.
+    expect(patchBodies()).toEqual([]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Save $150 as this deck's total" }));
+    await settle(1500);
+    await act(async () => {});
+    expect(patchBodies()).toEqual([{ goals: { budget: { totalUsd: 150 }, v: 1 } }]);
+    expect(puts()).toBe(0);
+    expect(goalsLine()).toBe("Your goals: est. $118 of your $150 Change");
+    expect(totalLine()).toBe("$32 left for 66 more cards");
+    expect(screen.queryByRole("button", { name: "Save $150 as this deck's total" })).toBeNull();
+    expect(recGets()).toHaveLength(2);
+  });
+
   // -------------------------------------------------- AUTOFILL-TOTAL (saved) --
   it("AUTOFILL-TOTAL: on a saved deck the sheet opens on the deck's total; Add with another saves it in ONE goals PATCH beside the ONE PUT; Undo leaves it; after a reload the goals line reads against it and Fit my budget opens on it", async () => {
     const pebble = rock("Pebble", 1);

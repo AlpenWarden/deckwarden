@@ -14,7 +14,7 @@
  * leader = ci_mask 0 = colorless-only noise; the empty state says to add
  * one) AND autosave reports "saved" (the server rows ARE the engine's
  * input) AND the (card, zone, qty) key changed. Tag and meta edits never
- * refetch; the budget toggle and Refresh do.
+ * refetch; the budget toggle, the deck total and Refresh do.
  *
  * Drafts (Y2b, WAVE4 D2): with no deck row yet — a seeded precon, combo,
  * Surprise me or chosen leader — the panel asks POST /api/recommendations
@@ -64,6 +64,29 @@
  * Adds are announced by the editor's toast ("Added X · Undo"), so the live
  * line keeps only failures.
  *
+ * Deck total (SUGGEST-TOTAL, the owner's ask of 2026-11-26: "the same
+ * option to type your budget to get more specific in the suggestion tab"):
+ * under Budget, the Autofill sheet's own field (./deck-total-field.tsx:
+ * whole dollars typed and set, $50 to $250, or Not set), starting at the
+ * deck's saved total. The owner's two answers, before the build:
+ * - "Fits what's left": a total narrows the list to the cards at or under
+ *   what is left of it (the total less the deck's estimate), so adding any
+ *   card shown keeps the deck at or under it. What's left is a price limit
+ *   like the tiers, and the tighter one is asked for (the request's
+ *   `budget`, ../../lib/recommend/suggest-total.ts): the routes are as they
+ *   were and read no total. A line under the field says what is left and
+ *   for how many cards. At or over the total nothing is asked, and the
+ *   list's place says nothing more fits.
+ * - "Save link, like Budget": a total of the panel's own narrows the list at
+ *   once and offers "Save $100 as this deck's total" ("Remove this deck's
+ *   total" for Not set), a goals edit like "Save as this deck's budget".
+ * The goals line keeps reading the deck's saved total, with its "Fit my
+ * budget" door while over it. Between an Add and the answer its save asks
+ * for, the rows already shown are kept to the new limit, so none offers an
+ * Add that would go over. With "Only cards I own" ticked and applied the
+ * total narrows nothing (an owned card costs nothing to add), and its line
+ * says so; a tick the server declined narrows by the total again.
+ *
  * Maybe (MAYBE-LIST): with `onMaybe` (a format with a Maybe zone) every row
  * carries a small "Maybe" at the end of its sources line, so the name keeps
  * its width and "Add" or "Swap in…" stays on the first line; at any deck
@@ -74,7 +97,7 @@
  */
 import { ArrowRightIcon, ArrowUpRightIcon, GaugeIcon } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -82,6 +105,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { GoalsLine } from "@/components/deck/goals-line";
 import { Segmented } from "@/components/deck/segmented";
+import { DeckTotalField } from "@/components/editor/deck-total-field";
 import {
   IMPORT_COLLECTION_HINT,
   ImportCollectionHint,
@@ -90,16 +114,38 @@ import {
 } from "@/components/editor/owned-copy";
 import { useResolvedAdd } from "@/components/editor/use-resolved-add";
 import { BRACKET_COPY } from "@/lib/brackets/copy";
-import type { EditorCard } from "@/lib/decks/editor-state";
-import { goalsPatchBody, suggestionGoals, withBudget, type DeckGoals } from "@/lib/decks/goals";
+import { formatUsd } from "@/lib/collection/ownership";
+import { deckSizeCount, type EditorCard } from "@/lib/decks/editor-state";
+import {
+  goalsPatchBody,
+  suggestionGoals,
+  withBudget,
+  withTotal,
+  type DeckGoals,
+} from "@/lib/decks/goals";
 import { MAYBE_COPY } from "@/lib/decks/maybe-copy";
 import { deckStateKey, hasLeader, snapshotBody } from "@/lib/decks/panel-view";
 import { playableEntries } from "@/lib/decks/playable";
 import { DECK_TOKEN_HEADER, getDeckToken } from "@/lib/decks/token-store";
 import type { GoalConflict } from "@/lib/recommend/goals";
 import type { Confidence, Recommendation } from "@/lib/recommend/types";
-import { BUDGET_OPTIONS, tierOf, usdOf, type BudgetTier } from "@/lib/recommend/budget";
-import type { FitEstimate } from "@/lib/recommend/fit";
+import {
+  BUDGET_OPTIONS,
+  TOTAL_PRESETS_USD,
+  tierOf,
+  usdOf,
+  type BudgetTier,
+} from "@/lib/recommend/budget";
+import { FIT_COPY, totalPhrase, type FitEstimate } from "@/lib/recommend/fit";
+import {
+  fitsLimit,
+  limitKey,
+  SUGGEST_TOTAL_COPY,
+  suggestionLimit,
+  suggestTotalLine,
+  usdLeft,
+} from "@/lib/recommend/suggest-total";
+import { TOTAL_COPY } from "@/lib/recommend/total-copy";
 import { orderEvidence } from "@/lib/recommend/view";
 import type { FormatDef, GameAdapter } from "@/lib/games/types";
 
@@ -168,6 +214,21 @@ export function RecommendationsPanel({
   const goalTier = tierOf(goals?.budget?.perCardUsd);
   const [pick, setPick] = useState<BudgetTier | null>(null);
   const budget = pick ?? goalTier;
+  // The deck total (SUGGEST-TOTAL), the same way: the deck's saved total
+  // until the panel picks one of its own (Not set included). A saved total
+  // that moves (this panel's Save, the Fit sheet, Autofill's Add) wins over
+  // the pick, so the panel follows the deck again; until it moves the pick
+  // stands, so a Save never flickers back to the old total and asks twice.
+  // Adjusted during render, one pass.
+  const savedTotal = goals?.budget?.totalUsd ?? null;
+  const [totalPick, setTotalPick] = useState<{ usd: number | null } | null>(null);
+  const [seenSaved, setSeenSaved] = useState(savedTotal);
+  if (seenSaved !== savedTotal) {
+    setSeenSaved(savedTotal);
+    setTotalPick(null);
+  }
+  const total = totalPick ? totalPick.usd : savedTotal;
+  const totalLineId = useId();
   const [onlyOwned, setOnlyOwned] = useState(false);
   const [ownedMeta, setOwnedMeta] = useState<OwnedFilterMeta | null>(null);
   const [recs, setRecs] = useState<SuggestionRec[] | null>(null);
@@ -180,6 +241,12 @@ export function RecommendationsPanel({
   // Force-refetch counter (Refresh button / error retry) — part of the key.
   const [nonce, setNonce] = useState(0);
   const lastKeyRef = useRef<string | null>(null);
+  // The latest ask started (SUGGEST-TOTAL's review): an ask cut short clears
+  // "Updating…" only when no newer ask took its place, which clears it itself
+  // when it lands. Before, a cut-short ask whose key came straight back (a
+  // tier, a total or the tab left and found again) left it, and Refresh off,
+  // for good.
+  const askRef = useRef(0);
   const { pendingAdd, pendingMaybe, notice, add, maybe } = useResolvedAdd(adapter, format, onAdd, {
     announce: false,
     onMaybe,
@@ -191,28 +258,46 @@ export function RecommendationsPanel({
   // starts. Without this gate it would tick and send a request that ignores it.
   const ownedReady = ownedAvailable && deckId !== null;
   const wantOwned = onlyOwned && ownedReady;
+  // The owned filter as the last answer had it: a tick the server declined
+  // (signed out, no collection) filters nothing, so the total narrows again.
+  const ownedOn = wantOwned && !(ownedMeta?.requested === true && !ownedMeta.applied);
   // The goals the server checks (Y6a), canonical: an edit that leaves them
   // alone (the exceptions line) never asks again; one that changes them does.
   const sentGoals = useMemo(() => suggestionGoals(goals), [goals]);
   const goalsKey = goalsPatchBody(sentGoals);
-  const fetchKey = `${deckStateKey(playableEntries(entries, format))}§b:${budget}§o:${wantOwned ? 1 : 0}§g:${goalsKey}§n:${nonce}`;
+  // What a card may cost (SUGGEST-TOTAL): the tier's limit, or what's left of
+  // the total when that is tighter. Nothing left: nothing is asked. The key
+  // reads the limit itself, so a tier or a total that leaves it as it was
+  // asks nothing again, and an add that moves what's left asks once, with
+  // the add's own settled burst. One more ask can follow a burst for a
+  // collector: the editor's owned lookup, landing after the save, counts a
+  // card they own at $0 and so moves what's left. Memoized so the compiler
+  // reads it as frozen (the draft body's memo below depends on it).
+  const limit = useMemo(
+    () => suggestionLimit({ tierUsd: usdOf(budget), totalUsd: total, estimate, owned: ownedOn }),
+    [budget, total, estimate, ownedOn],
+  );
+  const { priceUsd, full } = limit;
+  const fetchKey = `${deckStateKey(playableEntries(entries, format))}§p:${limitKey(limit)}§o:${wantOwned ? 1 : 0}§g:${goalsKey}§n:${nonce}`;
   // A draft's request (Y2b): a string, so an edit that leaves the snapshot
   // alone (a tag, a printing) leaves the effect alone too.
   const draftBody = useMemo(
     () =>
       deckId === null
         ? JSON.stringify(
-            snapshotBody(adapter.id, format, entries, usdOf(budget) ?? undefined, sentGoals),
+            snapshotBody(adapter.id, format, entries, priceUsd ?? undefined, sentGoals),
           )
         : null,
-    [deckId, adapter.id, format, entries, budget, sentGoals],
+    [deckId, adapter.id, format, entries, priceUsd, sentGoals],
   );
 
   useEffect(() => {
-    if (!active || !leader || saveStatus !== "saved") return;
+    // Nothing left of the total (SUGGEST-TOTAL): nothing to ask.
+    if (!active || !leader || saveStatus !== "saved" || full) return;
     if (fetchKey === lastKeyRef.current) return;
     const controller = new AbortController();
     void (async () => {
+      const ask = ++askRef.current;
       setFetching(true);
       setFetchError(null);
       try {
@@ -227,7 +312,7 @@ export function RecommendationsPanel({
           });
         } else {
           const search = new URLSearchParams();
-          if (budget !== "all") search.set("budget", budget);
+          if (priceUsd !== null) search.set("budget", String(priceUsd));
           if (wantOwned) search.set("owned", "1");
           const query = search.toString();
           const params = query ? `?${query}` : "";
@@ -255,13 +340,16 @@ export function RecommendationsPanel({
         setOwnedMeta(json.owned ?? null);
         setFetching(false);
       } catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError") return;
+        if (err instanceof DOMException && err.name === "AbortError") {
+          if (askRef.current === ask) setFetching(false);
+          return;
+        }
         setFetching(false);
         setFetchError(err instanceof Error ? err.message : "Suggestions failed to load.");
       }
     })();
     return () => controller.abort();
-  }, [active, leader, deckId, saveStatus, fetchKey, budget, wantOwned, draftBody]);
+  }, [active, leader, deckId, saveStatus, fetchKey, priceUsd, full, wantOwned, draftBody]);
 
   const toggleExpanded = (cardId: string) => {
     setExpanded((prev) => {
@@ -286,6 +374,29 @@ export function RecommendationsPanel({
     onGoalsChange?.(withBudget(goals, usdOf(budget)));
     setPick(null); // the control follows the saved goal again
   };
+  // SUGGEST-TOTAL: "Save $100 as this deck's total" (or "Remove this deck's
+  // total") for a pick the deck doesn't hold yet, the same goals edit.
+  const canSaveTotal =
+    onGoalsChange !== undefined && totalPick !== null && totalPick.usd !== savedTotal;
+  // The pick gives way once the saved total moves to it (above).
+  const saveTotal = () => onGoalsChange?.(withTotal(goals, total));
+  const totalLine = suggestTotalLine({
+    totalUsd: total,
+    savedUsd: savedTotal,
+    limit,
+    toAdd: Math.max(0, format.deckSize.min - deckSizeCount(entries, format)),
+    owned: ownedOn,
+    phrase: total === null ? "" : totalPhrase(total, estimate),
+  });
+  // The last answer's rows, kept to the limit in force now (SUGGEST-TOTAL's
+  // review): an Add tightens what's left at once, while the next answer waits
+  // for the save to settle, and until it lands a row the deck can no longer
+  // afford leaves the list rather than offer an Add that would go over. A
+  // card the deck now holds keeps its row ("In deck ✓").
+  const affordable = (rec: SuggestionRec) =>
+    (inDeckQty.get(rec.cardId) ?? 0) > 0 || fitsLimit(rec.cheapestUsd, priceUsd);
+  const shownRecs = recs?.filter(affordable) ?? null;
+  const shownHidden = hidden.filter(affordable);
 
   return (
     <div className="p-3">
@@ -303,7 +414,7 @@ export function RecommendationsPanel({
           variant="ghost"
           size="xs"
           onClick={() => setNonce((n) => n + 1)}
-          disabled={fetching}
+          disabled={fetching || full}
         >
           Refresh
         </Button>
@@ -317,6 +428,39 @@ export function RecommendationsPanel({
           {BRACKET_COPY.saveBudget}
         </button>
       )}
+
+      {/* Deck total (SUGGEST-TOTAL): the Autofill sheet's field, under Budget,
+          then what is left of it and, for a pick of the panel's own, its save.
+          The lines sit under the field, so it never moves when they change. */}
+      <div data-slot="suggest-total" className="mt-1.5 space-y-1">
+        <DeckTotalField
+          quiet
+          committed={total}
+          presets={TOTAL_PRESETS_USD}
+          submitLabel={TOTAL_COPY.set}
+          onCommit={(usd) => setTotalPick({ usd })}
+          notSet={{ label: TOTAL_COPY.notSet, onClear: () => setTotalPick({ usd: null }) }}
+          describedBy={totalLine ? totalLineId : undefined}
+        />
+        {totalLine && (
+          <p
+            id={totalLineId}
+            data-slot="suggest-total-line"
+            className="text-muted-foreground text-xs"
+          >
+            {totalLine}
+          </p>
+        )}
+        {canSaveTotal && (
+          <button
+            type="button"
+            onClick={saveTotal}
+            className="text-foreground cursor-pointer text-xs font-medium underline underline-offset-4 hover:no-underline pointer-coarse:min-h-11"
+          >
+            {total === null ? FIT_COPY.removeTotal : FIT_COPY.saveTotal(total)}
+          </button>
+        )}
+      </div>
 
       {/* U10a (WAVE5.md D10, D1): the toggle is a Checkbox in a horizontal
           Field; without a collection the Field is disabled and the reason the
@@ -368,10 +512,10 @@ export function RecommendationsPanel({
                 : "")}
       </p>
 
-      {recs !== null && hidden.length > 0 && (
+      {!full && shownRecs !== null && shownHidden.length > 0 && (
         <div data-slot="goals-hidden" className="mt-1">
           <p className="text-muted-foreground text-xs">
-            {BRACKET_COPY.hiddenByGoals(hidden.length)}
+            {BRACKET_COPY.hiddenByGoals(shownHidden.length)}
             {" · "}
             <button
               type="button"
@@ -384,7 +528,7 @@ export function RecommendationsPanel({
           </p>
           {showHidden && (
             <ul aria-label="Hidden by your goals" className="mt-1 space-y-1.5">
-              {hidden.map((rec) => (
+              {shownHidden.map((rec) => (
                 <SuggestionRow
                   key={rec.cardId}
                   adapter={adapter}
@@ -407,11 +551,17 @@ export function RecommendationsPanel({
           )}
         </div>
       )}
-      {recs !== null && combosTruncated && (
+      {!full && recs !== null && combosTruncated && (
         <p className="text-muted-foreground mt-1 text-xs">{BRACKET_COPY.combosCapped}</p>
       )}
 
-      {fetchError ? (
+      {full && total !== null ? (
+        // SUGGEST-TOTAL: at or over the total no card fits what's left, so
+        // nothing was asked; the way out is the field right above.
+        <p data-slot="suggest-total-full" className="text-muted-foreground mt-2 text-sm">
+          {SUGGEST_TOTAL_COPY.full(formatUsd(total))}
+        </p>
+      ) : fetchError ? (
         <div className="mt-2 text-sm">
           <p className="text-destructive">{fetchError}</p>
           <Button
@@ -423,26 +573,28 @@ export function RecommendationsPanel({
             Try again
           </Button>
         </div>
-      ) : recs === null ? (
+      ) : shownRecs === null ? (
         // With the gate passed, either the fetch is in flight or it's waiting
         // on the settle (a draft's first edit minting its row included) — the
         // effect fires on save.
         <p className="text-muted-foreground mt-2 text-sm">
           {fetching ? "Finding suggestions…" : "Suggestions appear once the deck saves."}
         </p>
-      ) : recs.length === 0 ? (
+      ) : shownRecs.length === 0 ? (
         <p className="text-muted-foreground mt-2 text-sm">
           {ownedMeta?.applied
             ? "Nothing you own fits this deck right now. Untick “Only cards I own” for the full list."
-            : hidden.length > 0
+            : shownHidden.length > 0
               ? "Nothing else fits your goals right now."
-              : budget === "all"
-                ? "No suggestions right now."
-                : `No suggestions with a known price of $${budget} or less. Try a wider budget.`}
+              : limit.binding === "total" && limit.leftUsd !== null && total !== null
+                ? SUGGEST_TOTAL_COPY.noneLeft(usdLeft(limit.leftUsd), formatUsd(total))
+                : limit.binding === "tier"
+                  ? `No suggestions with a known price of $${budget} or less. Try a wider budget.`
+                  : "No suggestions right now."}
         </p>
       ) : (
         <ul className="mt-1 space-y-1.5">
-          {recs.map((rec) => (
+          {shownRecs.map((rec) => (
             <SuggestionRow
               key={rec.cardId}
               adapter={adapter}
