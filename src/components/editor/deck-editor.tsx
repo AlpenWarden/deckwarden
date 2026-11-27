@@ -2166,7 +2166,8 @@ export function DeckEditor({
 
   // MAYBE-LIST: a Suggestions row's Maybe, and a search row's (with the
   // box's quantity, by its button or Shift+Enter); since LATER 538 also a
-  // Combos one-away row's and the phone card sheet's. The card is parked in the format's Maybe zone, which
+  // Combos one-away row's and the phone card sheet's. The card is parked in
+  // the format's Maybe zone, which
   // counts toward no size, so it is offered at any size (the owner's
   // decision 1: beside "Swap in…" at the maximum). A card the deck plays, or
   // one already parked, is refused with its sentence; the toast's Undo takes
@@ -2189,6 +2190,62 @@ export function DeckEditor({
       if (error) return error;
       notify(MAYBE_COPY.added(card.name, qty), () =>
         applyEdit(setQty(entriesRef.current, format, zone.id, card.id, 0)),
+      );
+      return undefined;
+    },
+    [format, applyEdit, notify],
+  );
+
+  // MAYBE-LIST (LATER 559): a combo's missing pieces parked together, from a
+  // "With your commander" row — ONE edit (one save), one toast, one Undo
+  // that takes every parked row out again. A piece the deck plays or Maybe
+  // already holds is skipped and named, read from the list as it stands
+  // now (the panel sends every missing piece; an edit made while they
+  // resolved counts): the toast's second line, or the refusal when none is
+  // left. The 500-line bound refuses the whole batch: nothing is parked.
+  const handleMaybePiecesAdd = useCallback(
+    (cards: readonly EditorCard[]): string | undefined => {
+      if (!format) return "Deck not loaded yet";
+      const zone = maybeZoneOf(format);
+      if (!zone) return "This deck has no Maybe list";
+      const before = entriesRef.current;
+      const inDeck = (cardId: string) =>
+        before.some((e) => e.cardId === cardId && isPlayableZone(format, e.zone));
+      const parked = (cardId: string) =>
+        before.some((e) => e.cardId === cardId && e.zone === zone.id);
+      const unique = cards.filter(
+        (card, i) => cards.findIndex((other) => other.id === card.id) === i,
+      );
+      const toPark = unique.filter((card) => !inDeck(card.id) && !parked(card.id));
+      const skipped = MAYBE_COPY.skippedPieces(
+        unique.filter((card) => !inDeck(card.id) && parked(card.id)).map((card) => card.name),
+        unique.filter((card) => inDeck(card.id)).map((card) => card.name),
+      );
+      if (toPark.length === 0) return skipped || MAYBE_COPY.alreadyInMaybe;
+      let entries = before;
+      for (const card of toPark) {
+        const added = addCard(entries, format, zone.id, card.id, 1);
+        if (added.error) return added.error;
+        entries = added.entries;
+      }
+      setCards((prev) => {
+        const unknown = toPark.filter((card) => !prev.has(card.id));
+        if (unknown.length === 0) return prev;
+        const next = new Map(prev);
+        for (const card of unknown) next.set(card.id, card);
+        return next;
+      });
+      setPreview(toPark[toPark.length - 1]);
+      const error = applyEdit({ entries });
+      if (error) return error;
+      notify(
+        MAYBE_COPY.addedPieces(toPark.length),
+        () => {
+          let after = entriesRef.current;
+          for (const card of toPark) after = setQty(after, format, zone.id, card.id, 0).entries;
+          applyEdit({ entries: after });
+        },
+        skipped || undefined,
       );
       return undefined;
     },
@@ -3121,6 +3178,7 @@ export function DeckEditor({
                 onAdd={handleUndoableAdd}
                 onAddPieces={handleComboPiecesAdd}
                 onMaybe={maybeZone ? handleMaybeAdd : undefined}
+                onMaybePieces={maybeZone ? handleMaybePiecesAdd : undefined}
                 goals={goals}
                 onOpenAutofill={load.adapter.recommend?.autofill ? openComboAutofill : undefined}
                 swapIn={deckFull}

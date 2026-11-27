@@ -532,3 +532,220 @@ describe("ComboRadarPanel — Maybe on One card away (MAYBE-LIST, LATER 538)", (
     expect(screen.getByText("Already in Maybe").className).toContain("text-destructive");
   });
 });
+
+describe("ComboRadarPanel — Maybe on With your commander (MAYBE-LIST, LATER 559)", () => {
+  type Park = (cards: readonly EditorCard[]) => string | undefined;
+  /** The commander row's button line: its buttons' and marks' words, in order. */
+  const lineOf = async () => {
+    const add = await screen.findByRole("button", { name: /^Add \d pieces?$/ });
+    return [...add.parentElement!.children].map((el) => el.textContent);
+  };
+  /** Resolve by externalKey, in the order asked (the add's pass 0). */
+  const resolveByKey = () =>
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith(`/api/cards/${commander.id}/combos`)) return ok(comboResponse);
+      if (url === "/api/cards/resolve") {
+        const { names } = JSON.parse(String(init?.body)) as { names: string[] };
+        return ok({
+          results: names.map((key) => ({
+            match:
+              [pestermite, exarch]
+                .filter((c) => c.externalKey === key)
+                .map((c) => ({ ...c, image: null }))[0] ?? null,
+          })),
+        });
+      }
+      return ok({});
+    });
+
+  it("without onMaybePieces (a format with no Maybe list) a commander row offers no Maybe", async () => {
+    renderPanel();
+    expect(await lineOf()).toEqual(["Add 2 pieces"]);
+    expect(screen.queryByRole("button", { name: /to Maybe$/ })).toBeNull();
+  });
+
+  it("Maybe after Add N pieces parks every missing piece over ONE resolve by externalKey, adds nothing and toasts nothing itself", async () => {
+    resolveByKey();
+    const onMaybePieces = vi.fn<Park>(() => undefined);
+    const { onAddPieces } = renderPanel({ onMaybePieces });
+    expect(await lineOf()).toEqual(["Add 2 pieces", "Maybe"]);
+    fireEvent.click(screen.getByRole("button", { name: "Add 2 combo pieces to Maybe" }));
+    await act(async () => {});
+    expect(resolvePosts()).toHaveLength(1);
+    const body = JSON.parse(resolvePosts()[0][1].body as string) as { names: string[] };
+    expect(body.names).toEqual([pestermite.externalKey, exarch.externalKey]);
+    expect(onMaybePieces).toHaveBeenCalledTimes(1);
+    expect(onMaybePieces).toHaveBeenCalledWith([
+      expect.objectContaining({ id: pestermite.id }),
+      expect.objectContaining({ id: exarch.id }),
+    ]);
+    expect(onAddPieces).not.toHaveBeenCalled();
+    expect(toast.add).not.toHaveBeenCalled();
+  });
+
+  it("a piece parked already still rides the one resolve, for the editor to name; a combo whose missing pieces all sit in Maybe reads In Maybe beside its add", async () => {
+    resolveByKey();
+    const onMaybePieces = vi.fn<Park>(() => undefined);
+    const { view } = renderPanel({ onMaybePieces, inMaybe: new Set([pestermite.id]) });
+    expect(await lineOf()).toEqual(["Add 2 pieces", "Maybe"]);
+    // The label counts what will be parked; the editor decides, and names the skipped one.
+    fireEvent.click(screen.getByRole("button", { name: "Add 1 combo piece to Maybe" }));
+    await act(async () => {});
+    expect(resolvePosts()).toHaveLength(1);
+    const body = JSON.parse(resolvePosts()[0][1].body as string) as { names: string[] };
+    expect(body.names).toEqual([pestermite.externalKey, exarch.externalKey]);
+    expect(onMaybePieces).toHaveBeenCalledWith([
+      expect.objectContaining({ id: pestermite.id }),
+      expect.objectContaining({ id: exarch.id }),
+    ]);
+    view.unmount();
+    renderPanel({ onMaybePieces, inMaybe: new Set([pestermite.id, exarch.id]) });
+    // The add still moves them in; Maybe has nothing left to park.
+    expect(await lineOf()).toEqual(["Add 2 pieces", "In Maybe"]);
+    expect(screen.queryByRole("button", { name: /to Maybe$/ })).toBeNull();
+  });
+
+  it("every piece in the deck: no add, no Maybe and no In Maybe", async () => {
+    renderPanel({
+      onMaybePieces: vi.fn<Park>(),
+      inDeckQty: new Map([
+        [commander.id, 1],
+        [pestermite.id, 1],
+        [exarch.id, 1],
+      ]),
+    });
+    await screen.findByText("All pieces in deck ✓");
+    expect(screen.queryByRole("button", { name: /to Maybe$/ })).toBeNull();
+    expect(screen.queryByText("In Maybe")).toBeNull();
+  });
+
+  it("a refusal from the editor toasts, as the add's does", async () => {
+    resolveByKey();
+    renderPanel({ onMaybePieces: vi.fn<Park>(() => "Already in Maybe") });
+    fireEvent.click(await screen.findByRole("button", { name: "Add 2 combo pieces to Maybe" }));
+    await act(async () => {});
+    expect(toast.add).toHaveBeenCalledWith({ title: "Already in Maybe", type: "error" });
+  });
+
+  it("a park that fails toasts and parks nothing: a resolve error, or a key that resolves to another card", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith(`/api/cards/${commander.id}/combos`)) return ok(comboResponse);
+      if (url === "/api/cards/resolve") return { ok: false, status: 503, json: async () => ({}) };
+      return ok({});
+    });
+    const onMaybePieces = vi.fn<Park>(() => undefined);
+    const { view } = renderPanel({ onMaybePieces });
+    fireEvent.click(await screen.findByRole("button", { name: "Add 2 combo pieces to Maybe" }));
+    await act(async () => {});
+    expect(toast.add).toHaveBeenLastCalledWith({
+      title: "Couldn't load the combo pieces (503).",
+      type: "error",
+    });
+    view.unmount();
+    // The id guard: Pestermite's key answering with Deceiver Exarch fails instead of parking it.
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith(`/api/cards/${commander.id}/combos`)) return ok(comboResponse);
+      if (url === "/api/cards/resolve") {
+        return ok({
+          results: [{ match: { ...exarch, image: null } }, { match: { ...exarch, image: null } }],
+        });
+      }
+      return ok({});
+    });
+    renderPanel({ onMaybePieces });
+    fireEvent.click(await screen.findByRole("button", { name: "Add 2 combo pieces to Maybe" }));
+    await act(async () => {});
+    expect(toast.add).toHaveBeenLastCalledWith({
+      title: "Couldn't load Pestermite. Try adding it from search.",
+      type: "error",
+    });
+    expect(onMaybePieces).not.toHaveBeenCalled();
+  });
+
+  describe("one resolve at a time, both ways", () => {
+    const twinker = card({
+      name: "Zealous Conscripts",
+      ciMask: 8,
+      externalKey: "44444444-4444-4444-8444-444444444444",
+    });
+    const twoCombos = {
+      total: 2,
+      combos: [
+        comboResponse.combos[0],
+        {
+          id: 102,
+          externalKey: "spellbook-102",
+          results: ["Infinite hasty tokens"],
+          templates: [],
+          popularity: 3100,
+          pieces: [
+            { id: commander.id, name: commander.name, externalKey: commander.externalKey },
+            { id: twinker.id, name: twinker.name, externalKey: twinker.externalKey },
+          ],
+        },
+      ],
+    };
+    let release: () => void = () => {};
+    beforeEach(() => {
+      fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith(`/api/cards/${commander.id}/combos`)) return ok(twoCombos);
+        if (url === "/api/cards/resolve") {
+          const { names } = JSON.parse(String(init?.body)) as { names: string[] };
+          return new Promise((resolve) => {
+            release = () =>
+              resolve(
+                ok({
+                  results: names.map((key) => ({
+                    match:
+                      [pestermite, exarch, twinker]
+                        .filter((c) => c.externalKey === key)
+                        .map((c) => ({ ...c, image: null }))[0] ?? null,
+                  })),
+                }),
+              );
+          });
+        }
+        return ok({});
+      });
+    });
+    const maybeOf = (n: number) =>
+      screen.getByRole("button", {
+        name: `Add ${n} combo piece${n === 1 ? "" : "s"} to Maybe`,
+      }) as HTMLButtonElement;
+
+    it("while a row's pieces resolve for Maybe, that row's Maybe reads Adding…, the other row's keeps its word, and every add and Maybe waits", async () => {
+      const onMaybePieces = vi.fn<Park>(() => undefined);
+      renderPanel({ onMaybePieces });
+      fireEvent.click(await screen.findByRole("button", { name: "Add 2 combo pieces to Maybe" }));
+      await act(async () => {});
+      expect(maybeOf(2).textContent).toBe("Adding…");
+      // The other row is not the one parking: its word stays, and it waits.
+      expect(maybeOf(1).textContent).toBe("Maybe");
+      expect(maybeOf(1).disabled).toBe(true);
+      for (const add of screen.getAllByRole("button", { name: /^Add \d pieces?$/ })) {
+        expect((add as HTMLButtonElement).disabled).toBe(true);
+      }
+      await act(async () => release());
+      expect(onMaybePieces).toHaveBeenCalledTimes(1);
+      expect(maybeOf(2).textContent).toBe("Maybe");
+      expect(maybeOf(2).disabled).toBe(false);
+    });
+
+    it("while an add resolves, every Maybe waits, and a second press parks nothing", async () => {
+      const onMaybePieces = vi.fn<Park>(() => undefined);
+      const { onAddPieces } = renderPanel({ onMaybePieces });
+      fireEvent.click(await screen.findByRole("button", { name: "Add 2 pieces" }));
+      await act(async () => {});
+      expect(maybeOf(2).disabled).toBe(true);
+      expect(maybeOf(1).disabled).toBe(true);
+      fireEvent.click(maybeOf(2));
+      await act(async () => release());
+      expect(onAddPieces).toHaveBeenCalledTimes(1);
+      expect(onMaybePieces).not.toHaveBeenCalled();
+    });
+  });
+});

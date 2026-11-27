@@ -54,8 +54,11 @@
  * Maybe (MAYBE-LIST, LATER 538): with `onMaybe` a "One card away" row whose
  * missing piece is in neither list has "Maybe" after its Add ("Swap in…" at
  * the maximum, where Maybe parks without a swap), over the same resolve as
- * the add; a parked piece reads "In Maybe" there. The commander rows' "Add N
- * pieces" has no Maybe: it is a batch, and Maybe parks one card.
+ * the add; a parked piece reads "In Maybe" there. Since LATER 559 a "With
+ * your commander" row has "Maybe" after "Add N pieces" too (`onMaybePieces`,
+ * the owner's label): it parks every missing piece in neither list, hydrated
+ * by the add's ONE resolve, in one edit with one toast and one Undo; a row
+ * whose missing pieces all sit in Maybe reads "In Maybe" instead.
  */
 import { ArrowUpRightIcon, GaugeIcon } from "lucide-react";
 import Link from "next/link";
@@ -124,7 +127,11 @@ interface ComboRadarPanelProps {
   cards: ReadonlyMap<string, EditorCard>;
   /** Copies already in the deck — flips Add to "In deck ✓" pre-refetch. */
   inDeckQty: ReadonlyMap<string, number>;
-  /** MAYBE-LIST (LATER 538): the cards parked in Maybe — a one-away row's piece reads "In Maybe". */
+  /**
+   * MAYBE-LIST: the cards parked in Maybe — a one-away row's piece reads "In
+   * Maybe" (LATER 538); a commander row counts what its Maybe would park, and
+   * reads "In Maybe" when every missing piece is parked (LATER 559).
+   */
   inMaybe?: ReadonlySet<string>;
   saveStatus: "saved" | "dirty" | "saving" | "error";
   /** Tab visibility: no fetching (lazy) and no work while hidden. */
@@ -146,6 +153,12 @@ interface ComboRadarPanelProps {
    * format without a Maybe list).
    */
   onMaybe?: (card: EditorCard) => string | undefined;
+  /**
+   * MAYBE-LIST (LATER 559): park a commander row's missing pieces in Maybe
+   * together — the editor's one edit, toasted once with one Undo. Absent =
+   * no button on those rows.
+   */
+  onMaybePieces?: (cards: readonly EditorCard[]) => string | undefined;
   /** The deck's goals (Y6b): the badges' "above your target" and the answers they count. */
   goals?: DeckGoals | null;
   /**
@@ -176,6 +189,7 @@ export function ComboRadarPanel({
   onAdd,
   onAddPieces,
   onMaybe,
+  onMaybePieces,
   goals = null,
   onOpenAutofill,
   swapIn = false,
@@ -239,6 +253,10 @@ export function ComboRadarPanel({
   const leaderKeyRef = useRef<string | null>(null);
   /** The combo whose pieces are resolving — disables that row's buttons. */
   const [pendingCombo, setPendingCombo] = useState<number | null>(null);
+  /** LATER 559: the combo whose missing pieces are resolving for Maybe. */
+  const [parkingCombo, setParkingCombo] = useState<number | null>(null);
+  /** One in-flight resolve at a time, for an add or a park. */
+  const comboBusy = pendingCombo !== null || parkingCombo !== null;
 
   useEffect(() => {
     if (!active || !anchorId || leaderComboKey === leaderKeyRef.current) return;
@@ -267,7 +285,7 @@ export function ComboRadarPanel({
     return () => controller.abort();
   }, [active, anchorId, fitMask, leaderComboKey, adapter.display.leaderNoun]);
 
-  /** ONE resolve call for every missing piece (pass 0 by externalKey), id-guarded. */
+  /** ONE resolve call for the pieces asked (pass 0 by externalKey), id-guarded: the add's and Maybe's. */
   const hydratePieces = async (pieces: readonly ComboPieceRef[]): Promise<EditorCard[]> => {
     const res = await fetch("/api/cards/resolve", {
       method: "POST",
@@ -299,7 +317,7 @@ export function ComboRadarPanel({
     combo: { id: number; pieces: readonly ComboPieceRef[]; templates: readonly string[] },
     openSheet: boolean,
   ) => {
-    if (pendingCombo !== null) return;
+    if (comboBusy) return;
     setPendingCombo(combo.id);
     try {
       const missing = combo.pieces.filter((p) => (inDeckQty.get(p.id) ?? 0) === 0);
@@ -319,6 +337,33 @@ export function ComboRadarPanel({
       });
     } finally {
       setPendingCombo(null);
+    }
+  };
+
+  /**
+   * MAYBE-LIST (LATER 559): a commander row's Maybe — every missing piece,
+   * hydrated by the same ONE resolve as the add, handed to the editor, which
+   * parks the ones in neither list in ONE edit with one toast and one Undo and
+   * names the ones it skipped (parked already, or in the deck by then). The
+   * button shows only while one is left to park. A refusal toasts, as the
+   * add's does.
+   */
+  const parkComboPieces = async (combo: { id: number; pieces: readonly ComboPieceRef[] }) => {
+    if (comboBusy || !onMaybePieces) return;
+    const missing = combo.pieces.filter((p) => (inDeckQty.get(p.id) ?? 0) === 0);
+    if (!missing.some((p) => !inMaybe?.has(p.id))) return;
+    setParkingCombo(combo.id);
+    try {
+      const error = onMaybePieces(await hydratePieces(missing));
+      if (error) toast.add({ title: error, type: "error" });
+    } catch (err) {
+      toast.add({
+        title:
+          err instanceof Error ? err.message : "Couldn't park the pieces. Check your connection.",
+        type: "error",
+      });
+    } finally {
+      setParkingCombo(null);
     }
   };
 
@@ -415,9 +460,12 @@ export function ComboRadarPanel({
                     combo={combo}
                     inDeckQty={inDeckQty}
                     externalUrl={combosMeta.externalUrl}
+                    inMaybe={inMaybe}
                     pending={pendingCombo === combo.id}
-                    busy={pendingCombo !== null}
+                    parking={parkingCombo === combo.id}
+                    busy={comboBusy}
                     onAddPieces={() => void addComboPieces(combo, false)}
+                    onMaybe={onMaybePieces ? () => void parkComboPieces(combo) : undefined}
                     onSuggest={onOpenAutofill ? () => void addComboPieces(combo, true) : undefined}
                   />
                 ))}
@@ -470,7 +518,7 @@ export function ComboRadarPanel({
                         combo={combo}
                         badge={badgeOf(combo)}
                         externalUrl={combosMeta.externalUrl}
-                        busy={pendingCombo !== null}
+                        busy={comboBusy}
                         onSuggest={
                           onOpenAutofill
                             ? () =>
@@ -511,7 +559,7 @@ export function ComboRadarPanel({
                               }
                             : undefined
                         }
-                        busy={pendingCombo !== null}
+                        busy={comboBusy}
                         suggestPending={pendingCombo === combo.id}
                         onSuggest={
                           onOpenAutofill
@@ -646,34 +694,51 @@ function SuggestButton({ busy, onClick }: { busy: boolean; onClick: () => void }
   );
 }
 
-/** One commander combo (W9c): pieces with in-deck ✓s, evidence tail, the two doors. */
+/**
+ * One commander combo (W9c): pieces with in-deck ✓s, evidence tail, and its
+ * doors: "Add N pieces", Maybe (LATER 559) or its "In Maybe", "Suggest full list".
+ */
 function LeaderComboRow({
   combo,
   inDeckQty,
+  inMaybe,
   externalUrl,
   pending,
+  parking = false,
   busy,
   onAddPieces,
+  onMaybe,
   onSuggest,
 }: {
   combo: ComboView;
   inDeckQty: ReadonlyMap<string, number>;
+  /** MAYBE-LIST (LATER 559): the cards parked in Maybe — a combo whose missing pieces all are reads "In Maybe". */
+  inMaybe?: ReadonlySet<string>;
   externalUrl: (externalKey: string) => string;
-  /** This row's pieces are resolving. */
+  /** This row's pieces are resolving for the add. */
   pending: boolean;
+  /** This row's pieces are resolving for Maybe. */
+  parking?: boolean;
   /** ANY row is resolving — one in-flight resolve at a time. */
   busy: boolean;
   onAddPieces: () => void;
+  /** LATER 559: park the missing pieces in neither list; absent = no button (a format without a Maybe list). */
+  onMaybe?: () => void;
   onSuggest?: () => void;
 }) {
-  const missing = combo.pieces.filter((p) => (inDeckQty.get(p.id) ?? 0) === 0).length;
+  const missingPieces = combo.pieces.filter((p) => (inDeckQty.get(p.id) ?? 0) === 0);
+  const missing = missingPieces.length;
+  // The missing pieces Maybe would park: the ones not parked already.
+  const unparked = missingPieces.filter((p) => !inMaybe?.has(p.id)).length;
   return (
     <li className="rounded-lg border px-2.5 py-2">
       <p className="min-w-0 text-sm leading-relaxed font-medium">
         <PieceNames pieces={combo.pieces} inDeck={(id) => (inDeckQty.get(id) ?? 0) > 0} />
       </p>
       <ComboRowDetails combo={combo} externalUrl={externalUrl} />
-      <div className="mt-1.5 flex items-center gap-2">
+      {/* flex-wrap: measured to fit one line at 1280 and 375 px (LATER 559); a
+          narrower pane wraps "Suggest full list" instead of overflowing. */}
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
         {missing > 0 ? (
           <Button size="xs" variant="secondary" disabled={busy} onClick={onAddPieces}>
             {pending ? "Adding…" : `Add ${missing} piece${missing === 1 ? "" : "s"}`}
@@ -681,6 +746,28 @@ function LeaderComboRow({
         ) : (
           <span className="text-muted-foreground text-xs">All pieces in deck ✓</span>
         )}
+        {/* MAYBE-LIST (LATER 559, the owner's label "Maybe"): after the add, while
+            any missing piece is in neither list; when Maybe holds them all, the row says so. */}
+        {onMaybe &&
+          missing > 0 &&
+          (unparked > 0 ? (
+            <Button
+              size="xs"
+              variant="secondary"
+              disabled={busy}
+              aria-label={MAYBE_COPY.piecesLabel(unparked)}
+              onClick={onMaybe}
+            >
+              {parking ? "Adding…" : MAYBE_COPY.button}
+            </Button>
+          ) : (
+            <span
+              data-slot="in-maybe"
+              className="text-muted-foreground inline-flex shrink-0 items-center text-xs pointer-coarse:min-h-11"
+            >
+              {MAYBE_COPY.inMaybe}
+            </span>
+          ))}
         {onSuggest && <SuggestButton busy={busy} onClick={onSuggest} />}
       </div>
     </li>

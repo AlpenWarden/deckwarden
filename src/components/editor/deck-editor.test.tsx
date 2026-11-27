@@ -19,7 +19,7 @@ import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { massEntryUrl } from "@/lib/buy/links";
-import type { CardWire } from "@/lib/decks/editor-state";
+import { MAX_ENTRIES, MAX_ENTRIES_ERROR, type CardWire } from "@/lib/decks/editor-state";
 import { card } from "@/lib/games/mtg/test-fixtures";
 import { saveAppearance } from "@/lib/theme/appearance";
 import { MD_QUERY, WIDE_QUERY } from "./use-tier";
@@ -7072,6 +7072,258 @@ describe("DeckEditor — Maybe (MAYBE-LIST)", () => {
     await save();
     expect(lastPut()).not.toContain("maybeboard:Sol Ring ×1");
     expect(actions()).toEqual(["Swap in…", "Maybe"]);
+  });
+
+  it("Combos (LATER 559): a commander row's Maybe parks both missing pieces at 100 / 100 in ONE PUT with one toast; its one Undo takes both out; a piece parked already is skipped", async () => {
+    const piece = (c: CardWire) => ({ id: c.id, name: c.name, externalKey: c.externalKey });
+    const commanderCombo = {
+      id: 77,
+      externalKey: "k-77",
+      results: ["Infinite colorless mana"],
+      templates: [],
+      popularity: 50,
+      pieces: [piece(kozilek), piece(sol), piece(signet)],
+    };
+    const resolves: string[][] = [];
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith(`/api/cards/${kozilek.id}/combos`)) {
+        return ok({ total: 1, combos: [commanderCombo] });
+      }
+      if (url === "/api/decks/deck-1/combos") {
+        return ok({ inDeck: [], oneAway: [], truncated: false });
+      }
+      if (url === "/api/cards/resolve") {
+        const { names } = JSON.parse(String(init?.body)) as { names: string[] };
+        resolves.push(names);
+        return ok({
+          results: names.map((key) => ({
+            input: key,
+            match: [sol, signet].find((c) => c.externalKey === key || c.name === key) ?? null,
+            suggestions: [],
+          })),
+        });
+      }
+      return maybeRoute(input, init);
+    });
+    stubViewport(1440);
+    const { unmount } = render(<DeckEditor deckId="deck-1" />);
+    await loaded();
+    expect(deckSize()).toBe("100 / 100 cards");
+    fireEvent.click(screen.getByRole("tab", { name: "Combos" }));
+    const maybe = await pollFor(() =>
+      screen.queryByRole("button", { name: "Add 2 combo pieces to Maybe" }),
+    );
+    fireEvent.click(maybe);
+    const toastEl = await toastOf("Added 2 combo pieces to Maybe");
+    expect(resolves).toEqual([[sol.externalKey, signet.externalKey]]);
+    expect(deckSize()).toBe("100 / 100 cards");
+    expect(maybeTrigger().textContent).toBe("Maybe2");
+    // The row says so: both missing pieces sit in Maybe now; its add still moves them in.
+    expect(screen.getByRole("button", { name: "Add 2 pieces" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /combo pieces? to Maybe$/ })).toBeNull();
+    await save();
+    expect(puts()).toBe(1);
+    expect(lastPut()).toEqual([
+      "commander:Kozilek, the Great Distortion ×1",
+      "main:Mana Vault ×1",
+      "main:Wastes ×98",
+      "maybeboard:Sol Ring ×1",
+      "maybeboard:Arcane Signet ×1",
+    ]);
+    fireEvent.click(within(toastEl).getByRole("button", { name: "Undo" }));
+    await save();
+    expect(puts()).toBe(2);
+    expect(lastPut().filter((e) => e.startsWith("maybeboard:"))).toEqual([]);
+    expect(maybeTrigger().textContent).toBe("Maybe0");
+    unmount();
+
+    // Sol Ring parked before: the row's Maybe parks Arcane Signet alone, the
+    // toast names the one it skipped, and its Undo leaves Sol Ring's own park.
+    state = { wastes: 98, maybe: [sol] };
+    resolves.length = 0;
+    render(<DeckEditor deckId="deck-1" />);
+    await loaded();
+    fireEvent.click(screen.getByRole("tab", { name: "Combos" }));
+    fireEvent.click(
+      await pollFor(() => screen.queryByRole("button", { name: "Add 1 combo piece to Maybe" })),
+    );
+    const second = await toastOf("Added 1 combo piece to Maybe");
+    expect(within(second).getByText("Already in Maybe: Sol Ring.")).toBeTruthy();
+    expect(resolves).toEqual([[sol.externalKey, signet.externalKey]]);
+    expect(maybeTrigger().textContent).toBe("Maybe2");
+    await save();
+    expect(lastPut().filter((e) => e.startsWith("maybeboard:"))).toEqual([
+      "maybeboard:Sol Ring ×1",
+      "maybeboard:Arcane Signet ×1",
+    ]);
+    fireEvent.click(within(second).getByRole("button", { name: "Undo" }));
+    await save();
+    expect(maybeTrigger().textContent).toBe("Maybe1");
+    expect(lastPut().filter((e) => e.startsWith("maybeboard:"))).toEqual([
+      "maybeboard:Sol Ring ×1",
+    ]);
+  });
+
+  /** A commander combo of Kozilek, Sol Ring and Arcane Signet whose resolve waits for `release`. */
+  function heldCommanderCombo(searchResults: (name: string) => CardWire[]) {
+    const piece = (c: CardWire) => ({ id: c.id, name: c.name, externalKey: c.externalKey });
+    const held = { release: () => {} };
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith(`/api/cards/${kozilek.id}/combos`)) {
+        return ok({
+          total: 1,
+          combos: [
+            {
+              id: 79,
+              externalKey: "k-79",
+              results: ["Infinite colorless mana"],
+              templates: [],
+              popularity: 50,
+              pieces: [piece(kozilek), piece(sol), piece(signet)],
+            },
+          ],
+        });
+      }
+      if (url === "/api/decks/deck-1/combos") {
+        return ok({ inDeck: [], oneAway: [], truncated: false });
+      }
+      if (url.startsWith("/api/cards/search")) {
+        const name = new URL(url, "http://x").searchParams.get("name") ?? "";
+        return ok({ results: searchResults(name) });
+      }
+      if (url === "/api/cards/resolve") {
+        const { names } = JSON.parse(String(init?.body)) as { names: string[] };
+        const body = {
+          results: names.map((key) => ({
+            input: key,
+            match: [sol, signet].find((c) => c.externalKey === key || c.name === key) ?? null,
+            suggestions: [],
+          })),
+        };
+        // Only the combo's batch (by externalKey) waits; a single card's resolve answers at once.
+        if (names.every((key) => key === sol.externalKey || key === signet.externalKey)) {
+          return new Promise((resolve) => {
+            held.release = () => resolve(ok(body));
+          });
+        }
+        return ok(body);
+      }
+      return maybeRoute(input, init);
+    });
+    return held;
+  }
+
+  it("Combos (LATER 559): a piece parked by another way while the batch resolves is skipped and named, never parked twice", async () => {
+    const held = heldCommanderCombo((name) => (/sol/i.test(name) ? [sol] : []));
+    stubViewport(1440);
+    render(<DeckEditor deckId="deck-1" />);
+    await loaded();
+    fireEvent.click(screen.getByRole("tab", { name: "Combos" }));
+    fireEvent.click(
+      await pollFor(() => screen.queryByRole("button", { name: "Add 2 combo pieces to Maybe" })),
+    );
+    // While the pieces resolve, Sol Ring is parked from the search box.
+    const input = screen.getByRole("combobox", { name: "Card search" });
+    fireEvent.change(input, { target: { value: "sol" } });
+    await settle();
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    await toastOf("Added Sol Ring to Maybe");
+    await act(async () => held.release());
+    const batch = await toastOf("Added 1 combo piece to Maybe");
+    expect(within(batch).getByText("Already in Maybe: Sol Ring.")).toBeTruthy();
+    expect(maybeTrigger().textContent).toBe("Maybe2");
+    await save();
+    expect(lastPut().filter((e) => e.startsWith("maybeboard:"))).toEqual([
+      "maybeboard:Sol Ring ×1",
+      "maybeboard:Arcane Signet ×1",
+    ]);
+  });
+
+  it("Combos (LATER 559): when nothing is left to park, the refusal names each piece and where it is", async () => {
+    // 99 / 100, so the search box's Enter adds.
+    state = { wastes: 97, maybe: [] };
+    const held = heldCommanderCombo((name) =>
+      /sol/i.test(name) ? [sol] : /arcane/i.test(name) ? [signet] : [],
+    );
+    stubViewport(1440);
+    render(<DeckEditor deckId="deck-1" />);
+    await loaded();
+    fireEvent.click(screen.getByRole("tab", { name: "Combos" }));
+    fireEvent.click(
+      await pollFor(() => screen.queryByRole("button", { name: "Add 2 combo pieces to Maybe" })),
+    );
+    const input = screen.getByRole("combobox", { name: "Card search" });
+    fireEvent.change(input, { target: { value: "sol" } });
+    await settle();
+    fireEvent.keyDown(input, { key: "Enter" });
+    await toastOf("Added Sol Ring");
+    fireEvent.change(input, { target: { value: "arcane" } });
+    await settle();
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    await toastOf("Added Arcane Signet to Maybe");
+    await act(async () => held.release());
+    await pollFor(() =>
+      screen.queryByText("Already in Maybe: Arcane Signet. Already in the deck: Sol Ring."),
+    );
+    expect(maybeTrigger().textContent).toBe("Maybe1");
+    expect(screen.queryByText(/combo pieces? to Maybe$/)).toBeNull();
+  });
+
+  it("Combos (LATER 559): the 500-line bound refuses a commander row's batch whole: nothing parked, nothing saved, the sentence toasted", async () => {
+    const piece = (c: CardWire) => ({ id: c.id, name: c.name, externalKey: c.externalKey });
+    // Three deck rows and enough Maybe rows that the first piece fits and the second does not.
+    const fillers: CardWire[] = Array.from({ length: MAX_ENTRIES - 4 }, (_, i) => ({
+      ...card({ name: `Filler ${i}`, primaryType: "Artifact" }),
+      image: null,
+    }));
+    state = { wastes: 98, maybe: fillers };
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith(`/api/cards/${kozilek.id}/combos`)) {
+        return ok({
+          total: 1,
+          combos: [
+            {
+              id: 78,
+              externalKey: "k-78",
+              results: ["Infinite colorless mana"],
+              templates: [],
+              popularity: 50,
+              pieces: [piece(kozilek), piece(sol), piece(signet)],
+            },
+          ],
+        });
+      }
+      if (url === "/api/decks/deck-1/combos") {
+        return ok({ inDeck: [], oneAway: [], truncated: false });
+      }
+      if (url === "/api/cards/resolve") {
+        const { names } = JSON.parse(String(init?.body)) as { names: string[] };
+        return ok({
+          results: names.map((key) => ({
+            input: key,
+            match: [sol, signet].find((c) => c.externalKey === key) ?? null,
+            suggestions: [],
+          })),
+        });
+      }
+      return maybeRoute(input, init);
+    });
+    stubViewport(1440);
+    render(<DeckEditor deckId="deck-1" />);
+    await loaded();
+    expect(maybeTrigger().textContent).toBe(`Maybe${MAX_ENTRIES - 4}`);
+    fireEvent.click(screen.getByRole("tab", { name: "Combos" }));
+    fireEvent.click(
+      await pollFor(() => screen.queryByRole("button", { name: "Add 2 combo pieces to Maybe" })),
+    );
+    await pollFor(() => screen.queryByText(MAX_ENTRIES_ERROR));
+    expect(maybeTrigger().textContent).toBe(`Maybe${MAX_ENTRIES - 4}`);
+    await save();
+    expect(puts()).toBe(0);
+    expect(screen.queryByText(/combo pieces? to Maybe$/)).toBeNull();
   });
 
   it("Combos (LATER 538): a one-away row's Maybe parks its missing piece at 100 / 100 with the editor's toast and Undo; the row then reads In Maybe", async () => {

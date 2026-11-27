@@ -13,13 +13,27 @@ export const MAYBE_COPY = {
   /** The search box's Shift+Enter (LATER 549): the hint line's words, and the `?` sheet's row. */
   keyHint: "Maybe",
   keyRow: "Add the selected card to Maybe",
-  /** A row whose card already sits in Maybe. */
+  /** A row whose card already sits in Maybe; a commander combo row whose missing pieces all do (LATER 559). */
   inMaybe: "In Maybe",
+  /** LATER 559: a combo's missing pieces parked together — the commander row's button's spoken label, and the toast. */
+  piecesLabel: (n: number) => `Add ${n} combo piece${n === 1 ? "" : "s"} to Maybe`,
+  addedPieces: (n: number) => `Added ${n} combo piece${n === 1 ? "" : "s"} to Maybe`,
+  /**
+   * The pieces such a park skipped, by name: the toast's second line, or the
+   * whole sentence when none was left to park. "Already in Maybe: Pestermite."
+   */
+  skippedPieces: (inMaybe: readonly string[], inDeck: readonly string[]) =>
+    [
+      inMaybe.length > 0 ? `Already in Maybe: ${inMaybe.join(", ")}.` : "",
+      inDeck.length > 0 ? `Already in the deck: ${inDeck.join(", ")}.` : "",
+    ]
+      .filter(Boolean)
+      .join(" "),
   /** "Added Sol Ring to Maybe" — the Maybe add's toast ("Added 4× …" from a "4 Name" search). */
   added: (name: string, qty = 1) => `Added ${qty > 1 ? `${qty}× ` : ""}${name} to Maybe`,
   /** The second line of an add's toast when the card left Maybe on its way in. */
   leftMaybe: "Taken out of Maybe.",
-  /** A Maybe add of a card the deck plays, or one already parked. */
+  /** A Maybe add of a card the deck plays, or one already parked (a combo's batch names them: `skippedPieces`). */
   alreadyInDeck: "Already in the deck",
   alreadyInMaybe: "Already in Maybe",
   /** A Maybe row's and tile's way into the deck (its words, always shown), and its toast. */
